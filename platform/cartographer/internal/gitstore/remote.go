@@ -65,45 +65,6 @@ func requiresAuth(rawURL string) bool {
 	return parsed.User != nil
 }
 
-// FetchRemote fetches the main branch from the remote origin.
-// Returns ErrNoRemote if no remote is configured, ErrAuthConfigMissing
-// if no auth provider is configured, and typed errors for auth and network
-// failures. A configured provider may return nil for an anonymous public remote.
-//
-// ponytail: no production caller invokes this method — the service layer pulls
-// via FetchAndMerge, never FetchRemote. It is retained only because it is a
-// member of the GitStore interface (and is exercised by the interface-level
-// tests). If the interface is ever trimmed, this implementation and its tests
-// should be removed together.
-func (g *gitStore) FetchRemote(ctx context.Context) error {
-	if g.remoteURL == "" {
-		return ErrNoRemote
-	}
-	if g.authFn == nil {
-		return ErrAuthConfigMissing
-	}
-
-	if err := g.ensureRemoteExists(); err != nil {
-		return err
-	}
-
-	auth, err := g.resolveAuth(true)
-	if err != nil {
-		return err
-	}
-
-	err = g.repo.FetchContext(ctx, &git.FetchOptions{
-		RemoteName: "origin",
-		Auth:       auth,
-		Force:      false,
-		RefSpecs:   []config.RefSpec{config.RefSpec("+refs/heads/main:refs/remotes/origin/main")},
-	})
-	if err != nil {
-		return mapFetchError(err)
-	}
-	return nil
-}
-
 // FetchAndMerge fetches from the remote and merges the remote tracking branch
 // into the local branch. If the local branch does not exist, it is created
 // pointing at the remote tracking ref. If fast-forward is possible, the local
@@ -184,13 +145,14 @@ func (g *gitStore) setLocalRefAndCheckout(branch string, hash plumbing.Hash) err
 // FetchAndMerge is used on two distinct paths, distinguished by which branch
 // they pass:
 //
-//   - Explicit pull (branch "main"): SPEC R10 mandates that when main has
-//     diverged from the remote, PullFromRemote fails with FAILED_PRECONDITION
-//     ("Remote pull diverged" — error table row "Remote pull diverged", SPEC
-//     R10, line 929). On divergence this method returns ErrPullDiverged, which
-//     service mapGitError maps to FAILED_PRECONDITION; the local main ref is
-//     left unchanged (no merge commit is fabricated), so the SPEC-mandated
-//     divergence failure is reachable.
+//   - Remote pull (branch "main"): the sync worker's fetch-merge-re-hydrate
+//     cycle and Sync()/BeginTransaction wake the worker to pull main. SPEC
+//     mandates that when main has diverged from the remote, the pull fails with
+//     FAILED_PRECONDITION ("Remote pull diverged" — error table row "Remote
+//     pull diverged", SPEC R10, line 929). On divergence this method returns
+//     ErrPullDiverged, which service mapGitError maps to FAILED_PRECONDITION;
+//     the local main ref is left unchanged (no merge commit is fabricated), so
+//     the SPEC-mandated divergence failure is reachable.
 //   - Commit step 14 (pull-before-push, branch "main"): the fire-and-forget
 //     push path needs the local branch to fast-forward onto the remote so the
 //     subsequent push is fast-forward. It only ever fast-forwards (or is
@@ -366,70 +328,6 @@ func (g *gitStore) PushRemote(ctx context.Context) error {
 	return nil
 }
 
-// PullAndFastForward pulls from the remote origin and performs a
-// fast-forward merge. Returns ErrNoRemote if no remote is configured,
-// ErrAuthConfigMissing if no auth provider is configured, and typed errors for
-// auth, network, and divergence failures. A configured provider may return nil
-// for an anonymous public remote.
-//
-// ponytail: no production caller invokes this method — the service pulls via
-// FetchAndMerge, and Commit's pull-before-push also uses FetchAndMerge. The
-// divergence sentinel it produces (ErrPullDiverged) is also returned by
-// FetchAndMerge on the explicit-pull divergence path, so this method and the
-// interface member are retained only for the tests; if the interface is ever
-// trimmed it and its tests should be removed together.
-func (g *gitStore) PullAndFastForward(ctx context.Context) error {
-	if g.remoteURL == "" {
-		return ErrNoRemote
-	}
-	if g.authFn == nil {
-		return ErrAuthConfigMissing
-	}
-
-	if err := g.ensureRemoteExists(); err != nil {
-		return err
-	}
-
-	auth, err := g.resolveAuth(true)
-	if err != nil {
-		return err
-	}
-
-	err = g.wt.PullContext(ctx, &git.PullOptions{
-		RemoteName:   "origin",
-		Auth:         auth,
-		Force:        false,
-		SingleBranch: true,
-	})
-	if err != nil {
-		if errors.Is(err, git.ErrNonFastForwardUpdate) {
-			return ErrPullDiverged
-		}
-		return mapFetchError(err)
-	}
-	return nil
-}
-
-// HasRemote returns whether the remote "origin" is configured.
-// Returns an error if the check itself fails (I/O error, storage corruption).
-//
-// ponytail: no production caller invokes this method — the service layer
-// determines remote presence by comparing s.remoteURL != "" before calling the
-// git operations. It is retained only because it is a member of the GitStore
-// interface (and is exercised by the interface-level tests). If the interface
-// is ever trimmed, this implementation and its tests should be removed
-// together.
-func (g *gitStore) HasRemote(ctx context.Context) (bool, error) {
-	_, err := g.repo.Remote("origin")
-	if err != nil {
-		if errors.Is(err, git.ErrRemoteNotFound) {
-			return false, nil
-		}
-		return false, fmt.Errorf("check remote: %w", err)
-	}
-	return true, nil
-}
-
 // CloneSingleBranch fetches a single branch from a remote URL into the
 // existing repository. The rawURL parameter is passed explicitly (not from
 // g.remoteURL). After fetching, the local main ref is set to the fetched
@@ -448,8 +346,9 @@ func (g *gitStore) CloneSingleBranch(ctx context.Context, rawURL, branch string)
 	}
 
 	// Resolve auth: nil authFn or nil return means anonymous access to public
-	// remotes.  Unlike FetchRemote/PushRemote/PullAndFastForward, this path
-	// explicitly allows anonymous clone for the initial remote bootstrap.
+	// remotes. Unlike PushRemote (which requires a configured auth provider),
+	// this path explicitly allows anonymous clone for the initial remote
+	// bootstrap.
 	var auth transport.AuthMethod
 	var err error
 	if g.authFn != nil {
@@ -459,10 +358,10 @@ func (g *gitStore) CloneSingleBranch(ctx context.Context, rawURL, branch string)
 			// does not exist), an invalid credential (an unparseable
 			// ssh-privatekey PEM), or the ErrAuthConfigMissing sentinel
 			// (missing expected key) — means the git operation cannot be
-			// attempted. CloneSingleBranch is the PullFromRemote empty-repo
-			// path, so all of them surface as ErrAuthConfigMissing for
-			// mapGitError to return FAILED_PRECONDITION (SPEC error-table row
-			// "Remote auth config missing (PullFromRemote)").
+			// attempted. CloneSingleBranch is the clone-on-init path, so all of
+			// them surface as ErrAuthConfigMissing for mapGitError to return
+			// FAILED_PRECONDITION (SPEC error-table row "Remote auth config
+			// missing (Sync)").
 			return ErrAuthConfigMissing
 		}
 	}
@@ -639,7 +538,7 @@ func (g *gitStore) ensureRemoteExists() error {
 // ErrAuthConfigMissing sentinel (missing expected key for the URL scheme) —
 // means the git operation cannot be attempted, so all of them surface as
 // ErrAuthConfigMissing for mapGitError to return FAILED_PRECONDITION (SPEC
-// error-table row "Remote auth config missing (PullFromRemote)").
+// error-table row "Remote auth config missing").
 func (g *gitStore) resolveAuth(allowAnonymous bool) (transport.AuthMethod, error) {
 	auth, err := g.authFn()
 	if err != nil {

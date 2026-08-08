@@ -36,7 +36,7 @@ service CartographerService {
   rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
 
   // --- Administrative Path (Node-Facing) ---
-  rpc PullFromRemote(PullFromRemoteRequest) returns (PullFromRemoteResponse);
+  rpc Sync(SyncRequest) returns (SyncResponse);
   rpc ExportGraph(ExportGraphRequest) returns (stream ExportGraphResponse);
 }
 
@@ -185,6 +185,7 @@ message BeginTransactionResponse {
 
 message CommitTransactionRequest {
   string transaction_id = 1;
+  bool ack = 2;  // When true, Commit blocks until the sync worker pushes to remote.
 }
 
 message CommitTransactionResponse {}
@@ -321,9 +322,9 @@ message HealthCheckResponse {
 
 // --- Administrative Path Messages ---
 
-message PullFromRemoteRequest {}
+message SyncRequest {}
 
-message PullFromRemoteResponse {}
+message SyncResponse {}
 
 message ExportGraphRequest {
   string format = 1;

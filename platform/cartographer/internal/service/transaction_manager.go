@@ -20,16 +20,17 @@ type Ticker interface {
 	Stop()
 }
 
-// realClock implements Clock using the standard time package.
-type realClock struct{}
+// RealClock implements Clock using the standard time package.
+type RealClock struct{}
 
-func (realClock) Now() time.Time                   { return time.Now() }
-func (realClock) NewTicker(d time.Duration) Ticker { return &realTicker{t: time.NewTicker(d)} }
+func (RealClock) Now() time.Time                   { return time.Now() }
+func (RealClock) NewTicker(d time.Duration) Ticker { return &RealTicker{t: time.NewTicker(d)} }
 
-type realTicker struct{ t *time.Ticker }
+// RealTicker wraps time.Ticker to implement Ticker.
+type RealTicker struct{ t *time.Ticker }
 
-func (r *realTicker) C() <-chan time.Time { return r.t.C }
-func (r *realTicker) Stop()               { r.t.Stop() }
+func (r *RealTicker) C() <-chan time.Time { return r.t.C }
+func (r *RealTicker) Stop()               { r.t.Stop() }
 
 // TransactionManager manages the lifecycle of active transactions.
 type TransactionManager struct {
@@ -142,7 +143,7 @@ func NewTransactionManager(
 		active:         make(map[string]*TransactionState),
 		hardMaxTimeout: hardMaxTimeout,
 		changeLogCap:   changeLogCap,
-		clock:          &realClock{},
+		clock:          &RealClock{},
 	}
 	for _, o := range opts {
 		o(tm)

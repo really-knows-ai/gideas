@@ -67,6 +67,8 @@ type CartographerServer struct {
 	podNamespace   string
 	defaultTimeout time.Duration
 
+	syncWorker *SyncWorker
+
 	gcStop chan struct{}
 }
 
@@ -118,6 +120,11 @@ func WithAuditPublisher(pub TelemetryPublisher) CartographerOption {
 
 func WithLadybugPath(path string) CartographerOption {
 	return func(s *CartographerServer) { s.ladybugPath = path }
+}
+
+// WithSyncWorker sets the background sync worker for remote synchronisation.
+func WithSyncWorker(sw *SyncWorker) CartographerOption {
+	return func(s *CartographerServer) { s.syncWorker = sw }
 }
 
 // Verifier returns the capability verifier.
@@ -562,7 +569,7 @@ func (s *CartographerServer) recoverEdgeChanges(
 		// an edge absent from main was added. Edge modification cannot be produced
 		// through the write path (there is no UpdateEdge), but the recovered
 		// branch can legitimately diverge from main on an edge when main advanced
-		// out-of-band (e.g. a PullFromRemote brought in a changed edge file), so
+		// out-of-band (e.g. a Sync pull brought in a changed edge file), so
 		// the classification must distinguish the two instead of collapsing every
 		// differing edge into ChangeAddEdge.
 		kind := gitstore.ChangeModEdge
@@ -1048,6 +1055,9 @@ func (s *CartographerServer) CreateEntity(
 	ctx context.Context,
 	req *flowv1.CreateEntityRequest,
 ) (*flowv1.CreateEntityResponse, error) {
+	if req.TransactionId == "" {
+		return nil, status.Error(codes.FailedPrecondition, "No active transaction")
+	}
 	if !s.store.TableExists(req.EntityType) {
 		return nil, errUnknownEntityType(req.EntityType)
 	}
@@ -1069,31 +1079,21 @@ func (s *CartographerServer) CreateEntity(
 	defer unlockTx()
 	branch := req.TransactionId
 
-	var ent *store.Entity
-	if req.TransactionId != "" {
-		if err := s.preflightTransactionChange(ctx, req.TransactionId); err != nil {
-			return nil, err
-		}
-		ent, err = s.store.CreateEntity(ctx, req.EntityType, req.Id, req.Properties, req.Embedding, branch)
-		if err != nil {
-			return nil, mapStoreError(err)
-		}
-		if err := s.addTransactionChange(ctx, req.TransactionId, gitstore.ChangeLogEntry{
-			Kind: gitstore.ChangeAddEntity, ID: ent.Id, Type: ent.Type,
-			Entity: &gitstore.EntityEntry{
-				ID: ent.Id, Type: ent.Type, Properties: ent.Properties,
-				Embedding: ent.Embedding, CreatedAt: ent.CreatedAt, UpdatedAt: ent.UpdatedAt,
-			},
-		}); err != nil {
-			return nil, mapGitError(err)
-		}
-	} else {
-		s.lockMainStore()
-		ent, err = s.store.CreateEntity(ctx, req.EntityType, req.Id, req.Properties, req.Embedding, branch)
-		s.writeLock.Unlock()
-		if err != nil {
-			return nil, mapStoreError(err)
-		}
+	if err := s.preflightTransactionChange(ctx, req.TransactionId); err != nil {
+		return nil, err
+	}
+	ent, err := s.store.CreateEntity(ctx, req.EntityType, req.Id, req.Properties, req.Embedding, branch)
+	if err != nil {
+		return nil, mapStoreError(err)
+	}
+	if err := s.addTransactionChange(ctx, req.TransactionId, gitstore.ChangeLogEntry{
+		Kind: gitstore.ChangeAddEntity, ID: ent.Id, Type: ent.Type,
+		Entity: &gitstore.EntityEntry{
+			ID: ent.Id, Type: ent.Type, Properties: ent.Properties,
+			Embedding: ent.Embedding, CreatedAt: ent.CreatedAt, UpdatedAt: ent.UpdatedAt,
+		},
+	}); err != nil {
+		return nil, mapGitError(err)
 	}
 	return &flowv1.CreateEntityResponse{
 		EntityId: ent.Id, EntityType: ent.Type, Properties: ent.Properties, Embedding: ent.Embedding,
@@ -1104,6 +1104,9 @@ func (s *CartographerServer) UpdateEntity(
 	ctx context.Context,
 	req *flowv1.UpdateEntityRequest,
 ) (*flowv1.UpdateEntityResponse, error) {
+	if req.TransactionId == "" {
+		return nil, status.Error(codes.FailedPrecondition, "No active transaction")
+	}
 	if req.Id == "" {
 		return nil, status.Error(codes.InvalidArgument, "entity ID is required")
 	}
@@ -1124,31 +1127,21 @@ func (s *CartographerServer) UpdateEntity(
 	if err := s.checkEntityCap(ctx, "WRITE", entityType); err != nil {
 		return nil, err
 	}
-	var ent *store.Entity
-	if req.TransactionId != "" {
-		if err := s.preflightTransactionChange(ctx, req.TransactionId); err != nil {
-			return nil, err
-		}
-		ent, err = s.store.UpdateEntity(ctx, req.Id, req.Properties, req.Embedding, branch)
-		if err != nil {
-			return nil, mapStoreError(err)
-		}
-		if err := s.addTransactionChange(ctx, req.TransactionId, gitstore.ChangeLogEntry{
-			Kind: gitstore.ChangeModEntity, ID: ent.Id, Type: ent.Type,
-			Entity: &gitstore.EntityEntry{
-				ID: ent.Id, Type: ent.Type, Properties: ent.Properties,
-				Embedding: ent.Embedding, CreatedAt: ent.CreatedAt, UpdatedAt: ent.UpdatedAt,
-			},
-		}); err != nil {
-			return nil, mapGitError(err)
-		}
-	} else {
-		s.lockMainStore()
-		ent, err = s.store.UpdateEntity(ctx, req.Id, req.Properties, req.Embedding, branch)
-		s.writeLock.Unlock()
-		if err != nil {
-			return nil, mapStoreError(err)
-		}
+	if err := s.preflightTransactionChange(ctx, req.TransactionId); err != nil {
+		return nil, err
+	}
+	ent, err := s.store.UpdateEntity(ctx, req.Id, req.Properties, req.Embedding, branch)
+	if err != nil {
+		return nil, mapStoreError(err)
+	}
+	if err := s.addTransactionChange(ctx, req.TransactionId, gitstore.ChangeLogEntry{
+		Kind: gitstore.ChangeModEntity, ID: ent.Id, Type: ent.Type,
+		Entity: &gitstore.EntityEntry{
+			ID: ent.Id, Type: ent.Type, Properties: ent.Properties,
+			Embedding: ent.Embedding, CreatedAt: ent.CreatedAt, UpdatedAt: ent.UpdatedAt,
+		},
+	}); err != nil {
+		return nil, mapGitError(err)
 	}
 	return &flowv1.UpdateEntityResponse{
 		EntityId: ent.Id, EntityType: ent.Type, Properties: ent.Properties, Embedding: ent.Embedding,
@@ -1159,6 +1152,9 @@ func (s *CartographerServer) DeleteEntity(
 	ctx context.Context,
 	req *flowv1.DeleteEntityRequest,
 ) (*flowv1.DeleteEntityResponse, error) {
+	if req.TransactionId == "" {
+		return nil, status.Error(codes.FailedPrecondition, "No active transaction")
+	}
 	if req.Id == "" {
 		return nil, status.Error(codes.InvalidArgument, "entity ID is required")
 	}
@@ -1179,60 +1175,50 @@ func (s *CartographerServer) DeleteEntity(
 	if err := s.checkEntityCap(ctx, "WRITE", entityType); err != nil {
 		return nil, err
 	}
-	var ent *store.Entity
-	if req.TransactionId != "" {
-		if err := s.preflightTransactionChange(ctx, req.TransactionId); err != nil {
-			return nil, err
+	if err := s.preflightTransactionChange(ctx, req.TransactionId); err != nil {
+		return nil, err
+	}
+	// Enumerate the edges that DeleteEntity's cascade will remove (DETACH
+	// DELETE) so they can be recorded in the change log. Without this, the
+	// cascade-deleted edges never reach the log and their git files are not
+	// removed on commit, breaking SPEC R7 §4 atomicity ("edges are removed
+	// atomically with the entity") across a commit.
+	// ponytail: this enumeration is an un-paginated full-edge-table scan —
+	// DumpAllEdges(ctx, branch) loads every edge in the branch into memory
+	// to filter those connected to the deleted entity, so a single delete
+	// costs O(E) and D deletes inside one transaction cost O(D×E) (and
+	// O(D×E) transient heap for the intermediate allEdges slice). On a
+	// graph with a very large edge count and a transaction that deletes
+	// many entities this becomes a quadratic stall on the write path,
+	// amplified per replica by branch-DB re-hydration. Upgrade path:
+	// add a store primitive that lists edges by endpoint (FROM/TO id),
+	// or have the store's DeleteEntity return the cascade set it already
+	// removes, eliminating the scan entirely.
+	var cascadeEdges []store.Edge
+	allEdges, dumpErr := s.store.DumpAllEdges(ctx, branch)
+	if dumpErr != nil {
+		return nil, mapStoreError(dumpErr)
+	}
+	for _, e := range allEdges {
+		if e.FromEntityID == req.Id || e.ToEntityID == req.Id {
+			cascadeEdges = append(cascadeEdges, e)
 		}
-		// Enumerate the edges that DeleteEntity's cascade will remove (DETACH
-		// DELETE) so they can be recorded in the change log. Without this, the
-		// cascade-deleted edges never reach the log and their git files are not
-		// removed on commit, breaking SPEC R7 §4 atomicity ("edges are removed
-		// atomically with the entity") across a commit.
-		// ponytail: this enumeration is an un-paginated full-edge-table scan —
-		// DumpAllEdges(ctx, branch) loads every edge in the branch into memory
-		// to filter those connected to the deleted entity, so a single delete
-		// costs O(E) and D deletes inside one transaction cost O(D×E) (and
-		// O(D×E) transient heap for the intermediate allEdges slice). On a
-		// graph with a very large edge count and a transaction that deletes
-		// many entities this becomes a quadratic stall on the write path,
-		// amplified per replica by branch-DB re-hydration. Upgrade path:
-		// add a store primitive that lists edges by endpoint (FROM/TO id),
-		// or have the store's DeleteEntity return the cascade set it already
-		// removes, eliminating the scan entirely.
-		var cascadeEdges []store.Edge
-		allEdges, dumpErr := s.store.DumpAllEdges(ctx, branch)
-		if dumpErr != nil {
-			return nil, mapStoreError(dumpErr)
-		}
-		for _, e := range allEdges {
-			if e.FromEntityID == req.Id || e.ToEntityID == req.Id {
-				cascadeEdges = append(cascadeEdges, e)
-			}
-		}
-		ent, err = s.store.DeleteEntity(ctx, req.Id, branch)
-		if err != nil {
-			return nil, mapStoreError(err)
-		}
-		for _, e := range cascadeEdges {
-			if err := s.addTransactionChange(ctx, req.TransactionId, gitstore.ChangeLogEntry{
-				Kind: gitstore.ChangeDelEdge, ID: e.Id, Type: e.Type,
-			}); err != nil {
-				return nil, err
-			}
-		}
+	}
+	ent, err := s.store.DeleteEntity(ctx, req.Id, branch)
+	if err != nil {
+		return nil, mapStoreError(err)
+	}
+	for _, e := range cascadeEdges {
 		if err := s.addTransactionChange(ctx, req.TransactionId, gitstore.ChangeLogEntry{
-			Kind: gitstore.ChangeDelEntity, ID: ent.Id, Type: ent.Type,
+			Kind: gitstore.ChangeDelEdge, ID: e.Id, Type: e.Type,
 		}); err != nil {
 			return nil, err
 		}
-	} else {
-		s.lockMainStore()
-		ent, err = s.store.DeleteEntity(ctx, req.Id, branch)
-		s.writeLock.Unlock()
-		if err != nil {
-			return nil, mapStoreError(err)
-		}
+	}
+	if err := s.addTransactionChange(ctx, req.TransactionId, gitstore.ChangeLogEntry{
+		Kind: gitstore.ChangeDelEntity, ID: ent.Id, Type: ent.Type,
+	}); err != nil {
+		return nil, err
 	}
 	return &flowv1.DeleteEntityResponse{
 		EntityId: ent.Id, EntityType: ent.Type, Properties: ent.Properties,
@@ -1243,6 +1229,9 @@ func (s *CartographerServer) CreateEdge(
 	ctx context.Context,
 	req *flowv1.CreateEdgeRequest,
 ) (*flowv1.CreateEdgeResponse, error) {
+	if req.TransactionId == "" {
+		return nil, status.Error(codes.FailedPrecondition, "No active transaction")
+	}
 	if req.EdgeType == "" {
 		return nil, status.Error(codes.InvalidArgument, "edge type is required")
 	}
@@ -1287,32 +1276,22 @@ func (s *CartographerServer) CreateEdge(
 	if err := s.checkEntityCap(ctx, "WRITE", sourceType); err != nil {
 		return nil, err
 	}
-	var edge *store.Edge
-	if req.TransactionId != "" {
-		if err := s.preflightTransactionChange(ctx, req.TransactionId); err != nil {
-			return nil, err
-		}
-		edge, err = s.store.CreateEdge(ctx, req.EdgeType, req.FromEntityId, req.ToEntityId, req.Properties, branch)
-		if err != nil {
-			return nil, mapStoreError(err)
-		}
-		if err := s.addTransactionChange(ctx, req.TransactionId, gitstore.ChangeLogEntry{
-			Kind: gitstore.ChangeAddEdge, ID: edge.Id, Type: edge.Type,
-			Edge: &gitstore.EdgeEntry{
-				ID: edge.Id, Type: edge.Type,
-				FromEntityID: edge.FromEntityID, ToEntityID: edge.ToEntityID,
-				Properties: edge.Properties, CreatedAt: edge.CreatedAt, UpdatedAt: edge.UpdatedAt,
-			},
-		}); err != nil {
-			return nil, mapGitError(err)
-		}
-	} else {
-		s.lockMainStore()
-		edge, err = s.store.CreateEdge(ctx, req.EdgeType, req.FromEntityId, req.ToEntityId, req.Properties, branch)
-		s.writeLock.Unlock()
-		if err != nil {
-			return nil, mapStoreError(err)
-		}
+	if err := s.preflightTransactionChange(ctx, req.TransactionId); err != nil {
+		return nil, err
+	}
+	edge, err := s.store.CreateEdge(ctx, req.EdgeType, req.FromEntityId, req.ToEntityId, req.Properties, branch)
+	if err != nil {
+		return nil, mapStoreError(err)
+	}
+	if err := s.addTransactionChange(ctx, req.TransactionId, gitstore.ChangeLogEntry{
+		Kind: gitstore.ChangeAddEdge, ID: edge.Id, Type: edge.Type,
+		Edge: &gitstore.EdgeEntry{
+			ID: edge.Id, Type: edge.Type,
+			FromEntityID: edge.FromEntityID, ToEntityID: edge.ToEntityID,
+			Properties: edge.Properties, CreatedAt: edge.CreatedAt, UpdatedAt: edge.UpdatedAt,
+		},
+	}); err != nil {
+		return nil, mapGitError(err)
 	}
 	return &flowv1.CreateEdgeResponse{
 		EdgeId: edge.Id, EdgeType: edge.Type,
@@ -1348,6 +1327,9 @@ func (s *CartographerServer) DeleteEdge(
 	ctx context.Context,
 	req *flowv1.DeleteEdgeRequest,
 ) (*flowv1.DeleteEdgeResponse, error) {
+	if req.TransactionId == "" {
+		return nil, status.Error(codes.FailedPrecondition, "No active transaction")
+	}
 	if req.Id == "" {
 		return nil, status.Error(codes.InvalidArgument, "edge ID is required")
 	}
@@ -1372,27 +1354,17 @@ func (s *CartographerServer) DeleteEdge(
 	if err := s.checkEntityCap(ctx, "WRITE", sourceType); err != nil {
 		return nil, err
 	}
-	var edge *store.Edge
-	if req.TransactionId != "" {
-		if err := s.preflightTransactionChange(ctx, req.TransactionId); err != nil {
-			return nil, err
-		}
-		edge, err = s.store.DeleteEdge(ctx, req.Id, branch)
-		if err != nil {
-			return nil, mapStoreError(err)
-		}
-		if err := s.addTransactionChange(ctx, req.TransactionId, gitstore.ChangeLogEntry{
-			Kind: gitstore.ChangeDelEdge, ID: edge.Id, Type: edge.Type,
-		}); err != nil {
-			return nil, mapGitError(err)
-		}
-	} else {
-		s.lockMainStore()
-		edge, err = s.store.DeleteEdge(ctx, req.Id, branch)
-		s.writeLock.Unlock()
-		if err != nil {
-			return nil, mapStoreError(err)
-		}
+	if err := s.preflightTransactionChange(ctx, req.TransactionId); err != nil {
+		return nil, err
+	}
+	edge, err := s.store.DeleteEdge(ctx, req.Id, branch)
+	if err != nil {
+		return nil, mapStoreError(err)
+	}
+	if err := s.addTransactionChange(ctx, req.TransactionId, gitstore.ChangeLogEntry{
+		Kind: gitstore.ChangeDelEdge, ID: edge.Id, Type: edge.Type,
+	}); err != nil {
+		return nil, mapGitError(err)
 	}
 	return &flowv1.DeleteEdgeResponse{
 		EdgeId: edge.Id, EdgeType: edge.Type,
@@ -1424,6 +1396,15 @@ func (s *CartographerServer) BeginTransaction(
 	s.txAdmission.RLock()
 	defer s.txAdmission.RUnlock()
 	txID := s.newIDFn()
+	// Implicit sync before branch creation: if a remote is configured, wake
+	// the sync worker so the branch starts from the latest remote state.
+	if s.syncWorker != nil && s.remoteURL != "" {
+		syncCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		if syncErr := s.syncWorker.WakeAndWait(syncCtx); syncErr != nil {
+			slog.Warn("begin tx: sync worker cycle failed, proceeding", "error", syncErr)
+		}
+	}
 	requestedTimeout := s.defaultTimeout
 	if req.Timeout != nil {
 		requestedTimeout = req.Timeout.AsDuration()
@@ -1701,7 +1682,11 @@ func (s *CartographerServer) CommitTransaction(
 			}
 		}
 		if !state.CommitHydrated {
-			// SPEC steps 7-8: git lock is outer; main write lock is inner.
+			// SPEC steps 7-8: git lock is outer; main write lock is inner. With
+			// transaction-only writes there are no non-transactional mutations
+			// to main.lbug, so the LadybugDB write lock serialises the
+			// re-hydration only against the other main-store writers: Sync()
+			// (the sync worker's post-pull re-hydration) and WipeGraph().
 			s.lockMainStore()
 			state.MainRehydrated = true
 			if err := s.persistTransactionState(ctx, state); err != nil {
@@ -1760,58 +1745,16 @@ func (s *CartographerServer) CommitTransaction(
 	if err := s.finishTransactionCleanup(ctx, state); err != nil {
 		return nil, mapStoreError(err)
 	}
-	// Pull-before-push (inside git lock to ensure atomic fetch+merge+push).
-	if s.remoteURL != "" {
-		go func() {
-			pushCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	// Notify the sync worker that a commit needs pushing.
+	if s.syncWorker != nil {
+		s.syncWorker.SetPushNeeded()
+		if req.GetAck() {
+			syncCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 			defer cancel()
-			if err := s.gitstore.WithGitLock(func() error {
-				// ponytail: This pull-before-push diverges from SPEC R10's
-				// Commit step 14, which specifies a remote push only (fire-and-
-				// forget). FetchAndMerge is an extra, unspecified git operation
-				// on the local `main` working tree performed to reduce
-				// non-fast-forward push rejections when the remote has advanced
-				// since the last sync. It also contradicts R10's own divergence
-				// handling: an explicit PullFromRemote fails loudly with
-				// FAILED_PRECONDITION on divergence, while this post-commit path
-				// silently merges a diverged remote into local main (see (2)).
-				// Failure modes/consequences:
-				//   (1) FetchAndMerge can itself advance local `main` via
-				//       setLocalRefAndCheckout, so a rejected push still
-				//       leaves local main ahead of (or diverged from) what the
-				//       remote accepts, and the divergence keeps re-issuing the
-				//       merge on the next commit;
-				//   (2) when local and remote have truly diverged,
-				//       FetchAndMerge builds a MERGE COMMIT on local `main` —
-				//       a state the local transaction history never authored —
-				//       which can then be pushed, mixing a peer's commits
-				//       (or an older replica's) into the published timeline;
-				//   (3) under HA/multi-replica deployment a peer push in the
-				//       gap between fetch and push makes this merge race —
-				//       FetchAndMerge pulls the peer's commits, then the push
-				//       fails as non-fast-forward and the failure is only
-				//       logged/telemetry, so a peer's commit may be lost to the
-				//       local timeline while main stays consistent on the
-				//       remote, requiring a later pull to reconcile;
-				//   (4) it adds a network round-trip on every commit and, if
-				//       the merge is created, a local re-hydration is skipped
-				//       — the branch DB was already re-hydrated from the
-				//       pre-merge main, so a merge with remote content is not
-				//       reflected in main until the NEXT commit's hydration.
-				// Upgrade path: push without mutating local main, retrying the
-				// push itself (not a pre-merge) when it fails non-fast-forward;
-				// and treat remote divergence as an operator-visible condition
-				// (telemetry event) rather than silently merging on the
-				// working tree.
-				if _, err := s.gitstore.FetchAndMerge(pushCtx, "origin", "main"); err != nil {
-					return err
-				}
-				return s.gitstore.PushRemote(pushCtx)
-			}); err != nil {
-				slog.Warn("commit: remote push failed", "error", err.Error())
-				s.publishTelemetry("cartographer.push_failed", map[string]string{"error": err.Error()})
+			if syncErr := s.syncWorker.WakeAndWait(syncCtx); syncErr != nil {
+				return nil, mapGitError(syncErr)
 			}
-		}()
+		}
 	}
 	return &flowv1.CommitTransactionResponse{}, nil
 }
@@ -2296,57 +2239,22 @@ func (s *CartographerServer) HealthCheck(
 // Administrative Path
 // =========================================================================
 
-func (s *CartographerServer) PullFromRemote(
-	ctx context.Context, req *flowv1.PullFromRemoteRequest,
-) (*flowv1.PullFromRemoteResponse, error) {
+// Sync wakes the background sync worker and blocks until one full sync cycle
+// completes (fetch → merge → re-hydrate → push).
+func (s *CartographerServer) Sync(ctx context.Context, req *flowv1.SyncRequest) (*flowv1.SyncResponse, error) {
 	if s.remoteURL == "" {
 		return nil, errRemoteNotConfigured()
 	}
 	if err := s.checkWildcardEntityCap(ctx, "WRITE"); err != nil {
 		return nil, err
 	}
-	var hydrationErr error
-	if err := s.withGitLock(func() error {
-		empty, err := s.gitstore.IsEmpty(ctx)
-		if err != nil {
-			return err
-		}
-		if empty {
-			if err := s.gitstore.CloneSingleBranch(ctx, s.remoteURL, "main"); err != nil {
-				return err
-			}
-		} else if _, err := s.gitstore.FetchAndMerge(ctx, "origin", "main"); err != nil {
-			return err
-		}
-		// Unconditionally re-hydrate main from the git working tree on a successful
-		// pull (SPEC R10), mirroring the Commit path: derive the file directories
-		// from the gitstore so main is refreshed even when running in-memory
-		// (ladybugPath unset), keeping the in-memory main consistent with the
-		// pulled working tree.
-		// ponytail: Unlike SPEC R10, which sequences "release the git lock, then
-		// acquire the LadybugDB write lock and drop/re-hydrate main", this path holds
-		// the git working-tree lock across lockMainStore() + RehydrateMainFromFiles.
-		// Holding both locks together serialises the drop/re-hydrate against any
-		// concurrent git mutation (Commit/Refresh/GC) for the duration of the re-hydration,
-		// so the working tree cannot change underneath the file read; releasing the git
-		// lock first would admit a commit between the fetch and the re-hydrate, giving main
-		// a re-hydrate from a stale snapshot. The cost is that a slow re-hydration stalls
-		// every git mutation on the single-leader Cartographer for the whole window.
-		// Upgrade path: pin the pulled working-tree HEAD (e.g. read the file bytes under
-		// the git lock into memory, or record the pulled commit SHA), release the git lock,
-		// then re-hydrate under only the write lock — matching SPEC R10 sequencing.
-		s.lockMainStore()
-		entitiesDir, edgesDir := s.gitstore.HydrationDirs()
-		hydrationErr = s.store.RehydrateMainFromFiles(ctx, entitiesDir, edgesDir)
-		s.writeLock.Unlock()
-		return nil
-	}); err != nil {
+	if s.syncWorker == nil {
+		return nil, status.Error(codes.Internal, "sync worker not initialised")
+	}
+	if err := s.syncWorker.WakeAndWait(ctx); err != nil {
 		return nil, mapGitError(err)
 	}
-	if hydrationErr != nil {
-		return nil, errPullFromRemoteRehydrationFailed(hydrationErr.Error())
-	}
-	return &flowv1.PullFromRemoteResponse{}, nil
+	return &flowv1.SyncResponse{}, nil
 }
 
 // ExportGraph streams the serialised graph.

@@ -256,10 +256,6 @@ func errRemoteNotConfigured() error {
 	return status.Error(codes.FailedPrecondition, "no remote configured")
 }
 
-func errPullFromRemoteRehydrationFailed(detail string) error {
-	return status.Errorf(codes.Internal, "pull from remote re-hydration failed: %s", detail)
-}
-
 func errUnsupportedExportFormat(format string) error {
 	return status.Errorf(codes.InvalidArgument, "unsupported export format: %q", format)
 }

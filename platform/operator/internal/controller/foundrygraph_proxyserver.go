@@ -402,9 +402,3 @@ func (s *ProxyServer) GetTransactionDiff(ctx context.Context, req *flowv1gen.Get
 func (s *ProxyServer) ExtendTimeout(ctx context.Context, req *flowv1gen.ExtendTimeoutRequest) (*flowv1gen.ExtendTimeoutResponse, error) {
 	return nil, s.proxyUnimplemented("ExtendTimeout")
 }
-
-// --- Administrative path (excluded from proxy) ---
-
-func (s *ProxyServer) PullFromRemote(ctx context.Context, req *flowv1gen.PullFromRemoteRequest) (*flowv1gen.PullFromRemoteResponse, error) {
-	return nil, s.proxyUnimplemented("PullFromRemote")
-}

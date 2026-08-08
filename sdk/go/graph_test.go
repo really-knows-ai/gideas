@@ -69,7 +69,6 @@ type mockCartographerClient struct {
 	extendTimeout func(ctx context.Context, req *flowv1.ExtendTimeoutRequest) (*flowv1.ExtendTimeoutResponse, error)
 	exportGraph   func(ctx context.Context, req *flowv1.ExportGraphRequest,
 	) (grpc.ServerStreamingClient[flowv1.ExportGraphResponse], error)
-	pullFromRemote func(ctx context.Context, req *flowv1.PullFromRemoteRequest) (*flowv1.PullFromRemoteResponse, error)
 }
 
 func (m *mockCartographerClient) ExecuteCypher(
@@ -215,13 +214,10 @@ func (m *mockCartographerClient) ExportGraph(
 	}
 	return nil, errors.New("ExportGraph mock function not set")
 }
-func (m *mockCartographerClient) PullFromRemote(
-	ctx context.Context, req *flowv1.PullFromRemoteRequest, opts ...grpc.CallOption,
-) (*flowv1.PullFromRemoteResponse, error) {
-	if m.pullFromRemote != nil {
-		return m.pullFromRemote(ctx, req)
-	}
-	return &flowv1.PullFromRemoteResponse{}, nil
+func (m *mockCartographerClient) Sync(
+	ctx context.Context, req *flowv1.SyncRequest, opts ...grpc.CallOption,
+) (*flowv1.SyncResponse, error) {
+	return &flowv1.SyncResponse{}, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -482,8 +478,17 @@ func TestCreateEntity_NaNInfinityRejection(t *testing.T) {
 		{"negative-infinity", []float32{float32(math.Inf(-1))}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			g := newMockGraph(&mockCartographerClient{})
-			_, err := g.CreateEntity(componentType, nil, nil, tc.emb)
+			mock := &mockCartographerClient{
+				beginTx: func(ctx context.Context, req *flowv1.BeginTransactionRequest) (*flowv1.BeginTransactionResponse, error) {
+					return &flowv1.BeginTransactionResponse{TransactionId: "tx-1"}, nil
+				},
+			}
+			g := newMockGraph(mock)
+			tx, err := g.BeginTransaction()
+			if err != nil {
+				t.Fatalf("BeginTransaction returned error: %v", err)
+			}
+			_, err = tx.CreateEntity(componentType, nil, nil, tc.emb)
 			if err == nil {
 				t.Fatal("expected error for NaN/infinity embedding on CreateEntity")
 			}
@@ -501,8 +506,17 @@ func TestUpdateEntity_NaNInfinityRejection(t *testing.T) {
 		{"negative-infinity", []float32{float32(math.Inf(-1))}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			g := newMockGraph(&mockCartographerClient{})
-			_, err := g.UpdateEntity("entity-1", nil, tc.emb)
+			mock := &mockCartographerClient{
+				beginTx: func(ctx context.Context, req *flowv1.BeginTransactionRequest) (*flowv1.BeginTransactionResponse, error) {
+					return &flowv1.BeginTransactionResponse{TransactionId: "tx-1"}, nil
+				},
+			}
+			g := newMockGraph(mock)
+			tx, err := g.BeginTransaction()
+			if err != nil {
+				t.Fatalf("BeginTransaction returned error: %v", err)
+			}
+			_, err = tx.UpdateEntity("entity-1", nil, tc.emb)
 			if err == nil {
 				t.Fatal("expected error for NaN/finite embedding on UpdateEntity")
 			}
@@ -718,6 +732,9 @@ func TestListEntities_WildcardOmittedOnEmptyGraph(t *testing.T) {
 
 func TestCreateEntity(t *testing.T) {
 	mock := &mockCartographerClient{
+		beginTx: func(ctx context.Context, req *flowv1.BeginTransactionRequest) (*flowv1.BeginTransactionResponse, error) {
+			return &flowv1.BeginTransactionResponse{TransactionId: "tx-1"}, nil
+		},
 		createEntity: func(ctx context.Context, req *flowv1.CreateEntityRequest) (*flowv1.CreateEntityResponse, error) {
 			return &flowv1.CreateEntityResponse{
 				EntityId:   "test-id",
@@ -727,8 +744,12 @@ func TestCreateEntity(t *testing.T) {
 		},
 	}
 	g := newMockGraph(mock)
+	tx, err := g.BeginTransaction()
+	if err != nil {
+		t.Fatalf("BeginTransaction returned error: %v", err)
+	}
 	props := map[string]string{"name": "test"}
-	entity, err := g.CreateEntity(componentType, nil, props, nil)
+	entity, err := tx.CreateEntity(componentType, nil, props, nil)
 	if err != nil {
 		t.Fatalf("CreateEntity returned error: %v", err)
 	}
@@ -746,6 +767,9 @@ func TestCreateEntity(t *testing.T) {
 func TestCreateEntity_NilIDSendsEmpty(t *testing.T) {
 	var capturedID string
 	mock := &mockCartographerClient{
+		beginTx: func(ctx context.Context, req *flowv1.BeginTransactionRequest) (*flowv1.BeginTransactionResponse, error) {
+			return &flowv1.BeginTransactionResponse{TransactionId: "tx-1"}, nil
+		},
 		createEntity: func(ctx context.Context, req *flowv1.CreateEntityRequest) (*flowv1.CreateEntityResponse, error) {
 			capturedID = req.GetId()
 			return &flowv1.CreateEntityResponse{
@@ -755,7 +779,11 @@ func TestCreateEntity_NilIDSendsEmpty(t *testing.T) {
 		},
 	}
 	g := newMockGraph(mock)
-	entity, err := g.CreateEntity("Component", nil, nil, nil)
+	tx, err := g.BeginTransaction()
+	if err != nil {
+		t.Fatalf("BeginTransaction returned error: %v", err)
+	}
+	entity, err := tx.CreateEntity("Component", nil, nil, nil)
 	if err != nil {
 		t.Fatalf("CreateEntity returned error: %v", err)
 	}
@@ -769,6 +797,9 @@ func TestCreateEntity_NilIDSendsEmpty(t *testing.T) {
 
 func TestCreateEntity_PopulatesMap(t *testing.T) {
 	mock := &mockCartographerClient{
+		beginTx: func(ctx context.Context, req *flowv1.BeginTransactionRequest) (*flowv1.BeginTransactionResponse, error) {
+			return &flowv1.BeginTransactionResponse{TransactionId: "tx-1"}, nil
+		},
 		createEntity: func(ctx context.Context, req *flowv1.CreateEntityRequest) (*flowv1.CreateEntityResponse, error) {
 			return &flowv1.CreateEntityResponse{
 				EntityId:   "entity-1",
@@ -777,11 +808,15 @@ func TestCreateEntity_PopulatesMap(t *testing.T) {
 		},
 	}
 	g := newMockGraph(mock)
-	_, err := g.CreateEntity("Component", nil, nil, nil)
+	tx, err := g.BeginTransaction()
+	if err != nil {
+		t.Fatalf("BeginTransaction returned error: %v", err)
+	}
+	_, err = tx.CreateEntity("Component", nil, nil, nil)
 	if err != nil {
 		t.Fatalf("CreateEntity returned error: %v", err)
 	}
-	typ, ok := g.idTypeMap.resolve("entity-1")
+	typ, ok := tx.idTypeMap.resolve("entity-1")
 	if !ok || typ != componentType {
 		t.Errorf("expected Component type for entity-1, got %q (ok=%v)", typ, ok)
 	}
@@ -789,6 +824,9 @@ func TestCreateEntity_PopulatesMap(t *testing.T) {
 
 func TestUpdateEntity(t *testing.T) {
 	mock := &mockCartographerClient{
+		beginTx: func(ctx context.Context, req *flowv1.BeginTransactionRequest) (*flowv1.BeginTransactionResponse, error) {
+			return &flowv1.BeginTransactionResponse{TransactionId: "tx-1"}, nil
+		},
 		updateEntity: func(ctx context.Context, req *flowv1.UpdateEntityRequest) (*flowv1.UpdateEntityResponse, error) {
 			return &flowv1.UpdateEntityResponse{
 				EntityId:   req.GetId(),
@@ -799,7 +837,11 @@ func TestUpdateEntity(t *testing.T) {
 	}
 	g := newMockGraph(mock)
 	g.idTypeMap.store("entity-1", "Component")
-	entity, err := g.UpdateEntity("entity-1", map[string]string{"name": "updated"}, nil)
+	tx, err := g.BeginTransaction()
+	if err != nil {
+		t.Fatalf("BeginTransaction returned error: %v", err)
+	}
+	entity, err := tx.UpdateEntity("entity-1", map[string]string{"name": "updated"}, nil)
 	if err != nil {
 		t.Fatalf("UpdateEntity returned error: %v", err)
 	}
@@ -810,6 +852,9 @@ func TestUpdateEntity(t *testing.T) {
 
 func TestDeleteEntity(t *testing.T) {
 	mock := &mockCartographerClient{
+		beginTx: func(ctx context.Context, req *flowv1.BeginTransactionRequest) (*flowv1.BeginTransactionResponse, error) {
+			return &flowv1.BeginTransactionResponse{TransactionId: "tx-1"}, nil
+		},
 		deleteEntity: func(ctx context.Context, req *flowv1.DeleteEntityRequest) (*flowv1.DeleteEntityResponse, error) {
 			return &flowv1.DeleteEntityResponse{
 				EntityId:   req.GetId(),
@@ -819,7 +864,11 @@ func TestDeleteEntity(t *testing.T) {
 	}
 	g := newMockGraph(mock)
 	g.idTypeMap.store("entity-1", "Component")
-	entity, err := g.DeleteEntity("entity-1")
+	tx, err := g.BeginTransaction()
+	if err != nil {
+		t.Fatalf("BeginTransaction returned error: %v", err)
+	}
+	entity, err := tx.DeleteEntity("entity-1")
 	if err != nil {
 		t.Fatalf("DeleteEntity returned error: %v", err)
 	}
@@ -827,7 +876,7 @@ func TestDeleteEntity(t *testing.T) {
 		t.Errorf("expected entity ID entity-1, got %s", entity.ID)
 	}
 	// Verify removed from map
-	_, ok := g.idTypeMap.resolve("entity-1")
+	_, ok := tx.idTypeMap.resolve("entity-1")
 	if ok {
 		t.Error("expected entity-1 to be removed from map after delete")
 	}
@@ -835,6 +884,9 @@ func TestDeleteEntity(t *testing.T) {
 
 func TestDeleteEntity_ReturnsEmbedding(t *testing.T) {
 	mock := &mockCartographerClient{
+		beginTx: func(ctx context.Context, req *flowv1.BeginTransactionRequest) (*flowv1.BeginTransactionResponse, error) {
+			return &flowv1.BeginTransactionResponse{TransactionId: "tx-1"}, nil
+		},
 		deleteEntity: func(ctx context.Context, req *flowv1.DeleteEntityRequest) (*flowv1.DeleteEntityResponse, error) {
 			return &flowv1.DeleteEntityResponse{
 				EntityId:   req.GetId(),
@@ -844,7 +896,11 @@ func TestDeleteEntity_ReturnsEmbedding(t *testing.T) {
 		},
 	}
 	g := newMockGraph(mock)
-	entity, err := g.DeleteEntity("entity-1")
+	tx, err := g.BeginTransaction()
+	if err != nil {
+		t.Fatalf("BeginTransaction returned error: %v", err)
+	}
+	entity, err := tx.DeleteEntity("entity-1")
 	if err != nil {
 		t.Fatalf("DeleteEntity returned error: %v", err)
 	}
@@ -962,6 +1018,9 @@ func TestListEntities_ReturnsEmbedding(t *testing.T) {
 
 func TestCreateEdge(t *testing.T) {
 	mock := &mockCartographerClient{
+		beginTx: func(ctx context.Context, req *flowv1.BeginTransactionRequest) (*flowv1.BeginTransactionResponse, error) {
+			return &flowv1.BeginTransactionResponse{TransactionId: "tx-1"}, nil
+		},
 		createEdge: func(ctx context.Context, req *flowv1.CreateEdgeRequest) (*flowv1.CreateEdgeResponse, error) {
 			return &flowv1.CreateEdgeResponse{
 				EdgeId:       "edge-1",
@@ -973,7 +1032,11 @@ func TestCreateEdge(t *testing.T) {
 	}
 	g := newMockGraph(mock)
 	g.idTypeMap.store("from-1", "Component")
-	edge, err := g.CreateEdge("DEPENDS_ON", "from-1", "to-1", nil)
+	tx, err := g.BeginTransaction()
+	if err != nil {
+		t.Fatalf("BeginTransaction returned error: %v", err)
+	}
+	edge, err := tx.CreateEdge("DEPENDS_ON", "from-1", "to-1", nil)
 	if err != nil {
 		t.Fatalf("CreateEdge returned error: %v", err)
 	}
@@ -987,6 +1050,9 @@ func TestCreateEdge(t *testing.T) {
 
 func TestDeleteEdge(t *testing.T) {
 	mock := &mockCartographerClient{
+		beginTx: func(ctx context.Context, req *flowv1.BeginTransactionRequest) (*flowv1.BeginTransactionResponse, error) {
+			return &flowv1.BeginTransactionResponse{TransactionId: "tx-1"}, nil
+		},
 		deleteEdge: func(ctx context.Context, req *flowv1.DeleteEdgeRequest) (*flowv1.DeleteEdgeResponse, error) {
 			return &flowv1.DeleteEdgeResponse{
 				EdgeId:       req.GetId(),
@@ -997,7 +1063,11 @@ func TestDeleteEdge(t *testing.T) {
 		},
 	}
 	g := newMockGraph(mock)
-	edge, err := g.DeleteEdge("edge-1")
+	tx, err := g.BeginTransaction()
+	if err != nil {
+		t.Fatalf("BeginTransaction returned error: %v", err)
+	}
+	edge, err := tx.DeleteEdge("edge-1")
 	if err != nil {
 		t.Fatalf("DeleteEdge returned error: %v", err)
 	}
@@ -1027,58 +1097,6 @@ func TestBeginTransaction(t *testing.T) {
 	// propagated to the Transaction handle's timeout.
 	if tx.timeout != 30*time.Minute {
 		t.Errorf("expected tx.timeout to equal server applied timeout 30m, got %v", tx.timeout)
-	}
-}
-
-func TestPullFromRemote(t *testing.T) {
-	called := false
-	mock := &mockCartographerClient{
-		pullFromRemote: func(ctx context.Context, req *flowv1.PullFromRemoteRequest) (*flowv1.PullFromRemoteResponse, error) {
-			called = true
-			return &flowv1.PullFromRemoteResponse{}, nil
-		},
-	}
-	g := newMockGraph(mock)
-	err := g.PullFromRemote()
-	if err != nil {
-		t.Fatalf("PullFromRemote returned error: %v", err)
-	}
-	if !called {
-		t.Error("expected PullFromRemote to be called")
-	}
-}
-
-// TestGraphPullFromRemote_AnnotatesWildcard pins SPEC R3's
-// WRITE:graph/entity/* requirement for PullFromRemote at the SDK layer: the
-// RPC requires the wildcard capability and its request carries no
-// entity-type field for the Sidecar to read from the body, so the SDK must
-// annotate the fixed wildcard entity_type metadata (mirroring DeleteEdge).
-func TestGraphPullFromRemote_AnnotatesWildcard(t *testing.T) {
-	var capturedKey, capturedValue string
-	mock := &mockCartographerClient{
-		pullFromRemote: func(ctx context.Context, req *flowv1.PullFromRemoteRequest) (*flowv1.PullFromRemoteResponse, error) {
-			md, ok := metadata.FromOutgoingContext(ctx)
-			if !ok {
-				t.Fatal("no outgoing metadata")
-			}
-			vals := md.Get(metadataEntityTypeKey)
-			if len(vals) == 0 {
-				t.Fatal("no entity_type metadata")
-			}
-			capturedKey = metadataEntityTypeKey
-			capturedValue = vals[0]
-			return &flowv1.PullFromRemoteResponse{}, nil
-		},
-	}
-	g := newMockGraph(mock)
-	if err := g.PullFromRemote(); err != nil {
-		t.Fatalf("PullFromRemote returned error: %v", err)
-	}
-	if capturedKey != metadataEntityTypeKey {
-		t.Errorf("expected metadata key entity_type, got %q", capturedKey)
-	}
-	if capturedValue != "*" {
-		t.Errorf("expected wildcard *, got %q", capturedValue)
 	}
 }
 
@@ -1207,13 +1225,7 @@ func TestGraphMethodsWithNilSession(t *testing.T) {
 		{"SearchNeighbors", func() error { _, err := g.SearchNeighbors(nil, "", 0); return err }},
 		{"FullTextSearch", func() error { _, err := g.FullTextSearch("", ""); return err }},
 		{"ListEntities", func() error { _, err := g.ListEntities(""); return err }},
-		{"CreateEntity", func() error { _, err := g.CreateEntity("", nil, nil, nil); return err }},
-		{"UpdateEntity", func() error { _, err := g.UpdateEntity("", nil, nil); return err }},
-		{"DeleteEntity", func() error { _, err := g.DeleteEntity(""); return err }},
-		{"CreateEdge", func() error { _, err := g.CreateEdge("", "", "", nil); return err }},
-		{"DeleteEdge", func() error { _, err := g.DeleteEdge(""); return err }},
 		{"BeginTransaction", func() error { _, err := g.BeginTransaction(); return err }},
-		{"PullFromRemote", func() error { return g.PullFromRemote() }},
 		{"ExportGraph", func() error { _, err := g.ExportGraph("json"); return err }},
 	}
 	for _, tt := range tests {
@@ -1388,17 +1400,24 @@ func TestFullTextSearch_PopulatesMap(t *testing.T) {
 
 func TestDeleteEntity_RemovesFromMap(t *testing.T) {
 	mock := &mockCartographerClient{
+		beginTx: func(ctx context.Context, req *flowv1.BeginTransactionRequest) (*flowv1.BeginTransactionResponse, error) {
+			return &flowv1.BeginTransactionResponse{TransactionId: "tx-1"}, nil
+		},
 		deleteEntity: func(ctx context.Context, req *flowv1.DeleteEntityRequest) (*flowv1.DeleteEntityResponse, error) {
 			return &flowv1.DeleteEntityResponse{EntityId: req.GetId()}, nil
 		},
 	}
 	g := newMockGraph(mock)
 	g.idTypeMap.store("e1", "Component")
-	_, err := g.DeleteEntity("e1")
+	tx, err := g.BeginTransaction()
+	if err != nil {
+		t.Fatalf("BeginTransaction returned error: %v", err)
+	}
+	_, err = tx.DeleteEntity("e1")
 	if err != nil {
 		t.Fatalf("DeleteEntity returned error: %v", err)
 	}
-	_, ok := g.idTypeMap.resolve("e1")
+	_, ok := tx.idTypeMap.resolve("e1")
 	if ok {
 		t.Error("expected e1 to be removed from map")
 	}
@@ -1433,6 +1452,9 @@ func TestIDTypeMap_ResolveOrWildcard_NotFound(t *testing.T) {
 func TestGraphUpdateEntity_UnknownIDSendsWildcard(t *testing.T) {
 	var capturedKey, capturedValue string
 	mock := &mockCartographerClient{
+		beginTx: func(ctx context.Context, req *flowv1.BeginTransactionRequest) (*flowv1.BeginTransactionResponse, error) {
+			return &flowv1.BeginTransactionResponse{TransactionId: "tx-1"}, nil
+		},
 		updateEntity: func(ctx context.Context, req *flowv1.UpdateEntityRequest) (*flowv1.UpdateEntityResponse, error) {
 			md, ok := metadata.FromOutgoingContext(ctx)
 			if !ok {
@@ -1449,7 +1471,11 @@ func TestGraphUpdateEntity_UnknownIDSendsWildcard(t *testing.T) {
 	}
 	g := newMockGraph(mock)
 	// entity-1 is NOT in the map -> should produce wildcard
-	_, err := g.UpdateEntity("entity-1", nil, nil)
+	tx, err := g.BeginTransaction()
+	if err != nil {
+		t.Fatalf("BeginTransaction returned error: %v", err)
+	}
+	_, err = tx.UpdateEntity("entity-1", nil, nil)
 	if err != nil {
 		t.Fatalf("UpdateEntity returned error: %v", err)
 	}
@@ -1469,6 +1495,9 @@ func TestGraphUpdateEntity_UnknownIDSendsWildcard(t *testing.T) {
 func TestGraphUpdateEntity_ResolvedTypeAnnotation(t *testing.T) {
 	var capturedKey, capturedValue string
 	mock := &mockCartographerClient{
+		beginTx: func(ctx context.Context, req *flowv1.BeginTransactionRequest) (*flowv1.BeginTransactionResponse, error) {
+			return &flowv1.BeginTransactionResponse{TransactionId: "tx-1"}, nil
+		},
 		updateEntity: func(ctx context.Context, req *flowv1.UpdateEntityRequest) (*flowv1.UpdateEntityResponse, error) {
 			md, ok := metadata.FromOutgoingContext(ctx)
 			if !ok {
@@ -1486,7 +1515,11 @@ func TestGraphUpdateEntity_ResolvedTypeAnnotation(t *testing.T) {
 	g := newMockGraph(mock)
 	// entity-1 IS in the map -> annotation must carry the resolved Component.
 	g.idTypeMap.store("entity-1", componentType)
-	_, err := g.UpdateEntity("entity-1", nil, nil)
+	tx, err := g.BeginTransaction()
+	if err != nil {
+		t.Fatalf("BeginTransaction returned error: %v", err)
+	}
+	_, err = tx.UpdateEntity("entity-1", nil, nil)
 	if err != nil {
 		t.Fatalf("UpdateEntity returned error: %v", err)
 	}
@@ -1501,6 +1534,9 @@ func TestGraphUpdateEntity_ResolvedTypeAnnotation(t *testing.T) {
 func TestGraphDeleteEntity_UnknownIDSendsWildcard(t *testing.T) {
 	var capturedKey, capturedValue string
 	mock := &mockCartographerClient{
+		beginTx: func(ctx context.Context, req *flowv1.BeginTransactionRequest) (*flowv1.BeginTransactionResponse, error) {
+			return &flowv1.BeginTransactionResponse{TransactionId: "tx-1"}, nil
+		},
 		deleteEntity: func(ctx context.Context, req *flowv1.DeleteEntityRequest) (*flowv1.DeleteEntityResponse, error) {
 			md, ok := metadata.FromOutgoingContext(ctx)
 			if !ok {
@@ -1517,7 +1553,11 @@ func TestGraphDeleteEntity_UnknownIDSendsWildcard(t *testing.T) {
 	}
 	g := newMockGraph(mock)
 	// entity-1 is NOT in the map -> should produce wildcard
-	_, err := g.DeleteEntity("entity-1")
+	tx, err := g.BeginTransaction()
+	if err != nil {
+		t.Fatalf("BeginTransaction returned error: %v", err)
+	}
+	_, err = tx.DeleteEntity("entity-1")
 	if err != nil {
 		t.Fatalf("DeleteEntity returned error: %v", err)
 	}
@@ -1532,6 +1572,9 @@ func TestGraphDeleteEntity_UnknownIDSendsWildcard(t *testing.T) {
 func TestGraphCreateEdge_UnknownFromIDSendsWildcard(t *testing.T) {
 	var capturedKey, capturedValue string
 	mock := &mockCartographerClient{
+		beginTx: func(ctx context.Context, req *flowv1.BeginTransactionRequest) (*flowv1.BeginTransactionResponse, error) {
+			return &flowv1.BeginTransactionResponse{TransactionId: "tx-1"}, nil
+		},
 		createEdge: func(ctx context.Context, req *flowv1.CreateEdgeRequest) (*flowv1.CreateEdgeResponse, error) {
 			md, ok := metadata.FromOutgoingContext(ctx)
 			if !ok {
@@ -1550,7 +1593,11 @@ func TestGraphCreateEdge_UnknownFromIDSendsWildcard(t *testing.T) {
 	}
 	g := newMockGraph(mock)
 	// from-1 is NOT in the map -> should produce wildcard
-	_, err := g.CreateEdge("DEPENDS_ON", "from-1", "to-1", nil)
+	tx, err := g.BeginTransaction()
+	if err != nil {
+		t.Fatalf("BeginTransaction returned error: %v", err)
+	}
+	_, err = tx.CreateEdge("DEPENDS_ON", "from-1", "to-1", nil)
 	if err != nil {
 		t.Fatalf("CreateEdge returned error: %v", err)
 	}
@@ -1572,6 +1619,9 @@ func TestGraphCreateEdge_UnknownFromIDSendsWildcard(t *testing.T) {
 func TestGraphDeleteEntity_ResolvedTypeAnnotation(t *testing.T) {
 	var capturedKey, capturedValue string
 	mock := &mockCartographerClient{
+		beginTx: func(ctx context.Context, req *flowv1.BeginTransactionRequest) (*flowv1.BeginTransactionResponse, error) {
+			return &flowv1.BeginTransactionResponse{TransactionId: "tx-1"}, nil
+		},
 		deleteEntity: func(ctx context.Context, req *flowv1.DeleteEntityRequest) (*flowv1.DeleteEntityResponse, error) {
 			md, ok := metadata.FromOutgoingContext(ctx)
 			if !ok {
@@ -1589,7 +1639,11 @@ func TestGraphDeleteEntity_ResolvedTypeAnnotation(t *testing.T) {
 	g := newMockGraph(mock)
 	// entity-1 IS in the map -> annotation must carry the resolved Component.
 	g.idTypeMap.store("entity-1", componentType)
-	_, err := g.DeleteEntity("entity-1")
+	tx, err := g.BeginTransaction()
+	if err != nil {
+		t.Fatalf("BeginTransaction returned error: %v", err)
+	}
+	_, err = tx.DeleteEntity("entity-1")
 	if err != nil {
 		t.Fatalf("DeleteEntity returned error: %v", err)
 	}
@@ -1610,6 +1664,9 @@ func TestGraphDeleteEntity_ResolvedTypeAnnotation(t *testing.T) {
 func TestGraphCreateEdge_ResolvedTypeAnnotation(t *testing.T) {
 	var capturedKey, capturedValue string
 	mock := &mockCartographerClient{
+		beginTx: func(ctx context.Context, req *flowv1.BeginTransactionRequest) (*flowv1.BeginTransactionResponse, error) {
+			return &flowv1.BeginTransactionResponse{TransactionId: "tx-1"}, nil
+		},
 		createEdge: func(ctx context.Context, req *flowv1.CreateEdgeRequest) (*flowv1.CreateEdgeResponse, error) {
 			md, ok := metadata.FromOutgoingContext(ctx)
 			if !ok {
@@ -1629,7 +1686,11 @@ func TestGraphCreateEdge_ResolvedTypeAnnotation(t *testing.T) {
 	g := newMockGraph(mock)
 	// from-1 IS in the map -> annotation must carry the resolved Component.
 	g.idTypeMap.store("from-1", componentType)
-	_, err := g.CreateEdge("DEPENDS_ON", "from-1", "to-1", nil)
+	tx, err := g.BeginTransaction()
+	if err != nil {
+		t.Fatalf("BeginTransaction returned error: %v", err)
+	}
+	_, err = tx.CreateEdge("DEPENDS_ON", "from-1", "to-1", nil)
 	if err != nil {
 		t.Fatalf("CreateEdge returned error: %v", err)
 	}
@@ -1644,6 +1705,9 @@ func TestGraphCreateEdge_ResolvedTypeAnnotation(t *testing.T) {
 func TestGraphDeleteEdge_SendsWildcardAndKey(t *testing.T) {
 	var capturedKey, capturedValue string
 	mock := &mockCartographerClient{
+		beginTx: func(ctx context.Context, req *flowv1.BeginTransactionRequest) (*flowv1.BeginTransactionResponse, error) {
+			return &flowv1.BeginTransactionResponse{TransactionId: "tx-1"}, nil
+		},
 		deleteEdge: func(ctx context.Context, req *flowv1.DeleteEdgeRequest) (*flowv1.DeleteEdgeResponse, error) {
 			md, ok := metadata.FromOutgoingContext(ctx)
 			if !ok {
@@ -1661,7 +1725,11 @@ func TestGraphDeleteEdge_SendsWildcardAndKey(t *testing.T) {
 		},
 	}
 	g := newMockGraph(mock)
-	_, err := g.DeleteEdge("edge-1")
+	tx, err := g.BeginTransaction()
+	if err != nil {
+		t.Fatalf("BeginTransaction returned error: %v", err)
+	}
+	_, err = tx.DeleteEdge("edge-1")
 	if err != nil {
 		t.Fatalf("DeleteEdge returned error: %v", err)
 	}

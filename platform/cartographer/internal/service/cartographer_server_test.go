@@ -78,8 +78,10 @@ func capabilityContextAt(caps string, priv ed25519.PrivateKey, signedBy string, 
 
 // fakeClock implements Clock for testing.
 type fakeClock struct {
-	mu  sync.Mutex
-	now time.Time
+	mu          sync.Mutex
+	now         time.Time
+	lastTicker  *fakeTicker
+	tickerCount int
 }
 
 func newFakeClock(t time.Time) *fakeClock { return &fakeClock{now: t} }
@@ -88,17 +90,64 @@ func (f *fakeClock) Now() time.Time {
 	defer f.mu.Unlock()
 	return f.now
 }
-func (f *fakeClock) NewTicker(d time.Duration) Ticker { return &fakeTicker{ch: make(chan time.Time)} }
+func (f *fakeClock) NewTicker(d time.Duration) Ticker {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	t := &fakeTicker{ch: make(chan time.Time, 1)}
+	f.lastTicker = t
+	f.tickerCount++
+	return t
+}
 func (f *fakeClock) Advance(d time.Duration) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.now = f.now.Add(d)
 }
 
+// tickers returns how many tickers the clock has handed out. The SyncWorker
+// creates its ticker immediately after the startup cycle, so a non-zero count
+// is the barrier for "the worker finished its startup cycle and is parked in
+// the select loop".
+func (f *fakeClock) tickers() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.tickerCount
+}
+
+// FireTicker emits one tick on the most recently created ticker. The ticker
+// channel is buffered (size 1) so the send never blocks; a tick delivered
+// before the worker parks in select is consumed when it does.
+func (f *fakeClock) FireTicker() {
+	f.mu.Lock()
+	t := f.lastTicker
+	f.mu.Unlock()
+	if t == nil {
+		return
+	}
+	select {
+	case t.ch <- time.Now():
+	default:
+	}
+}
+
 type fakeTicker struct{ ch chan time.Time }
 
 func (f *fakeTicker) C() <-chan time.Time { return f.ch }
 func (f *fakeTicker) Stop()               {}
+
+// waitFor polls cond until it returns true or the 5-second budget elapses,
+// failing the test with msg otherwise.
+func waitFor(t *testing.T, cond func() bool, msg string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s", msg)
+}
 
 type testSchemaProvider struct {
 	entityNames []string
@@ -312,6 +361,14 @@ type dropFailingStore struct {
 	failDrop bool
 }
 
+func (s *dropFailingStore) DropBranchDB(ctx context.Context, txID string) error {
+	if s.failDrop {
+		s.failDrop = false
+		return fmt.Errorf("simulated DropBranchDB failure")
+	}
+	return s.Store.DropBranchDB(ctx, txID)
+}
+
 type markerFailingStore struct {
 	store.Store
 	failMark bool
@@ -348,26 +405,6 @@ func (s *markerFailingStore) DropBranchDB(ctx context.Context, txID string) erro
 	if s.failDrop {
 		s.failDrop = false
 		return errors.New("simulated marker cleanup drop failure")
-	}
-	return s.Store.DropBranchDB(ctx, txID)
-}
-
-type gcBlockingStore struct {
-	store.Store
-	wipeEntered chan struct{}
-	releaseWipe chan struct{}
-}
-
-func (s *gcBlockingStore) RehydrateMainFromFiles(ctx context.Context, entitiesDir, edgesDir string) error {
-	close(s.wipeEntered)
-	<-s.releaseWipe
-	return s.Store.RehydrateMainFromFiles(ctx, entitiesDir, edgesDir)
-}
-
-func (s *dropFailingStore) DropBranchDB(ctx context.Context, txID string) error {
-	if s.failDrop {
-		s.failDrop = false
-		return fmt.Errorf("simulated DropBranchDB failure")
 	}
 	return s.Store.DropBranchDB(ctx, txID)
 }
@@ -558,30 +595,6 @@ type gitAttemptStore struct {
 	attempted chan struct{}
 }
 
-type pullGitStore struct {
-	gitAttemptStore
-}
-
-func (s *pullGitStore) IsEmpty(context.Context) (bool, error)    { return false, nil }
-func (s *pullGitStore) PullAndFastForward(context.Context) error { return nil }
-func (s *pullGitStore) FetchAndMerge(context.Context, string, string) (plumbing.Hash, error) {
-	return plumbing.ZeroHash, nil
-}
-
-type pullHydrationBlockingStore struct {
-	store.Store
-	entered chan struct{}
-	release chan struct{}
-}
-
-func (s *pullHydrationBlockingStore) RehydrateMainFromFiles(
-	ctx context.Context, entitiesDir, edgesDir string,
-) error {
-	close(s.entered)
-	<-s.release
-	return s.Store.RehydrateMainFromFiles(ctx, entitiesDir, edgesDir)
-}
-
 func (s *gitAttemptStore) setAttempted(attempted chan struct{}) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -625,17 +638,17 @@ func (m *mockExportStream) SendHeader(md metadata.MD) error { return nil }
 func (m *mockExportStream) SetHeader(md metadata.MD) error  { return nil }
 func (m *mockExportStream) RecvMsg(any) error               { return nil }
 
-func invokePullFromRemote(
+func invokeSync(
 	srv *CartographerServer, ctx context.Context,
 ) (handlerInvoked bool, verifiedCaps *Capabilities, err error) {
 	_, err = srv.verifier.VerifyInterceptor(
 		ctx,
-		&flowv1.PullFromRemoteRequest{},
-		&grpc.UnaryServerInfo{Server: srv, FullMethod: flowv1.CartographerService_PullFromRemote_FullMethodName},
+		&flowv1.SyncRequest{},
+		&grpc.UnaryServerInfo{Server: srv, FullMethod: flowv1.CartographerService_Sync_FullMethodName},
 		func(ctx context.Context, req any) (any, error) {
 			handlerInvoked = true
 			verifiedCaps, _ = ExtractCapabilities(ctx)
-			return srv.PullFromRemote(ctx, req.(*flowv1.PullFromRemoteRequest))
+			return srv.Sync(ctx, req.(*flowv1.SyncRequest))
 		},
 	)
 	return handlerInvoked, verifiedCaps, err
@@ -745,6 +758,18 @@ func applyTestSchema(ctx context.Context, t *testing.T, st store.Store) {
 	if err := st.ApplySchema(ctx, schema); err != nil {
 		t.Fatalf("ApplySchema: %v", err)
 	}
+}
+
+// beginTestTx begins a transaction on srv using the full-capability testCtx and
+// returns its transaction ID. Write-path tests must run inside a transaction
+// (transaction-only write model), so this helper is the standard preamble.
+func beginTestTx(t *testing.T, srv *CartographerServer, ctx context.Context) string {
+	t.Helper()
+	begin, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
+	if err != nil {
+		t.Fatalf("BeginTransaction: %v", err)
+	}
+	return begin.TransactionId
 }
 
 func commitGitEntity(ctx context.Context, t *testing.T, gs gitstore.GitStore, id, name string) {
@@ -985,7 +1010,7 @@ func TestCapability_StaleCapability_UnaryInterceptorRejectsBeforeHandler(t *test
 		"WRITE:graph/entity/*", testSidecarPriv, "sidecar", time.Now().Add(-2*time.Minute).Unix(),
 	)
 
-	handlerInvoked, _, err := invokePullFromRemote(srv, ctx)
+	handlerInvoked, _, err := invokeSync(srv, ctx)
 	if handlerInvoked {
 		t.Fatal("unary handler ran for stale capability")
 	}
@@ -1462,9 +1487,11 @@ func TestCreateEntity_Valid(t *testing.T) {
 	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
+	txID := beginTestTx(t, srv, ctx)
 	resp, err := srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
-		EntityType: "Component",
-		Properties: map[string]string{"name": "test", "version": "1.0"},
+		EntityType:    "Component",
+		Properties:    map[string]string{"name": "test", "version": "1.0"},
+		TransactionId: txID,
 	})
 	if err != nil {
 		t.Fatalf("CreateEntity failed: %v", err)
@@ -1482,9 +1509,11 @@ func TestCreateEntity_UnknownType(t *testing.T) {
 	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
+	txID := beginTestTx(t, srv, ctx)
 	_, err := srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
-		EntityType: "Unknown",
-		Properties: map[string]string{"name": "x"},
+		EntityType:    "Unknown",
+		Properties:    map[string]string{"name": "x"},
+		TransactionId: txID,
 	})
 	if err == nil {
 		t.Fatal("expected error for unknown type, got nil")
@@ -1499,18 +1528,21 @@ func TestCreateEntity_DuplicateID(t *testing.T) {
 	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
+	txID := beginTestTx(t, srv, ctx)
 	resp, err := srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
-		EntityType: "Component",
-		Properties: map[string]string{"name": "first"},
+		EntityType:    "Component",
+		Properties:    map[string]string{"name": "first"},
+		TransactionId: txID,
 	})
 	if err != nil {
 		t.Fatalf("first CreateEntity failed: %v", err)
 	}
 	// Same ID again.
 	_, err = srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
-		EntityType: "Component",
-		Id:         resp.EntityId,
-		Properties: map[string]string{"name": "second"},
+		EntityType:    "Component",
+		Id:            resp.EntityId,
+		Properties:    map[string]string{"name": "second"},
+		TransactionId: txID,
 	})
 	if err == nil {
 		t.Fatal("expected error for duplicate ID, got nil")
@@ -1525,9 +1557,11 @@ func TestCreateEntity_MissingRequiredProperty(t *testing.T) {
 	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
+	txID := beginTestTx(t, srv, ctx)
 	_, err := srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
-		EntityType: "Component",
-		Properties: map[string]string{},
+		EntityType:    "Component",
+		Properties:    map[string]string{},
+		TransactionId: txID,
 	})
 	if status.Code(err) != codes.InvalidArgument || !strings.Contains(err.Error(), "missing required property") {
 		t.Fatalf("CreateEntity without required property should fail: %v", err)
@@ -1539,9 +1573,11 @@ func TestUpdateEntity_NotFound(t *testing.T) {
 	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
+	txID := beginTestTx(t, srv, ctx)
 	_, err := srv.UpdateEntity(ctx, &flowv1.UpdateEntityRequest{
-		Id:         "11111111-1111-4111-8111-111111111111",
-		Properties: map[string]string{"name": "x"},
+		Id:            "11111111-1111-4111-8111-111111111111",
+		Properties:    map[string]string{"name": "x"},
+		TransactionId: txID,
 	})
 	if err == nil {
 		t.Fatal("expected error for not-found entity, got nil")
@@ -1556,11 +1592,13 @@ func TestUpdateEntity_Valid(t *testing.T) {
 	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
-	ent, _ := srv.store.CreateEntity(ctx, "Component", "", map[string]string{"name": "original"}, nil, "")
+	txID := beginTestTx(t, srv, ctx)
+	ent, _ := srv.store.CreateEntity(ctx, "Component", "", map[string]string{"name": "original"}, nil, txID)
 
 	resp, err := srv.UpdateEntity(ctx, &flowv1.UpdateEntityRequest{
-		Id:         ent.Id,
-		Properties: map[string]string{"version": "2"},
+		Id:            ent.Id,
+		Properties:    map[string]string{"version": "2"},
+		TransactionId: txID,
 	})
 	if err != nil {
 		t.Fatalf("UpdateEntity failed: %v", err)
@@ -1575,8 +1613,10 @@ func TestDeleteEntity_NotFound(t *testing.T) {
 	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
+	txID := beginTestTx(t, srv, ctx)
 	_, err := srv.DeleteEntity(ctx, &flowv1.DeleteEntityRequest{
-		Id: "11111111-1111-4111-8111-111111111111",
+		Id:            "11111111-1111-4111-8111-111111111111",
+		TransactionId: txID,
 	})
 	if err == nil {
 		t.Fatal("expected error for not-found entity, got nil")
@@ -1591,7 +1631,8 @@ func TestDeleteEntity_InvalidUUID(t *testing.T) {
 	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
-	_, err := srv.DeleteEntity(ctx, &flowv1.DeleteEntityRequest{Id: "not-a-uuid"})
+	txID := beginTestTx(t, srv, ctx)
+	_, err := srv.DeleteEntity(ctx, &flowv1.DeleteEntityRequest{Id: "not-a-uuid", TransactionId: txID})
 	if err == nil {
 		t.Fatal("expected error for invalid UUID, got nil")
 	}
@@ -1605,61 +1646,15 @@ func TestDeleteEntity_Valid(t *testing.T) {
 	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
-	ent, _ := srv.store.CreateEntity(ctx, "Component", "", map[string]string{"name": "delete-me"}, nil, "")
+	txID := beginTestTx(t, srv, ctx)
+	ent, _ := srv.store.CreateEntity(ctx, "Component", "", map[string]string{"name": "delete-me"}, nil, txID)
 
-	resp, err := srv.DeleteEntity(ctx, &flowv1.DeleteEntityRequest{Id: ent.Id})
+	resp, err := srv.DeleteEntity(ctx, &flowv1.DeleteEntityRequest{Id: ent.Id, TransactionId: txID})
 	if err != nil {
 		t.Fatalf("DeleteEntity failed: %v", err)
 	}
 	if resp.EntityId != ent.Id {
 		t.Fatalf("expected deleted entity ID %q, got %q", ent.Id, resp.EntityId)
-	}
-}
-
-// TestDeleteEntity_NonTransactionalCascade verifies SPEC R7 §4 atomicity on the
-// main (non-transactional) path: deleting an entity outside a transaction must
-// remove all edges connected to it atomically with the entity. Only the
-// in-transaction cascade path was previously covered at the service layer.
-func TestDeleteEntity_NonTransactionalCascade(t *testing.T) {
-	srv, _ := newTestServer(t)
-	ctx := testCtx()
-
-	applyTestSchema(ctx, t, srv.store)
-	svc, _ := srv.store.CreateEntity(ctx, "Service", "", map[string]string{"name": "svc"}, nil, "")
-	comp, _ := srv.store.CreateEntity(ctx, "Component", "", map[string]string{"name": "core"}, nil, "")
-
-	edgeResp, err := srv.CreateEdge(ctx, &flowv1.CreateEdgeRequest{
-		EdgeType: "DEPENDS_ON", FromEntityId: svc.Id, ToEntityId: comp.Id,
-	})
-	if err != nil {
-		t.Fatalf("CreateEdge failed: %v", err)
-	}
-
-	// Non-transactional DeleteEntity applies directly to main.
-	if _, err := srv.DeleteEntity(ctx, &flowv1.DeleteEntityRequest{Id: svc.Id}); err != nil {
-		t.Fatalf("non-transactional DeleteEntity failed: %v", err)
-	}
-
-	// The entity must be gone.
-	if _, err := srv.store.GetEntity(ctx, svc.Id, ""); err == nil {
-		t.Fatal("expected deleted entity to be gone")
-	}
-	// The connected edge must have been removed atomically with the entity.
-	remaining, err := srv.store.ListEdgesOfType(ctx, "DEPENDS_ON", "")
-	if err != nil {
-		t.Fatalf("ListEdgesOfType failed: %v", err)
-	}
-	for _, e := range remaining {
-		if e.Id == edgeResp.EdgeId {
-			t.Fatalf("expected cascade-deleted edge %q to be removed on main", edgeResp.EdgeId)
-		}
-	}
-	if len(remaining) != 0 {
-		t.Fatalf("expected no DEPENDS_ON edges to remain, got %d", len(remaining))
-	}
-	// The other participant is untouched by the cascade.
-	if _, err := srv.store.GetEntity(ctx, comp.Id, ""); err != nil {
-		t.Fatalf("non-adjacent entity must survive the cascade: %v", err)
 	}
 }
 
@@ -1728,14 +1723,16 @@ func TestCreateEdge_Valid(t *testing.T) {
 	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
-	svc, _ := srv.store.CreateEntity(ctx, "Service", "", map[string]string{"name": "svc"}, nil, "")
-	comp, _ := srv.store.CreateEntity(ctx, "Component", "", map[string]string{"name": "core"}, nil, "")
+	txID := beginTestTx(t, srv, ctx)
+	svc, _ := srv.store.CreateEntity(ctx, "Service", "", map[string]string{"name": "svc"}, nil, txID)
+	comp, _ := srv.store.CreateEntity(ctx, "Component", "", map[string]string{"name": "core"}, nil, txID)
 
 	resp, err := srv.CreateEdge(ctx, &flowv1.CreateEdgeRequest{
-		EdgeType:     "DEPENDS_ON",
-		FromEntityId: svc.Id,
-		ToEntityId:   comp.Id,
-		Properties:   map[string]string{"weight": "high"},
+		EdgeType:      "DEPENDS_ON",
+		FromEntityId:  svc.Id,
+		ToEntityId:    comp.Id,
+		Properties:    map[string]string{"weight": "high"},
+		TransactionId: txID,
 	})
 	if err != nil {
 		t.Fatalf("CreateEdge failed: %v", err)
@@ -1750,10 +1747,12 @@ func TestCreateEdge_SourceNotFound(t *testing.T) {
 	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
+	txID := beginTestTx(t, srv, ctx)
 	_, err := srv.CreateEdge(ctx, &flowv1.CreateEdgeRequest{
-		EdgeType:     "DEPENDS_ON",
-		FromEntityId: "11111111-1111-4111-8111-111111111111",
-		ToEntityId:   "22222222-2222-4222-8222-222222222222",
+		EdgeType:      "DEPENDS_ON",
+		FromEntityId:  "11111111-1111-4111-8111-111111111111",
+		ToEntityId:    "22222222-2222-4222-8222-222222222222",
+		TransactionId: txID,
 	})
 	if err == nil {
 		t.Fatal("expected error for not-found source, got nil")
@@ -1768,12 +1767,14 @@ func TestCreateEdge_UnknownEdgeType(t *testing.T) {
 	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
-	ent, _ := srv.store.CreateEntity(ctx, "Component", "", map[string]string{"name": "x"}, nil, "")
+	txID := beginTestTx(t, srv, ctx)
+	ent, _ := srv.store.CreateEntity(ctx, "Component", "", map[string]string{"name": "x"}, nil, txID)
 
 	_, err := srv.CreateEdge(ctx, &flowv1.CreateEdgeRequest{
-		EdgeType:     "UNKNOWN_EDGE",
-		FromEntityId: ent.Id,
-		ToEntityId:   ent.Id,
+		EdgeType:      "UNKNOWN_EDGE",
+		FromEntityId:  ent.Id,
+		ToEntityId:    ent.Id,
+		TransactionId: txID,
 	})
 	if err == nil {
 		t.Fatal("expected error for unknown edge type, got nil")
@@ -1786,20 +1787,22 @@ func TestCreateEdge_UnknownEdgeType(t *testing.T) {
 // TestCreateEdge_UnknownEdgeTypeWinsOverMissingCapability asserts the SPEC
 // validation order (structural before capability): a caller lacking
 // WRITE:graph/entity/* still gets INVALID_ARGUMENT (not PERMISSION_DENIED)
-// for an unknown edge type.
+// for an unknown edge type. The transaction is begun with full capabilities;
+// the mutation call itself carries only READ capabilities.
 func TestCreateEdge_UnknownEdgeTypeWinsOverMissingCapability(t *testing.T) {
 	srv, _ := newTestServer(t)
 	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
-	ent, _ := srv.store.CreateEntity(ctx, "Component", "", map[string]string{"name": "x"}, nil, "")
+	txID := beginTestTx(t, srv, ctx)
 
 	// Only READ capabilities — the caller holds no write capability at all.
 	noWriteCtx := capabilityContext("READ:graph/entity/*", testSidecarPriv, "sidecar")
 	_, err := srv.CreateEdge(noWriteCtx, &flowv1.CreateEdgeRequest{
-		EdgeType:     "UNKNOWN_EDGE",
-		FromEntityId: ent.Id,
-		ToEntityId:   ent.Id,
+		EdgeType:      "UNKNOWN_EDGE",
+		FromEntityId:  "11111111-1111-4111-8111-111111111111",
+		ToEntityId:    "22222222-2222-4222-8222-222222222222",
+		TransactionId: txID,
 	})
 	if err == nil {
 		t.Fatal("expected error for unknown edge type, got nil")
@@ -1814,8 +1817,10 @@ func TestDeleteEdge_NotFound(t *testing.T) {
 	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
+	txID := beginTestTx(t, srv, ctx)
 	_, err := srv.DeleteEdge(ctx, &flowv1.DeleteEdgeRequest{
-		Id: "11111111-1111-4111-8111-111111111111",
+		Id:            "11111111-1111-4111-8111-111111111111",
+		TransactionId: txID,
 	})
 	if err == nil {
 		t.Fatal("expected error for not-found edge, got nil")
@@ -1830,7 +1835,8 @@ func TestDeleteEdge_InvalidUUID(t *testing.T) {
 	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
-	_, err := srv.DeleteEdge(ctx, &flowv1.DeleteEdgeRequest{Id: "not-a-uuid"})
+	txID := beginTestTx(t, srv, ctx)
+	_, err := srv.DeleteEdge(ctx, &flowv1.DeleteEdgeRequest{Id: "not-a-uuid", TransactionId: txID})
 	if err == nil {
 		t.Fatal("expected error for invalid UUID, got nil")
 	}
@@ -1843,18 +1849,22 @@ func TestDeleteEdge_InvalidUUID(t *testing.T) {
 // CreateEntity validation order (structural before capability): a caller lacking
 // WRITE capabilities but supplying a structurally-invalid explicit `id` gets
 // INVALID_ARGUMENT (not PERMISSION_DENIED) — mirroring
-// TestCreateEdge_UnknownEdgeTypeWinsOverMissingCapability.
+// TestCreateEdge_UnknownEdgeTypeWinsOverMissingCapability. The transaction is
+// begun with full capabilities; the mutation call itself carries only READ
+// capabilities.
 func TestCreateEntity_InvalidIDWinsOverMissingCapability(t *testing.T) {
 	srv, _ := newTestServer(t)
 	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
+	txID := beginTestTx(t, srv, ctx)
 	// Only READ capabilities — the caller holds no write capability at all.
 	noWriteCtx := capabilityContext("READ:graph/entity/*", testSidecarPriv, "sidecar")
 	_, err := srv.CreateEntity(noWriteCtx, &flowv1.CreateEntityRequest{
-		EntityType: "Component",
-		Id:         "not-a-uuid",
-		Properties: map[string]string{"name": "x"},
+		EntityType:    "Component",
+		Id:            "not-a-uuid",
+		Properties:    map[string]string{"name": "x"},
+		TransactionId: txID,
 	})
 	if err == nil {
 		t.Fatal("expected error for invalid entity ID, got nil")
@@ -1885,17 +1895,19 @@ func TestUpdateEntity_EmbeddingUpdateUnsupported(t *testing.T) {
 	if err := srv.store.ApplySchema(ctx, schema); err != nil {
 		t.Fatalf("ApplySchema: %v", err)
 	}
+	txID := beginTestTx(t, srv, ctx)
 	// Bootstrap a 3-dim vector index via CreateEntity with an embedding.
 	ent, err := srv.store.CreateEntity(
-		ctx, "VecType", "", map[string]string{"name": "seeded"}, []float32{1.0, 0.0, 0.0}, "",
+		ctx, "VecType", "", map[string]string{"name": "seeded"}, []float32{1.0, 0.0, 0.0}, txID,
 	)
 	if err != nil {
 		t.Fatalf("bootstrap CreateEntity: %v", err)
 	}
 	_, err = srv.UpdateEntity(ctx, &flowv1.UpdateEntityRequest{
-		Id:         ent.Id,
-		Embedding:  []float32{0.0, 1.0, 0.0},
-		Properties: map[string]string{"name": "updated"},
+		Id:            ent.Id,
+		Embedding:     []float32{0.0, 1.0, 0.0},
+		Properties:    map[string]string{"name": "updated"},
+		TransactionId: txID,
 	})
 	if err == nil {
 		t.Fatal("expected embedding update on indexed row to be rejected, got nil")
@@ -2387,6 +2399,7 @@ type pushTrackingGitStore struct {
 	pushErr     error
 	pushStarted bool
 	pushDone    chan struct{}
+	pushDoneSet bool
 }
 
 func (s *pushTrackingGitStore) WithGitLock(fn func() error) error {
@@ -2394,9 +2407,13 @@ func (s *pushTrackingGitStore) WithGitLock(fn func() error) error {
 	s.mu.Lock()
 	started := s.pushStarted
 	s.pushStarted = false
-	s.mu.Unlock()
+	done, notify := s.pushDone, !s.pushDoneSet
 	if started {
-		close(s.pushDone)
+		s.pushDoneSet = true
+	}
+	s.mu.Unlock()
+	if started && notify && done != nil {
+		close(done)
 	}
 	return err
 }
@@ -2421,13 +2438,12 @@ func (s *pushTrackingGitStore) PushRemote(ctx context.Context) error {
 	return err
 }
 
-// TestCommitTransaction_RemotePushSuccess exercises the SPEC R10 / Commit
-// step-14 post-commit push on its success path: with a remote configured, a
-// successful commit fans out a goroutine that performs FetchAndMerge("origin",
-// "main") then PushRemote. The commit response is unaffected by the push, no
-// cartographer.push_failed telemetry is emitted, and both remote operations are
-// observed exactly once.
-func TestCommitTransaction_RemotePushSuccess(t *testing.T) {
+// TestSyncWorkerFetchAndPushCycle exercises the background sync worker's
+// fetch→push cycle (the SPEC R10 commit-push surface under the sync-worker
+// model): with a remote configured and the push flag set by CommitTransaction,
+// one cycle performs FetchAndMerge then PushRemote, clears the flag, and emits
+// no push_failed telemetry.
+func TestSyncWorkerFetchAndPushCycle(t *testing.T) {
 	base, err := ladybug.OpenInMemory()
 	if err != nil {
 		t.Fatalf("OpenInMemory: %v", err)
@@ -2439,34 +2455,11 @@ func TestCommitTransaction_RemotePushSuccess(t *testing.T) {
 	}
 	pushGit := &pushTrackingGitStore{GitStore: gs, pushDone: make(chan struct{})}
 	mockPub := &mockTelemetryPublisher{}
-	opPub, _ := generateTestKey()
-	srv := NewCartographerServer(
-		base, pushGit, opPub, initTestKey(), nil, "https://example.com/repo.git",
-		30*time.Second, "test-ns", 30*time.Minute, 100000,
-		WithAuditPublisher(mockPub),
-	)
-	srv.MarkDBReady()
-	ctx := testCtx()
-	applyTestSchema(ctx, t, base)
-
-	begin, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
-	if err != nil {
-		t.Fatalf("BeginTransaction: %v", err)
-	}
-	if _, err = srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
-		EntityType: "Component", Properties: map[string]string{"name": "pushed"}, TransactionId: begin.TransactionId,
-	}); err != nil {
-		t.Fatalf("CreateEntity: %v", err)
-	}
-	if _, err = srv.CommitTransaction(ctx, &flowv1.CommitTransactionRequest{
-		TransactionId: begin.TransactionId,
-	}); err != nil {
-		t.Fatalf("CommitTransaction: %v", err)
-	}
-	select {
-	case <-pushGit.pushDone:
-	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for post-commit push")
+	sw := NewSyncWorker("https://example.com/repo.git", pushGit, base, RealClock{})
+	sw.SetPushNeeded()
+	sw.runSyncCycle()
+	if sw.pushNeeded.Load() {
+		t.Fatal("push flag not cleared after successful push")
 	}
 	pushGit.mu.Lock()
 	fetchCalls, pushCalls := pushGit.fetchCalls, pushGit.pushCalls
@@ -2484,34 +2477,20 @@ func TestCommitTransaction_RemotePushSuccess(t *testing.T) {
 	}
 }
 
-// TestCommitTransaction_RemotePushFailureTelemetry exercises the SPEC R10 /
-// Commit step-14 failure semantics: a failed post-commit push is fire-and-forget
-// — the commit is NOT rolled back — and the failure is logged and surfaced as a
-// `cartographer.push_failed` telemetry event. Both failure branches of the push
-// goroutine (FetchAndMerge error, and PushRemote error) are covered. The event
-// is polled for after pushDone because the goroutine's telemetry tail runs
-// after its WithGitLock returns (fire-and-forget by design).
-func TestCommitTransaction_RemotePushFailureTelemetry(t *testing.T) {
+// TestSyncWorkerPushFailureLeavesFlagSet exercises the sync worker's push
+// failure semantics: when the fetch or the push fails, the push flag stays set
+// so the next cycle (or a later commit/Sync/BeginTransaction wake) retries the
+// delivery. The failure is logged; the commit itself is not rolled back.
+func TestSyncWorkerPushFailureLeavesFlagSet(t *testing.T) {
 	cases := []struct {
-		name     string
-		fetchErr error
-		pushErr  error
+		name      string
+		fetchErr  error
+		pushErr   error
+		wantFetch int
+		wantPush  int
 	}{
-		{name: "fetch fails", fetchErr: errors.New("simulated fetch failure")},
-		{name: "push fails", pushErr: errors.New("simulated push rejection")},
-	}
-	waitForPushFailedEvent := func(t *testing.T, pub *mockTelemetryPublisher) bool {
-		t.Helper()
-		deadline := time.Now().Add(3 * time.Second)
-		for time.Now().Before(deadline) {
-			for _, e := range pub.Events() {
-				if e.Event != nil && e.Event.EventType == "cartographer.push_failed" {
-					return true
-				}
-			}
-			time.Sleep(5 * time.Millisecond)
-		}
-		return false
+		{name: "fetch fails", fetchErr: errors.New("simulated fetch failure"), wantFetch: 3, wantPush: 0},
+		{name: "push fails", pushErr: errors.New("simulated push rejection"), wantFetch: 1, wantPush: 3},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -2528,55 +2507,487 @@ func TestCommitTransaction_RemotePushFailureTelemetry(t *testing.T) {
 				GitStore: gs, fetchErr: tc.fetchErr, pushErr: tc.pushErr,
 				pushDone: make(chan struct{}),
 			}
-			mockPub := &mockTelemetryPublisher{}
-			opPub, _ := generateTestKey()
-			srv := NewCartographerServer(
-				base, pushGit, opPub, initTestKey(), nil, "https://example.com/repo.git",
-				30*time.Second, "test-ns", 30*time.Minute, 100000,
-				WithAuditPublisher(mockPub),
-			)
-			srv.MarkDBReady()
-			ctx := testCtx()
-			applyTestSchema(ctx, t, base)
-			begin, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
-			if err != nil {
-				t.Fatalf("BeginTransaction: %v", err)
+			sw := NewSyncWorker("https://example.com/repo.git", pushGit, base, RealClock{})
+			sw.SetPushNeeded()
+			sw.runSyncCycle()
+			if !sw.pushNeeded.Load() {
+				t.Fatal("push flag cleared despite push failure")
 			}
-			if _, err = srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
-				EntityType: "Component", Properties: map[string]string{"name": "pushed"}, TransactionId: begin.TransactionId,
-			}); err != nil {
-				t.Fatalf("CreateEntity: %v", err)
-			}
-			// The push failure must not surface on the RPC: the commit is already
-			// complete and fire-and-forget by design (SPEC R10, Commit step 14).
-			if _, err = srv.CommitTransaction(ctx, &flowv1.CommitTransactionRequest{
-				TransactionId: begin.TransactionId,
-			}); err != nil {
-				t.Fatalf("CommitTransaction must succeed despite push failure: %v", err)
-			}
-			select {
-			case <-pushGit.pushDone:
-			case <-time.After(5 * time.Second):
-				t.Fatal("timed out waiting for post-commit push")
-			}
-			if !waitForPushFailedEvent(t, mockPub) {
-				t.Fatal("expected cartographer.push_failed telemetry event")
-			}
-			// The failed push was attempted on the expected branch of the goroutine.
 			pushGit.mu.Lock()
 			fetchCalls, pushCalls := pushGit.fetchCalls, pushGit.pushCalls
 			pushGit.mu.Unlock()
-			if fetchCalls != 1 {
-				t.Fatalf("expected 1 FetchAndMerge call, got %d", fetchCalls)
+			if fetchCalls != tc.wantFetch {
+				t.Fatalf("expected %d FetchAndMerge calls, got %d", tc.wantFetch, fetchCalls)
 			}
-			wantPushCalls := 0
-			if tc.fetchErr == nil {
-				wantPushCalls = 1
-			}
-			if pushCalls != wantPushCalls {
-				t.Fatalf("expected %d PushRemote calls, got %d", wantPushCalls, pushCalls)
+			if pushCalls != tc.wantPush {
+				t.Fatalf("expected %d PushRemote calls, got %d", tc.wantPush, pushCalls)
 			}
 		})
+	}
+}
+
+// syncMockGitStore drives the SyncWorker deterministically: WithGitLock runs
+// fn inline, FetchAndMerge/PushRemote are programmable, and an optional push
+// gate parks a push attempt until the test releases it (for blocking/ack
+// tests). An operation-order log lets tests assert sync-before-branch
+// ordering for BeginTransaction's implicit sync.
+type syncMockGitStore struct {
+	gitstore.GitStore
+	mu          sync.Mutex
+	fetchCalls  int
+	pushCalls   int
+	fetchErr    error
+	pushErr     error
+	order       []string
+	pushEntered chan struct{} // closed when a gated push begins
+	pushRelease chan struct{} // closing it unblocks the gated push
+}
+
+func (s *syncMockGitStore) WithGitLock(fn func() error) error { return fn() }
+
+func (s *syncMockGitStore) FetchAndMerge(ctx context.Context, remote, branch string) (plumbing.Hash, error) {
+	s.mu.Lock()
+	s.fetchCalls++
+	s.order = append(s.order, "fetch")
+	err := s.fetchErr
+	s.mu.Unlock()
+	if err != nil {
+		return plumbing.ZeroHash, err
+	}
+	return plumbing.ZeroHash, nil
+}
+
+func (s *syncMockGitStore) PushRemote(ctx context.Context) error {
+	s.mu.Lock()
+	s.pushCalls++
+	err := s.pushErr
+	entered, release := s.pushEntered, s.pushRelease
+	s.mu.Unlock()
+	if entered != nil {
+		close(entered)
+	}
+	if release != nil {
+		<-release
+	}
+	return err
+}
+
+func (s *syncMockGitStore) CreateBranch(ctx context.Context, txID string) error {
+	s.mu.Lock()
+	s.order = append(s.order, "branch")
+	s.mu.Unlock()
+	return s.GitStore.CreateBranch(ctx, txID)
+}
+
+// releasePush unblocks a gated push. Idempotent and safe to call after the
+// push already consumed (or nil'd) the gate.
+func (s *syncMockGitStore) releasePush() {
+	s.mu.Lock()
+	rel := s.pushRelease
+	s.pushRelease = nil
+	s.mu.Unlock()
+	if rel != nil {
+		close(rel)
+	}
+}
+
+// newSyncWorker builds a SyncWorker over the shared mock gitstore with an
+// in-memory ladybug store (RehydrateMainFromFiles is exercised on pulled
+// fetches).
+func newSyncWorker(t *testing.T, syncGit *syncMockGitStore, clock Clock) *SyncWorker {
+	t.Helper()
+	base, err := ladybug.OpenInMemory()
+	if err != nil {
+		t.Fatalf("OpenInMemory: %v", err)
+	}
+	t.Cleanup(func() { _ = base.Close() })
+	return NewSyncWorker("https://example.com/repo.git", syncGit, base, clock)
+}
+
+// newSyncServer builds a CartographerServer with a remote configured and a
+// running SyncWorker over the shared mock gitstore. Callers must wait for the
+// startup cycle to finish (fc.tickers() >= 1) before triggering wakes so the
+// wake is consumed by a fresh cycle.
+func newSyncServer(t *testing.T, syncGit *syncMockGitStore) (*CartographerServer, *fakeClock) {
+	t.Helper()
+	base, err := ladybug.OpenInMemory()
+	if err != nil {
+		t.Fatalf("OpenInMemory: %v", err)
+	}
+	t.Cleanup(func() { _ = base.Close() })
+	fc := newFakeClock(time.Now())
+	sw := NewSyncWorker("https://example.com/repo.git", syncGit, base, fc)
+	go sw.Run()
+	t.Cleanup(sw.Stop)
+	opPub, _ := generateTestKey()
+	srv := NewCartographerServer(base, syncGit, opPub, initTestKey(), nil, "https://example.com/repo.git",
+		30*time.Second, "test-ns", 30*time.Minute, 100000, WithSyncWorker(sw))
+	srv.MarkDBReady()
+	return srv, fc
+}
+
+// TestSyncWorker_PushSucceedsOnNextCycle exercises the timer-driven cycle: a
+// push flagged after the startup cycle is delivered on the next ticker tick,
+// and the flag is cleared once the push succeeds.
+func TestSyncWorker_PushSucceedsOnNextCycle(t *testing.T) {
+	gs, err := gitstore.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("gitstore.New: %v", err)
+	}
+	syncGit := &syncMockGitStore{GitStore: gs}
+	fc := newFakeClock(time.Now())
+	sw := newSyncWorker(t, syncGit, fc)
+	go sw.Run()
+	t.Cleanup(sw.Stop)
+
+	// Wait for the startup cycle so the ticker exists and the worker is parked
+	// in select.
+	waitFor(t, func() bool { return fc.tickers() >= 1 }, "startup cycle")
+
+	sw.SetPushNeeded()
+	if !sw.pushNeeded.Load() {
+		t.Fatal("push flag not set after SetPushNeeded")
+	}
+
+	// Fire the ticker -> the next cycle performs fetch + push and clears the
+	// flag.
+	fc.FireTicker()
+	waitFor(t, func() bool {
+		syncGit.mu.Lock()
+		defer syncGit.mu.Unlock()
+		return syncGit.pushCalls >= 1
+	}, "push on ticker cycle")
+
+	if sw.pushNeeded.Load() {
+		t.Fatal("push flag not cleared after successful push")
+	}
+	syncGit.mu.Lock()
+	fetchCalls, pushCalls := syncGit.fetchCalls, syncGit.pushCalls
+	syncGit.mu.Unlock()
+	if fetchCalls != 2 {
+		t.Fatalf("expected 2 fetch cycles (startup + ticker), got %d", fetchCalls)
+	}
+	if pushCalls != 1 {
+		t.Fatalf("expected 1 push, got %d", pushCalls)
+	}
+}
+
+// TestSyncWorker_WithAck_BlocksUntilPush exercises the WithAck contract:
+// WakeAndWait blocks until the woken cycle completes (a push parked in the
+// gitstore gate), returns without error once the push succeeds, and the push
+// flag is cleared.
+func TestSyncWorker_WithAck_BlocksUntilPush(t *testing.T) {
+	gs, err := gitstore.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("gitstore.New: %v", err)
+	}
+	syncGit := &syncMockGitStore{
+		GitStore:    gs,
+		pushEntered: make(chan struct{}),
+		pushRelease: make(chan struct{}),
+	}
+	fc := newFakeClock(time.Now())
+	sw := newSyncWorker(t, syncGit, fc)
+	go sw.Run()
+	t.Cleanup(sw.Stop)
+	// Release any pending push before Stop's final cycle can run.
+	t.Cleanup(syncGit.releasePush)
+
+	waitFor(t, func() bool { return fc.tickers() >= 1 }, "startup cycle")
+
+	sw.SetPushNeeded()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	wakeDone := make(chan error, 1)
+	go func() { wakeDone <- sw.WakeAndWait(ctx) }()
+
+	// The woken cycle parks in the push gate: WakeAndWait must still be
+	// blocked until the push completes.
+	select {
+	case <-syncGit.pushEntered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("push never started")
+	}
+	select {
+	case err := <-wakeDone:
+		t.Fatalf("WakeAndWait returned before the push completed: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	syncGit.releasePush()
+	if err := <-wakeDone; err != nil {
+		t.Fatalf("WakeAndWait returned error: %v", err)
+	}
+	if sw.pushNeeded.Load() {
+		t.Fatal("push flag not cleared after successful push")
+	}
+}
+
+// TestSyncWorker_RecoverableError_RetriesAndGivesUp exercises the recoverable
+// fetch path: an ErrRemoteUnreachable is retried within the cycle (3 total
+// attempts with backoff), and when all attempts fail the error is recorded
+// for the next WakeAndWait caller while the push flag stays set.
+//
+//nolint:dupl // Recoverable/non-recoverable worker-failure tests share structure; the error classes under test differ.
+func TestSyncWorker_RecoverableError_RetriesAndGivesUp(t *testing.T) {
+	gs, err := gitstore.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("gitstore.New: %v", err)
+	}
+	syncGit := &syncMockGitStore{GitStore: gs, fetchErr: gitstore.ErrRemoteUnreachable}
+	sw := newSyncWorker(t, syncGit, RealClock{})
+	sw.SetPushNeeded()
+
+	sw.runSyncCycle()
+
+	syncGit.mu.Lock()
+	fetchCalls, pushCalls := syncGit.fetchCalls, syncGit.pushCalls
+	syncGit.mu.Unlock()
+	if fetchCalls != 3 {
+		t.Fatalf("expected 3 fetch attempts (1 + 2 retries), got %d", fetchCalls)
+	}
+	if pushCalls != 0 {
+		t.Fatalf("expected no push attempts after fetch failure, got %d", pushCalls)
+	}
+	if !sw.pushNeeded.Load() {
+		t.Fatal("push flag cleared despite recoverable fetch failure")
+	}
+	sw.cycleMu.Lock()
+	cycleErr := sw.cycleErr
+	sw.cycleMu.Unlock()
+	if !errors.Is(cycleErr, gitstore.ErrRemoteUnreachable) {
+		t.Fatalf("expected propagated ErrRemoteUnreachable, got %v", cycleErr)
+	}
+}
+
+// TestSyncWorker_NonRecoverableError_LogsAndLeavesFlag exercises the
+// non-recoverable path: an ErrAuthFailed fails the cycle immediately (no
+// retries), the error is recorded for waiting callers, and the push flag
+// stays set for the next cycle.
+//
+//nolint:dupl // Recoverable/non-recoverable worker-failure tests share structure; the error classes under test differ.
+func TestSyncWorker_NonRecoverableError_LogsAndLeavesFlag(t *testing.T) {
+	gs, err := gitstore.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("gitstore.New: %v", err)
+	}
+	syncGit := &syncMockGitStore{GitStore: gs, fetchErr: gitstore.ErrAuthFailed}
+	sw := newSyncWorker(t, syncGit, RealClock{})
+	sw.SetPushNeeded()
+
+	sw.runSyncCycle()
+
+	syncGit.mu.Lock()
+	fetchCalls, pushCalls := syncGit.fetchCalls, syncGit.pushCalls
+	syncGit.mu.Unlock()
+	if fetchCalls != 1 {
+		t.Fatalf("expected a single fetch attempt (no retries for non-recoverable), got %d", fetchCalls)
+	}
+	if pushCalls != 0 {
+		t.Fatalf("expected no push attempts after fetch failure, got %d", pushCalls)
+	}
+	if !sw.pushNeeded.Load() {
+		t.Fatal("push flag cleared despite non-recoverable failure")
+	}
+	sw.cycleMu.Lock()
+	cycleErr := sw.cycleErr
+	sw.cycleMu.Unlock()
+	if !errors.Is(cycleErr, gitstore.ErrAuthFailed) {
+		t.Fatalf("expected propagated ErrAuthFailed, got %v", cycleErr)
+	}
+}
+
+// TestSyncWorker_StartupCatchUpPush exercises the startup catch-up contract:
+// a push flag left set from a prior run (committed-but-unpushed data) is
+// delivered by the worker's initial cycle, without waiting for the first
+// ticker tick.
+func TestSyncWorker_StartupCatchUpPush(t *testing.T) {
+	gs, err := gitstore.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("gitstore.New: %v", err)
+	}
+	syncGit := &syncMockGitStore{GitStore: gs}
+	sw := newSyncWorker(t, syncGit, newFakeClock(time.Now()))
+	sw.SetPushNeeded() // simulate uncommitted push from a prior pod lifetime
+
+	go sw.Run()
+	t.Cleanup(sw.Stop)
+
+	waitFor(t, func() bool {
+		syncGit.mu.Lock()
+		defer syncGit.mu.Unlock()
+		return syncGit.pushCalls >= 1
+	}, "startup catch-up push")
+
+	if sw.pushNeeded.Load() {
+		t.Fatal("push flag not cleared after startup catch-up push")
+	}
+	syncGit.mu.Lock()
+	fetchCalls := syncGit.fetchCalls
+	syncGit.mu.Unlock()
+	if fetchCalls != 1 {
+		t.Fatalf("expected a single startup fetch cycle, got %d", fetchCalls)
+	}
+}
+
+// TestBeginTransaction_ImplicitSync verifies BeginTransaction's implicit sync
+// contract: when a remote is configured, waking the sync worker and waiting
+// for its cycle precedes branch creation, so the branch starts from the
+// latest remote state.
+func TestBeginTransaction_ImplicitSync(t *testing.T) {
+	gs, err := gitstore.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("gitstore.New: %v", err)
+	}
+	syncGit := &syncMockGitStore{GitStore: gs}
+	srv, fc := newSyncServer(t, syncGit)
+
+	// Wait for the startup cycle so the implicit-sync wake is consumed by a
+	// fresh cycle that completes before branch creation.
+	waitFor(t, func() bool { return fc.tickers() >= 1 }, "startup cycle")
+
+	ctx := testCtx()
+	begin, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
+	if err != nil {
+		t.Fatalf("BeginTransaction: %v", err)
+	}
+	if begin.TransactionId == "" {
+		t.Fatal("expected a transaction ID")
+	}
+	if err := srv.txManager.ValidateActive(begin.TransactionId); err != nil {
+		t.Fatalf("transaction not registered: %v", err)
+	}
+
+	// The implicit-sync fetch must have happened immediately before the branch
+	// creation (WakeAndWait completed before branch setup began).
+	syncGit.mu.Lock()
+	order := append([]string(nil), syncGit.order...)
+	syncGit.mu.Unlock()
+	if len(order) < 2 || order[len(order)-2] != "fetch" || order[len(order)-1] != "branch" {
+		t.Fatalf("expected implicit sync (fetch) immediately before branch creation, got order %v", order)
+	}
+}
+
+// TestBeginTransaction_ImplicitSyncFailsProceeds verifies that implicit sync
+// errors are non-blocking: when the sync cycle fails with a non-recoverable
+// error, BeginTransaction still creates the transaction from the current
+// local state.
+func TestBeginTransaction_ImplicitSyncFailsProceeds(t *testing.T) {
+	gs, err := gitstore.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("gitstore.New: %v", err)
+	}
+	syncGit := &syncMockGitStore{GitStore: gs, fetchErr: gitstore.ErrAuthFailed}
+	srv, fc := newSyncServer(t, syncGit)
+
+	waitFor(t, func() bool { return fc.tickers() >= 1 }, "startup cycle")
+
+	ctx := testCtx()
+	begin, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
+	if err != nil {
+		t.Fatalf("BeginTransaction must succeed despite implicit-sync failure: %v", err)
+	}
+	if begin.TransactionId == "" {
+		t.Fatal("expected a transaction ID")
+	}
+	if err := srv.txManager.ValidateActive(begin.TransactionId); err != nil {
+		t.Fatalf("transaction not registered: %v", err)
+	}
+	syncGit.mu.Lock()
+	fetchCalls := syncGit.fetchCalls
+	syncGit.mu.Unlock()
+	if fetchCalls < 2 {
+		t.Fatalf("expected the implicit-sync cycle to attempt a fetch, got %d", fetchCalls)
+	}
+}
+
+// TestSync_WakesWorkerAndBlocks verifies the Sync RPC contract: it wakes the
+// worker and blocks until the cycle completes, and propagates the cycle's
+// non-recoverable errors to the caller.
+func TestSync_WakesWorkerAndBlocks(t *testing.T) {
+	t.Run("blocks until cycle completes", func(t *testing.T) {
+		gs, err := gitstore.New(t.TempDir())
+		if err != nil {
+			t.Fatalf("gitstore.New: %v", err)
+		}
+		syncGit := &syncMockGitStore{
+			GitStore:    gs,
+			pushEntered: make(chan struct{}),
+			pushRelease: make(chan struct{}),
+		}
+		srv, fc := newSyncServer(t, syncGit)
+		t.Cleanup(syncGit.releasePush)
+
+		waitFor(t, func() bool { return fc.tickers() >= 1 }, "startup cycle")
+		srv.syncWorker.SetPushNeeded()
+
+		syncDone := make(chan error, 1)
+		go func() { _, err := srv.Sync(testCtx(), &flowv1.SyncRequest{}); syncDone <- err }()
+
+		// The woken cycle parks in the push gate: Sync must still be blocked.
+		select {
+		case <-syncGit.pushEntered:
+		case <-time.After(5 * time.Second):
+			t.Fatal("sync cycle never reached the push")
+		}
+		select {
+		case err := <-syncDone:
+			t.Fatalf("Sync returned before the cycle completed: %v", err)
+		case <-time.After(100 * time.Millisecond):
+		}
+
+		syncGit.releasePush()
+		if err := <-syncDone; err != nil {
+			t.Fatalf("Sync returned error: %v", err)
+		}
+		if srv.syncWorker.pushNeeded.Load() {
+			t.Fatal("push flag not cleared after successful sync")
+		}
+	})
+
+	t.Run("propagates non-recoverable errors", func(t *testing.T) {
+		gs, err := gitstore.New(t.TempDir())
+		if err != nil {
+			t.Fatalf("gitstore.New: %v", err)
+		}
+		syncGit := &syncMockGitStore{GitStore: gs, fetchErr: gitstore.ErrAuthFailed}
+		srv, fc := newSyncServer(t, syncGit)
+		waitFor(t, func() bool { return fc.tickers() >= 1 }, "startup cycle")
+
+		_, err = srv.Sync(testCtx(), &flowv1.SyncRequest{})
+		if err == nil {
+			t.Fatal("expected Sync to propagate the worker error")
+		}
+		if status.Code(err) != codes.Unauthenticated {
+			t.Fatalf("expected Unauthenticated for auth failure, got %v (%v)", status.Code(err), err)
+		}
+	})
+}
+
+// TestSync_WakesWorkerAndReturnsSuccess verifies the up-to-date Sync path:
+// when the remote is up-to-date (fetch succeeds, no push needed), Sync wakes
+// the worker, waits for the cycle, and returns nil.
+func TestSync_WakesWorkerAndReturnsSuccess(t *testing.T) {
+	gs, err := gitstore.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("gitstore.New: %v", err)
+	}
+	syncGit := &syncMockGitStore{GitStore: gs}
+	srv, fc := newSyncServer(t, syncGit)
+	waitFor(t, func() bool { return fc.tickers() >= 1 }, "startup cycle")
+
+	_, err = srv.Sync(testCtx(), &flowv1.SyncRequest{})
+	if err != nil {
+		t.Fatalf("Sync on an up-to-date remote should succeed: %v", err)
+	}
+	syncGit.mu.Lock()
+	fetchCalls, pushCalls := syncGit.fetchCalls, syncGit.pushCalls
+	syncGit.mu.Unlock()
+	if fetchCalls != 2 {
+		t.Fatalf("expected startup cycle + sync cycle fetches, got %d", fetchCalls)
+	}
+	if pushCalls != 0 {
+		t.Fatalf("expected no push without a push flag, got %d", pushCalls)
 	}
 }
 
@@ -3522,37 +3933,6 @@ func TestCommitTransaction_RetryAfterMergeCompletedOnlyCleansUp(t *testing.T) {
 // =========================================================================
 // 7. Concurrent access tests
 // =========================================================================
-
-func TestConcurrentNonTxWrites(t *testing.T) {
-	srv, _ := newTestServer(t)
-	ctx := testCtx()
-
-	applyTestSchema(ctx, t, srv.store)
-
-	var wg sync.WaitGroup
-	errCh := make(chan error, 10)
-	for range 10 {
-		wg.Go(func() {
-			_, err := srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
-				EntityType: "Component",
-				Properties: map[string]string{"name": "concurrent"},
-			})
-			if err != nil && status.Code(err) != codes.AlreadyExists {
-				errCh <- fmt.Errorf("concurrent CreateEntity failed: %v", err)
-			}
-		})
-	}
-	wg.Wait()
-	close(errCh)
-
-	var errs []error
-	for err := range errCh {
-		errs = append(errs, err)
-	}
-	if len(errs) > 0 {
-		t.Fatalf("concurrent writes produced %d errors: %v", len(errs), errs[0])
-	}
-}
 
 // =========================================================================
 // 8. Export tests
@@ -5010,20 +5390,22 @@ func TestDeleteEdge_Valid(t *testing.T) {
 	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
-	svc, _ := srv.store.CreateEntity(ctx, "Service", "", map[string]string{"name": "svc"}, nil, "")
-	comp, _ := srv.store.CreateEntity(ctx, "Component", "", map[string]string{"name": "core"}, nil, "")
+	txID := beginTestTx(t, srv, ctx)
+	svc, _ := srv.store.CreateEntity(ctx, "Service", "", map[string]string{"name": "svc"}, nil, txID)
+	comp, _ := srv.store.CreateEntity(ctx, "Component", "", map[string]string{"name": "core"}, nil, txID)
 
 	createResp, err := srv.CreateEdge(ctx, &flowv1.CreateEdgeRequest{
-		EdgeType:     "DEPENDS_ON",
-		FromEntityId: svc.Id,
-		ToEntityId:   comp.Id,
-		Properties:   map[string]string{"weight": "high"},
+		EdgeType:      "DEPENDS_ON",
+		FromEntityId:  svc.Id,
+		ToEntityId:    comp.Id,
+		Properties:    map[string]string{"weight": "high"},
+		TransactionId: txID,
 	})
 	if err != nil {
 		t.Fatalf("CreateEdge failed: %v", err)
 	}
 
-	deleteResp, err := srv.DeleteEdge(ctx, &flowv1.DeleteEdgeRequest{Id: createResp.EdgeId})
+	deleteResp, err := srv.DeleteEdge(ctx, &flowv1.DeleteEdgeRequest{Id: createResp.EdgeId, TransactionId: txID})
 	if err != nil {
 		t.Fatalf("DeleteEdge failed: %v", err)
 	}
@@ -5170,186 +5552,6 @@ func TestBeginTransaction_WaitsUntilWipeGraphCompletes(t *testing.T) {
 		TransactionId: begin.TransactionId,
 	}); err != nil {
 		t.Fatalf("RollbackTransaction: %v", err)
-	}
-}
-
-// =========================================================================
-// 11. PullFromRemote error-path tests
-// =========================================================================
-
-func TestPullFromRemote_RemoteNotConfigured(t *testing.T) {
-	srv, _ := newTestServer(t)
-	ctx := testCtx()
-
-	_, err := srv.PullFromRemote(ctx, &flowv1.PullFromRemoteRequest{})
-	if err == nil {
-		t.Fatal("expected error for no remote configured, got nil")
-	}
-	if status.Code(err) != codes.FailedPrecondition {
-		t.Fatalf("expected FailedPrecondition, got %v", status.Code(err))
-	}
-}
-
-func TestPullFromRemote_HoldsGitLockThroughHydration(t *testing.T) {
-	base, err := ladybug.OpenInMemory()
-	if err != nil {
-		t.Fatalf("OpenInMemory: %v", err)
-	}
-	t.Cleanup(func() { _ = base.Close() })
-	blocking := &pullHydrationBlockingStore{Store: base, entered: make(chan struct{}), release: make(chan struct{})}
-	ladybugPath := t.TempDir()
-	gs, err := gitstore.New(ladybugPath)
-	if err != nil {
-		t.Fatalf("gitstore.New: %v", err)
-	}
-	pullGit := &pullGitStore{gitAttemptStore: gitAttemptStore{GitStore: gs}}
-	opPub, _ := generateTestKey()
-	srv := NewCartographerServer(
-		blocking, pullGit, opPub, initTestKey(), nil, "https://example.invalid/repo.git",
-		30*time.Second, "test-ns", 30*time.Minute, 100000, WithLadybugPath(ladybugPath),
-	)
-	srv.MarkDBReady()
-	ctx := testCtx()
-	applyTestSchema(ctx, t, base)
-	pullDone := make(chan error, 1)
-	go func() {
-		_, pullErr := srv.PullFromRemote(ctx, &flowv1.PullFromRemoteRequest{})
-		pullDone <- pullErr
-	}()
-	<-blocking.entered
-	attempted := make(chan struct{})
-	pullGit.setAttempted(attempted)
-	unrelatedDone := make(chan error, 1)
-	go func() { unrelatedDone <- srv.withGitLock(func() error { return nil }) }()
-	<-attempted
-	close(blocking.release)
-	if err := <-pullDone; err != nil {
-		t.Fatalf("PullFromRemote: %v", err)
-	}
-	if err := <-unrelatedDone; err != nil {
-		t.Fatalf("unrelated Git checkout: %v", err)
-	}
-}
-
-// TestPullFromRemote_RehydrationFailure asserts the SPEC error-table row
-// "PullFromRemote re-hydration failed -> INTERNAL": the pull succeeds but
-// re-hydrating main from the pulled files fails, returning the
-// errPullFromRemoteRehydrationFailed INTERNAL status.
-func TestPullFromRemote_RehydrationFailure(t *testing.T) {
-	base, err := ladybug.OpenInMemory()
-	if err != nil {
-		t.Fatalf("OpenInMemory: %v", err)
-	}
-	t.Cleanup(func() { _ = base.Close() })
-	ladybugPath := t.TempDir()
-	gs, err := gitstore.New(ladybugPath)
-	if err != nil {
-		t.Fatalf("gitstore.New: %v", err)
-	}
-	// remoteErrorGitStore drives the pull success path (FetchAndMerge yields a
-	// hash); the store's RehydrateMainFromFiles fails on the first call.
-	failingStore := &rehydrateFailingStore{Store: base, fail: true}
-	remoteGit := &remoteErrorGitStore{GitStore: gs, empty: false, err: nil}
-	opPub, _ := generateTestKey()
-	srv := NewCartographerServer(
-		failingStore, remoteGit, opPub, initTestKey(), nil, "https://example.com/repo.git",
-		30*time.Second, "test-ns", 30*time.Minute, 100000, WithLadybugPath(ladybugPath),
-	)
-	srv.MarkDBReady()
-
-	_, pullErr := srv.PullFromRemote(testCtx(), &flowv1.PullFromRemoteRequest{})
-	if pullErr == nil {
-		t.Fatal("expected re-hydration failure, got nil")
-	}
-	if status.Code(pullErr) != codes.Internal {
-		t.Fatalf("expected INTERNAL, got %v (%v)", status.Code(pullErr), pullErr)
-	}
-	if !strings.Contains(pullErr.Error(), "pull from remote re-hydration failed") {
-		t.Fatalf("expected re-hydration failure message, got %q", pullErr.Error())
-	}
-}
-
-// TestPullFromRemote_RehydratesWithoutLadybugPath asserts SPEC R10: after a
-// successful pull, main is re-hydrated unconditionally — even in in-memory
-// mode (ladybugPath unset) — so it does not go stale. The hydration count is
-// observed via a counting store wrapper.
-func TestPullFromRemote_RehydratesWithoutLadybugPath(t *testing.T) {
-	base, err := ladybug.OpenInMemory()
-	if err != nil {
-		t.Fatalf("OpenInMemory: %v", err)
-	}
-	t.Cleanup(func() { _ = base.Close() })
-	counting := &hydrationCountingStore{Store: base}
-	gs, err := gitstore.New(t.TempDir())
-	if err != nil {
-		t.Fatalf("gitstore.New: %v", err)
-	}
-	remoteGit := &remoteErrorGitStore{GitStore: gs, empty: false, err: nil}
-	opPub, _ := generateTestKey()
-	// No WithLadybugPath option — simulates in-memory mode.
-	srv := NewCartographerServer(
-		counting, remoteGit, opPub, initTestKey(), nil, "https://example.com/repo.git",
-		30*time.Second, "test-ns", 30*time.Minute, 100000,
-	)
-	srv.MarkDBReady()
-
-	_, pullErr := srv.PullFromRemote(testCtx(), &flowv1.PullFromRemoteRequest{})
-	if pullErr != nil {
-		t.Fatalf("PullFromRemote: %v", pullErr)
-	}
-	if counting.fromFiles != 1 {
-		t.Fatalf("expected main re-hydration from files in in-memory mode, got fromFiles=%d", counting.fromFiles)
-	}
-}
-
-//nolint:dupl // PullFromRemote negative tests share setup structure.
-func TestPullFromRemote_MissingWriteCapability(t *testing.T) {
-	opPub, _ := generateTestKey()
-	scPub, scPriv := generateTestKey()
-	st, _ := ladybug.OpenInMemory()
-	t.Cleanup(func() { _ = st.Close() })
-	gs, _ := gitstore.New(t.TempDir())
-	srv := NewCartographerServer(st, gs, opPub, scPub, nil,
-		"https://example.com/repo.git", 30*time.Second, "test-ns",
-		30*time.Minute, 100000)
-	srv.MarkDBReady()
-
-	// Only READ capabilities, no WRITE:graph/entity/*.
-	ctx := capabilityContext("READ:graph/entity/*,READ:graph/tx", scPriv, "sidecar")
-	handlerInvoked, verifiedCaps, err := invokePullFromRemote(srv, ctx)
-	if !handlerInvoked {
-		t.Fatal("unary interceptor did not invoke PullFromRemote")
-	}
-	if verifiedCaps == nil || len(verifiedCaps.Caps) != 2 ||
-		verifiedCaps.Caps[0] != "READ:graph/entity/*" || verifiedCaps.Caps[1] != "READ:graph/tx" {
-		t.Fatalf("handler did not receive interceptor-verified READ capabilities: %+v", verifiedCaps)
-	}
-	if status.Code(err) != codes.PermissionDenied ||
-		status.Convert(err).Message() != "capability denied: WRITE:graph/entity/*" {
-		t.Fatalf("expected missing-WRITE PermissionDenied, got %v", err)
-	}
-}
-
-//nolint:dupl // PullFromRemote negative tests share setup structure.
-func TestPullFromRemote_NoRemote(t *testing.T) {
-	opPub, _ := generateTestKey()
-	scPub, scPriv := generateTestKey()
-	st, _ := ladybug.OpenInMemory()
-	t.Cleanup(func() { _ = st.Close() })
-	gs, _ := gitstore.New(t.TempDir())
-	// remoteURL is empty — should fail with FailedPrecondition BEFORE
-	// checking capabilities.
-	srv := NewCartographerServer(st, gs, opPub, scPub, nil, "",
-		30*time.Second, "test-ns", 30*time.Minute, 100000)
-	srv.MarkDBReady()
-
-	ctx := capabilityContext("WRITE:graph/entity/*,READ:graph/entity/*", scPriv, "sidecar")
-	handlerInvoked, _, err := invokePullFromRemote(srv, ctx)
-	if !handlerInvoked {
-		t.Fatal("unary interceptor did not invoke PullFromRemote")
-	}
-	if status.Code(err) != codes.FailedPrecondition {
-		t.Fatalf("expected FailedPrecondition, got %v", status.Code(err))
 	}
 }
 
@@ -6365,12 +6567,14 @@ func TestCreateEdge_TargetNotFound(t *testing.T) {
 	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
-	svc, _ := srv.store.CreateEntity(ctx, "Service", "", map[string]string{"name": "svc"}, nil, "")
+	txID := beginTestTx(t, srv, ctx)
+	svc, _ := srv.store.CreateEntity(ctx, "Service", "", map[string]string{"name": "svc"}, nil, txID)
 
 	_, err := srv.CreateEdge(ctx, &flowv1.CreateEdgeRequest{
-		EdgeType:     "DEPENDS_ON",
-		FromEntityId: svc.Id,
-		ToEntityId:   "11111111-1111-4111-8111-111111111111",
+		EdgeType:      "DEPENDS_ON",
+		FromEntityId:  svc.Id,
+		ToEntityId:    "11111111-1111-4111-8111-111111111111",
+		TransactionId: txID,
 	})
 	if err == nil {
 		t.Fatal("expected error for target not found, got nil")
@@ -6385,16 +6589,18 @@ func TestCreateEdge_RuleViolation(t *testing.T) {
 	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
+	txID := beginTestTx(t, srv, ctx)
 	// Service has rules permitting connection to Component via DEPENDS_ON,
 	// but Component has no rules defined.
-	comp, _ := srv.store.CreateEntity(ctx, "Component", "", map[string]string{"name": "comp"}, nil, "")
-	svc, _ := srv.store.CreateEntity(ctx, "Service", "", map[string]string{"name": "svc"}, nil, "")
+	comp, _ := srv.store.CreateEntity(ctx, "Component", "", map[string]string{"name": "comp"}, nil, txID)
+	svc, _ := srv.store.CreateEntity(ctx, "Service", "", map[string]string{"name": "svc"}, nil, txID)
 
 	// Attempt edge FROM Component (no rules) TO Service.
 	_, err := srv.CreateEdge(ctx, &flowv1.CreateEdgeRequest{
-		EdgeType:     "DEPENDS_ON",
-		FromEntityId: comp.Id,
-		ToEntityId:   svc.Id,
+		EdgeType:      "DEPENDS_ON",
+		FromEntityId:  comp.Id,
+		ToEntityId:    svc.Id,
+		TransactionId: txID,
 	})
 	if err == nil {
 		t.Fatal("expected error for rule violation, got nil")
@@ -6430,11 +6636,12 @@ func TestCreateEdge_SelfReferencing(t *testing.T) {
 		t.Fatalf("ApplySchema failed: %v", err)
 	}
 
-	from, _ := st.CreateEntity(ctx, "Component", "", map[string]string{"name": "from"}, nil, "")
-	to, _ := st.CreateEntity(ctx, "Component", "", map[string]string{"name": "to"}, nil, "")
+	txID := beginTestTx(t, srv, ctx)
+	from, _ := st.CreateEntity(ctx, "Component", "", map[string]string{"name": "from"}, nil, txID)
+	to, _ := st.CreateEntity(ctx, "Component", "", map[string]string{"name": "to"}, nil, txID)
 
 	resp, err := srv.CreateEdge(ctx, &flowv1.CreateEdgeRequest{
-		EdgeType: "DEPENDS_ON", FromEntityId: from.Id, ToEntityId: to.Id,
+		EdgeType: "DEPENDS_ON", FromEntityId: from.Id, ToEntityId: to.Id, TransactionId: txID,
 	})
 	if err != nil {
 		t.Fatalf("self-referencing Component->Component edge must be allowed: %v", err)
@@ -6469,15 +6676,17 @@ func TestCreateEdge_MissingRequiredProperty(t *testing.T) {
 		t.Fatalf("ApplySchema failed: %v", err)
 	}
 
-	src, _ := srv.store.CreateEntity(ctx, "Source", "", map[string]string{"name": "src"}, nil, "")
-	tgt, _ := srv.store.CreateEntity(ctx, "Target", "", map[string]string{"name": "tgt"}, nil, "")
+	txID := beginTestTx(t, srv, ctx)
+	src, _ := srv.store.CreateEntity(ctx, "Source", "", map[string]string{"name": "src"}, nil, txID)
+	tgt, _ := srv.store.CreateEntity(ctx, "Target", "", map[string]string{"name": "tgt"}, nil, txID)
 
 	// Missing required property "label".
 	_, err := srv.CreateEdge(ctx, &flowv1.CreateEdgeRequest{
-		EdgeType:     "LINKED",
-		FromEntityId: tgt.Id,
-		ToEntityId:   src.Id,
-		Properties:   map[string]string{},
+		EdgeType:      "LINKED",
+		FromEntityId:  tgt.Id,
+		ToEntityId:    src.Id,
+		Properties:    map[string]string{},
+		TransactionId: txID,
 	})
 	if err == nil {
 		t.Fatal("expected error for missing required property, got nil")
@@ -6492,14 +6701,16 @@ func TestCreateEdge_UnknownProperty(t *testing.T) {
 	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
-	svc, _ := srv.store.CreateEntity(ctx, "Service", "", map[string]string{"name": "svc"}, nil, "")
-	comp, _ := srv.store.CreateEntity(ctx, "Component", "", map[string]string{"name": "core"}, nil, "")
+	txID := beginTestTx(t, srv, ctx)
+	svc, _ := srv.store.CreateEntity(ctx, "Service", "", map[string]string{"name": "svc"}, nil, txID)
+	comp, _ := srv.store.CreateEntity(ctx, "Component", "", map[string]string{"name": "core"}, nil, txID)
 
 	_, err := srv.CreateEdge(ctx, &flowv1.CreateEdgeRequest{
-		EdgeType:     "DEPENDS_ON",
-		FromEntityId: svc.Id,
-		ToEntityId:   comp.Id,
-		Properties:   map[string]string{"unknownprop": "x"},
+		EdgeType:      "DEPENDS_ON",
+		FromEntityId:  svc.Id,
+		ToEntityId:    comp.Id,
+		Properties:    map[string]string{"unknownprop": "x"},
+		TransactionId: txID,
 	})
 	if err == nil {
 		t.Fatal("expected error for unknown property, got nil")
@@ -6537,15 +6748,17 @@ func TestCreateEdge_StructuralErrorBeforeEntityExistence(t *testing.T) {
 	if err := st.ApplySchema(ctx, schema); err != nil {
 		t.Fatalf("ApplySchema failed: %v", err)
 	}
-	tgt, _ := srv.store.CreateEntity(ctx, "Target", "", map[string]string{"name": "tgt"}, nil, "")
+	txID := beginTestTx(t, srv, ctx)
+	tgt, _ := srv.store.CreateEntity(ctx, "Target", "", map[string]string{"name": "tgt"}, nil, txID)
 
 	missingSource := "11111111-1111-4111-8111-111111111111"
 
 	// Missing required property + missing source → INVALID_ARGUMENT, not NOT_FOUND.
 	_, err := srv.CreateEdge(ctx, &flowv1.CreateEdgeRequest{
-		EdgeType:     "LINKED",
-		FromEntityId: missingSource,
-		ToEntityId:   tgt.Id,
+		EdgeType:      "LINKED",
+		FromEntityId:  missingSource,
+		ToEntityId:    tgt.Id,
+		TransactionId: txID,
 	})
 	if status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("expected InvalidArgument for missing required property + missing source, got %v", status.Code(err))
@@ -6553,10 +6766,11 @@ func TestCreateEdge_StructuralErrorBeforeEntityExistence(t *testing.T) {
 
 	// Unknown property + missing source → INVALID_ARGUMENT, not NOT_FOUND.
 	_, err = srv.CreateEdge(ctx, &flowv1.CreateEdgeRequest{
-		EdgeType:     "LINKED",
-		FromEntityId: missingSource,
-		ToEntityId:   tgt.Id,
-		Properties:   map[string]string{"label": "x", "bogus": "y"},
+		EdgeType:      "LINKED",
+		FromEntityId:  missingSource,
+		ToEntityId:    tgt.Id,
+		Properties:    map[string]string{"label": "x", "bogus": "y"},
+		TransactionId: txID,
 	})
 	if status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("expected InvalidArgument for unknown property + missing source, got %v", status.Code(err))
@@ -6565,10 +6779,11 @@ func TestCreateEdge_StructuralErrorBeforeEntityExistence(t *testing.T) {
 	// Structurally valid + missing source → NOT_FOUND (entity existence is the
 	// next check in order).
 	_, err = srv.CreateEdge(ctx, &flowv1.CreateEdgeRequest{
-		EdgeType:     "LINKED",
-		FromEntityId: missingSource,
-		ToEntityId:   tgt.Id,
-		Properties:   map[string]string{"label": "x"},
+		EdgeType:      "LINKED",
+		FromEntityId:  missingSource,
+		ToEntityId:    tgt.Id,
+		Properties:    map[string]string{"label": "x"},
+		TransactionId: txID,
 	})
 	if status.Code(err) != codes.NotFound {
 		t.Fatalf("expected NotFound for structurally-valid missing source, got %v", status.Code(err))
@@ -6580,11 +6795,13 @@ func TestCreateEdge_InvalidIDFormat(t *testing.T) {
 	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
+	txID := beginTestTx(t, srv, ctx)
 
 	_, err := srv.CreateEdge(ctx, &flowv1.CreateEdgeRequest{
-		EdgeType:     "DEPENDS_ON",
-		FromEntityId: "not-a-uuid",
-		ToEntityId:   "11111111-1111-4111-8111-111111111111",
+		EdgeType:      "DEPENDS_ON",
+		FromEntityId:  "not-a-uuid",
+		ToEntityId:    "11111111-1111-4111-8111-111111111111",
+		TransactionId: txID,
 	})
 	if err == nil {
 		t.Fatal("expected error for invalid ID format, got nil")
@@ -6603,11 +6820,13 @@ func TestUpdateEntity_UnknownProperty(t *testing.T) {
 	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
-	ent, _ := srv.store.CreateEntity(ctx, "Component", "", map[string]string{"name": "test"}, nil, "")
+	txID := beginTestTx(t, srv, ctx)
+	ent, _ := srv.store.CreateEntity(ctx, "Component", "", map[string]string{"name": "test"}, nil, txID)
 
 	_, err := srv.UpdateEntity(ctx, &flowv1.UpdateEntityRequest{
-		Id:         ent.Id,
-		Properties: map[string]string{"nonexistent": "value"},
+		Id:            ent.Id,
+		Properties:    map[string]string{"nonexistent": "value"},
+		TransactionId: txID,
 	})
 	if err == nil {
 		t.Fatal("expected error for unknown property, got nil")
@@ -6622,10 +6841,12 @@ func TestUpdateEntity_InvalidIDFormat(t *testing.T) {
 	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
+	txID := beginTestTx(t, srv, ctx)
 
 	_, err := srv.UpdateEntity(ctx, &flowv1.UpdateEntityRequest{
-		Id:         "not-a-uuid",
-		Properties: map[string]string{"name": "x"},
+		Id:            "not-a-uuid",
+		Properties:    map[string]string{"name": "x"},
+		TransactionId: txID,
 	})
 	if err == nil {
 		t.Fatal("expected error for invalid ID format, got nil")
@@ -6651,12 +6872,14 @@ func TestUpdateEntity_NaNEmbedding(t *testing.T) {
 	if err := st.ApplySchema(ctx, schema); err != nil {
 		t.Fatalf("ApplySchema failed: %v", err)
 	}
-	ent, _ := srv.store.CreateEntity(ctx, "VecType", "", map[string]string{"name": "a"}, []float32{1.0, 0.0, 0.0}, "")
+	txID := beginTestTx(t, srv, ctx)
+	ent, _ := srv.store.CreateEntity(ctx, "VecType", "", map[string]string{"name": "a"}, []float32{1.0, 0.0, 0.0}, txID)
 
 	_, err := srv.UpdateEntity(ctx, &flowv1.UpdateEntityRequest{
-		Id:         ent.Id,
-		Properties: map[string]string{"name": "b"},
-		Embedding:  []float32{float32(math.NaN()), 0.0, 0.0},
+		Id:            ent.Id,
+		Properties:    map[string]string{"name": "b"},
+		Embedding:     []float32{float32(math.NaN()), 0.0, 0.0},
+		TransactionId: txID,
 	})
 	if err == nil {
 		t.Fatal("expected error for NaN embedding, got nil")
@@ -6682,12 +6905,14 @@ func TestUpdateEntity_EmbeddingDimensionMismatch(t *testing.T) {
 	if err := st.ApplySchema(ctx, schema); err != nil {
 		t.Fatalf("ApplySchema failed: %v", err)
 	}
-	ent, _ := srv.store.CreateEntity(ctx, "VecType", "", map[string]string{"name": "a"}, []float32{1.0, 0.0, 0.0}, "")
+	txID := beginTestTx(t, srv, ctx)
+	ent, _ := srv.store.CreateEntity(ctx, "VecType", "", map[string]string{"name": "a"}, []float32{1.0, 0.0, 0.0}, txID)
 
 	_, err := srv.UpdateEntity(ctx, &flowv1.UpdateEntityRequest{
-		Id:         ent.Id,
-		Properties: map[string]string{"name": "b"},
-		Embedding:  []float32{1.0, 0.0}, // only 2 dims, expected 3
+		Id:            ent.Id,
+		Properties:    map[string]string{"name": "b"},
+		Embedding:     []float32{1.0, 0.0}, // only 2 dims, expected 3
+		TransactionId: txID,
 	})
 	if err == nil {
 		t.Fatal("expected error for dimension mismatch, got nil")
@@ -6706,10 +6931,12 @@ func TestCreateEntity_UnknownProperty(t *testing.T) {
 	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
+	txID := beginTestTx(t, srv, ctx)
 
 	_, err := srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
-		EntityType: "Component",
-		Properties: map[string]string{"name": "test", "nonexistent": "value"},
+		EntityType:    "Component",
+		Properties:    map[string]string{"name": "test", "nonexistent": "value"},
+		TransactionId: txID,
 	})
 	if err == nil {
 		t.Fatal("expected error for unknown property, got nil")
@@ -6724,11 +6951,13 @@ func TestCreateEntity_InvalidIDFormat(t *testing.T) {
 	ctx := testCtx()
 
 	applyTestSchema(ctx, t, srv.store)
+	txID := beginTestTx(t, srv, ctx)
 
 	_, err := srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
-		EntityType: "Component",
-		Id:         "not-a-uuid",
-		Properties: map[string]string{"name": "test"},
+		EntityType:    "Component",
+		Id:            "not-a-uuid",
+		Properties:    map[string]string{"name": "test"},
+		TransactionId: txID,
 	})
 	if err == nil {
 		t.Fatal("expected error for invalid ID format, got nil")
@@ -6754,11 +6983,13 @@ func TestCreateEntity_NaNEmbedding(t *testing.T) {
 	if err := st.ApplySchema(ctx, schema); err != nil {
 		t.Fatalf("ApplySchema failed: %v", err)
 	}
+	txID := beginTestTx(t, srv, ctx)
 
 	_, err := srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
-		EntityType: "VecType",
-		Properties: map[string]string{"name": "bad"},
-		Embedding:  []float32{float32(math.NaN()), 0.0, 0.0},
+		EntityType:    "VecType",
+		Properties:    map[string]string{"name": "bad"},
+		Embedding:     []float32{float32(math.NaN()), 0.0, 0.0},
+		TransactionId: txID,
 	})
 	if err == nil {
 		t.Fatal("expected error for NaN embedding, got nil")
@@ -6774,11 +7005,13 @@ func TestCreateEntity_NaNEmbeddingNonIndexed(t *testing.T) {
 
 	// Component is a non-indexed type (enableVectorIndex not set).
 	applyTestSchema(ctx, t, srv.store)
+	txID := beginTestTx(t, srv, ctx)
 
 	_, err := srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
-		EntityType: "Component",
-		Properties: map[string]string{"name": "bad"},
-		Embedding:  []float32{float32(math.NaN()), 0.0, 0.0},
+		EntityType:    "Component",
+		Properties:    map[string]string{"name": "bad"},
+		Embedding:     []float32{float32(math.NaN()), 0.0, 0.0},
+		TransactionId: txID,
 	})
 	if err == nil {
 		t.Fatal("expected error for NaN embedding on non-indexed type, got nil")
@@ -6804,13 +7037,15 @@ func TestCreateEntity_EmbeddingDimensionMismatch(t *testing.T) {
 	if err := st.ApplySchema(ctx, schema); err != nil {
 		t.Fatalf("ApplySchema failed: %v", err)
 	}
-	// Bootstrap with a 3-dim entity.
-	_, _ = srv.store.CreateEntity(ctx, "VecType", "", map[string]string{"name": "a"}, []float32{1.0, 0.0, 0.0}, "")
+	txID := beginTestTx(t, srv, ctx)
+	// Bootstrap with a 3-dim entity in the transaction branch.
+	_, _ = srv.store.CreateEntity(ctx, "VecType", "", map[string]string{"name": "a"}, []float32{1.0, 0.0, 0.0}, txID)
 
 	_, err := srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
-		EntityType: "VecType",
-		Properties: map[string]string{"name": "b"},
-		Embedding:  []float32{1.0, 0.0}, // only 2 dims
+		EntityType:    "VecType",
+		Properties:    map[string]string{"name": "b"},
+		Embedding:     []float32{1.0, 0.0}, // only 2 dims
+		TransactionId: txID,
 	})
 	if err == nil {
 		t.Fatal("expected error for dimension mismatch, got nil")
@@ -6836,11 +7071,13 @@ func TestCreateEntity_VectorBootstrap(t *testing.T) {
 	if err := st.ApplySchema(ctx, schema); err != nil {
 		t.Fatalf("ApplySchema failed: %v", err)
 	}
+	txID := beginTestTx(t, srv, ctx)
 
 	// First entity must include an embedding to bootstrap the vector dimension.
 	_, err := srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
-		EntityType: "VecType",
-		Properties: map[string]string{"name": "no-embedding"},
+		EntityType:    "VecType",
+		Properties:    map[string]string{"name": "no-embedding"},
+		TransactionId: txID,
 		// No Embedding field.
 	})
 	if err == nil {
@@ -7247,9 +7484,14 @@ func TestCreateEntity_MissingWriteCapability(t *testing.T) {
 
 	applyTestSchema(ctx, t, srv.store)
 
+	// A well-formed transaction ID lets the request pass the empty-transaction
+	// guard so the missing-WRITE capability check is reached (SPEC check order:
+	// transaction → structural → capability). The transaction ID is never
+	// looked up because the capability gate precedes the tx lock.
 	_, err := srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
-		EntityType: "Component",
-		Properties: map[string]string{"name": "x"},
+		EntityType:    "Component",
+		Properties:    map[string]string{"name": "x"},
+		TransactionId: "11111111-1111-4111-8111-111111111111",
 	})
 	if err == nil {
 		t.Fatal("expected PermissionDenied for missing WRITE capability, got nil")
@@ -7464,71 +7706,8 @@ func TestGitLockSerialization(t *testing.T) {
 }
 
 // =========================================================================
-// 29. Fixed concurrent non-transactional writes test
-// =========================================================================
 // 10. Telemetry tests
 // =========================================================================
-
-func TestTransactionGC_ExcludesConcurrentMainWriteDuringRehydration(t *testing.T) {
-	base, err := ladybug.OpenInMemory()
-	if err != nil {
-		t.Fatalf("OpenInMemory: %v", err)
-	}
-	t.Cleanup(func() { _ = base.Close() })
-	blocking := &gcBlockingStore{Store: base, wipeEntered: make(chan struct{}), releaseWipe: make(chan struct{})}
-	ladybugPath := t.TempDir()
-	gs, err := gitstore.New(ladybugPath)
-	if err != nil {
-		t.Fatalf("gitstore.New: %v", err)
-	}
-	attemptingGit := &gitAttemptStore{GitStore: gs}
-	opPub, _ := generateTestKey()
-	srv := NewCartographerServer(
-		blocking, attemptingGit, opPub, initTestKey(), nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000,
-		WithLadybugPath(ladybugPath),
-	)
-	srv.MarkDBReady()
-	ctx := testCtx()
-	applyTestSchema(ctx, t, base)
-	fc := newFakeClock(time.Now())
-	srv.txManager = NewTransactionManager(7*24*time.Hour, 100000, WithClock(fc))
-	_, err = srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{Timeout: durationpb.New(time.Minute)})
-	if err != nil {
-		t.Fatalf("BeginTransaction: %v", err)
-	}
-	fc.Advance(2 * time.Minute)
-	gcDone := make(chan struct{})
-	go func() {
-		srv.gcTick()
-		close(gcDone)
-	}()
-	<-blocking.wipeEntered
-	gitAttempted := make(chan struct{})
-	attemptingGit.setAttempted(gitAttempted)
-	unrelatedDone := make(chan error, 1)
-	go func() { unrelatedDone <- srv.withGitLock(func() error { return nil }) }()
-	<-gitAttempted
-
-	mainWriteAtLock := make(chan struct{})
-	srv.beforeWriteLock = func() { close(mainWriteAtLock) }
-	writeDone := make(chan error, 1)
-	go func() {
-		_, writeErr := srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
-			EntityType: "Component", Properties: map[string]string{"name": "concurrent"},
-		})
-		writeDone <- writeErr
-	}()
-	<-mainWriteAtLock
-	srv.beforeWriteLock = nil
-	close(blocking.releaseWipe)
-	<-gcDone
-	if err := <-unrelatedDone; err != nil {
-		t.Fatalf("unrelated Git checkout: %v", err)
-	}
-	if err := <-writeDone; err != nil {
-		t.Fatalf("CreateEntity: %v", err)
-	}
-}
 
 func TestTelemetry_TransactionGC(t *testing.T) {
 	opPub, _ := generateTestKey()
@@ -7608,11 +7787,13 @@ func TestCreateEdge_SourceNotFound_CapCheckOrder(t *testing.T) {
 	ctx := narrowCtx("WRITE:graph/entity/Service")
 
 	applyTestSchema(ctx, t, srv.store)
+	txID := beginTestTx(t, srv, testCtx())
 
 	_, err := srv.CreateEdge(ctx, &flowv1.CreateEdgeRequest{
-		EdgeType:     "DEPENDS_ON",
-		FromEntityId: "11111111-1111-4111-8111-111111111111",
-		ToEntityId:   "22222222-2222-4222-8222-222222222222",
+		EdgeType:      "DEPENDS_ON",
+		FromEntityId:  "11111111-1111-4111-8111-111111111111",
+		ToEntityId:    "22222222-2222-4222-8222-222222222222",
+		TransactionId: txID,
 	})
 	if err == nil {
 		t.Fatal("expected error for not-found source, got nil")
@@ -7638,13 +7819,18 @@ func TestCreateEdge_TargetNotFound_CapCheckOrder(t *testing.T) {
 	ctx := narrowCtx("WRITE:graph/tx")
 
 	applyTestSchema(ctx, t, srv.store)
+	txID := beginTestTx(t, srv, testCtx())
 	// Only the source exists; the target ID is a valid UUID referencing nothing.
-	svc, _ := srv.store.CreateEntity(ctx, "Service", "", map[string]string{"name": "svc"}, nil, "")
+	svc, err := srv.store.CreateEntity(ctx, "Service", "", map[string]string{"name": "svc"}, nil, txID)
+	if err != nil {
+		t.Fatalf("seed source entity: %v", err)
+	}
 
-	_, err := srv.CreateEdge(ctx, &flowv1.CreateEdgeRequest{
-		EdgeType:     "DEPENDS_ON",
-		FromEntityId: svc.Id,
-		ToEntityId:   "22222222-2222-4222-8222-222222222222",
+	_, err = srv.CreateEdge(ctx, &flowv1.CreateEdgeRequest{
+		EdgeType:      "DEPENDS_ON",
+		FromEntityId:  svc.Id,
+		ToEntityId:    "22222222-2222-4222-8222-222222222222",
+		TransactionId: txID,
 	})
 	if err == nil {
 		t.Fatal("expected error for not-found target, got nil")
@@ -7659,12 +7845,14 @@ func TestCreateEdge_TargetNotFound_CapCheckOrder(t *testing.T) {
 // WRITE capability.
 func TestDeleteEdge_NotFound_CapCheckOrder(t *testing.T) {
 	srv, _ := newTestServer(t)
+	txID := beginTestTx(t, srv, testCtx())
 	ctx := narrowCtx("WRITE:graph/entity/Service")
 
 	applyTestSchema(ctx, t, srv.store)
 
 	_, err := srv.DeleteEdge(ctx, &flowv1.DeleteEdgeRequest{
-		Id: "11111111-1111-4111-8111-111111111111",
+		Id:            "11111111-1111-4111-8111-111111111111",
+		TransactionId: txID,
 	})
 	if err == nil {
 		t.Fatal("expected error for not-found edge, got nil")
@@ -7679,13 +7867,15 @@ func TestDeleteEdge_NotFound_CapCheckOrder(t *testing.T) {
 // WRITE capability.
 func TestUpdateEntity_NotFound_CapCheckOrder(t *testing.T) {
 	srv, _ := newTestServer(t)
+	txID := beginTestTx(t, srv, testCtx())
 	ctx := narrowCtx("WRITE:graph/entity/Component")
 
 	applyTestSchema(ctx, t, srv.store)
 
 	_, err := srv.UpdateEntity(ctx, &flowv1.UpdateEntityRequest{
-		Id:         "11111111-1111-4111-8111-111111111111",
-		Properties: map[string]string{"name": "x"},
+		Id:            "11111111-1111-4111-8111-111111111111",
+		Properties:    map[string]string{"name": "x"},
+		TransactionId: txID,
 	})
 	if err == nil {
 		t.Fatal("expected error for not-found entity, got nil")
@@ -7700,12 +7890,14 @@ func TestUpdateEntity_NotFound_CapCheckOrder(t *testing.T) {
 // WRITE capability.
 func TestDeleteEntity_NotFound_CapCheckOrder(t *testing.T) {
 	srv, _ := newTestServer(t)
+	txID := beginTestTx(t, srv, testCtx())
 	ctx := narrowCtx("WRITE:graph/entity/Component")
 
 	applyTestSchema(ctx, t, srv.store)
 
 	_, err := srv.DeleteEntity(ctx, &flowv1.DeleteEntityRequest{
-		Id: "11111111-1111-4111-8111-111111111111",
+		Id:            "11111111-1111-4111-8111-111111111111",
+		TransactionId: txID,
 	})
 	if err == nil {
 		t.Fatal("expected error for not-found entity, got nil")
@@ -7852,115 +8044,6 @@ func TestListEntities_Pagination(t *testing.T) {
 // =========================================================================
 // 31. Remote error-path mapping tests (SPEC error table)
 // =========================================================================
-
-// remoteErrorGitStore wraps a gitstore to inject any remote operation failure
-// as a sentinel. WithGitLock runs fn inline (no real git lock) so handlers can
-// be driven deterministically. CloneSingleBranch is used when the repo is empty
-// (IsEmpty returns true); FetchAndMerge is used otherwise.
-type remoteErrorGitStore struct {
-	gitstore.GitStore
-	empty bool
-	err   error
-}
-
-func (s *remoteErrorGitStore) WithGitLock(fn func() error) error { return fn() }
-func (s *remoteErrorGitStore) IsEmpty(ctx context.Context) (bool, error) {
-	return s.empty, nil
-}
-func (s *remoteErrorGitStore) CloneSingleBranch(ctx context.Context, url, branch string) error {
-	return s.err
-}
-func (s *remoteErrorGitStore) FetchAndMerge(ctx context.Context, remote, branch string) (plumbing.Hash, error) {
-	return plumbing.ZeroHash, s.err
-}
-
-// TestPullFromRemote_MapGitErrorRows drives each SPEC error-table row that
-// mapGitError maps but no handler test previously exercised. Each case routes
-// the git-store sentinel through the PullFromRemote handler and asserts the
-// resulting gRPC status code.
-func TestPullFromRemote_MapGitErrorRows(t *testing.T) {
-	tests := []struct {
-		name       string
-		empty      bool
-		err        error
-		wantCode   codes.Code
-		wantSubstr string
-	}{
-		{
-			name:       "remote auth config missing",
-			empty:      false,
-			err:        gitstore.ErrAuthConfigMissing,
-			wantCode:   codes.FailedPrecondition,
-			wantSubstr: "auth configuration missing",
-		},
-		{
-			// The empty-repo PullFromRemote path routes through CloneSingleBranch;
-			// a missing credential must still map to FAILED_PRECONDITION (SPEC error
-			// row "Remote auth config missing (PullFromRemote)").
-			name:       "remote auth config missing (empty repo clone path)",
-			empty:      true,
-			err:        gitstore.ErrAuthConfigMissing,
-			wantCode:   codes.FailedPrecondition,
-			wantSubstr: "auth configuration missing",
-		},
-		{
-			name:       "remote credentials rejected",
-			empty:      false,
-			err:        gitstore.ErrAuthFailed,
-			wantCode:   codes.Unauthenticated,
-			wantSubstr: "credentials rejected",
-		},
-		{
-			name:       "unsupported remote URL scheme",
-			empty:      true,
-			err:        gitstore.ErrUnsupportedURLScheme,
-			wantCode:   codes.InvalidArgument,
-			wantSubstr: "unsupported remote URL scheme",
-		},
-		{
-			name:       "remote pull diverged",
-			empty:      false,
-			err:        gitstore.ErrPullDiverged,
-			wantCode:   codes.FailedPrecondition,
-			wantSubstr: "pull would diverge",
-		},
-		{
-			name:       "push rejected non-fast-forward",
-			empty:      false,
-			err:        gitstore.ErrPushRejected,
-			wantCode:   codes.FailedPrecondition,
-			wantSubstr: "push rejected",
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			base, err := ladybug.OpenInMemory()
-			if err != nil {
-				t.Fatalf("OpenInMemory: %v", err)
-			}
-			t.Cleanup(func() { _ = base.Close() })
-			gs, _ := gitstore.New(t.TempDir())
-			remoteGit := &remoteErrorGitStore{GitStore: gs, empty: tt.empty, err: tt.err}
-			opPub, _ := generateTestKey()
-			srv := NewCartographerServer(
-				base, remoteGit, opPub, initTestKey(), nil, "https://example.com/repo.git",
-				30*time.Second, "test-ns", 30*time.Minute, 100000,
-			)
-			srv.MarkDBReady()
-
-			_, pullErr := srv.PullFromRemote(testCtx(), &flowv1.PullFromRemoteRequest{})
-			if pullErr == nil {
-				t.Fatal("expected error, got nil")
-			}
-			if status.Code(pullErr) != tt.wantCode {
-				t.Fatalf("expected %v, got %v (%v)", tt.wantCode, status.Code(pullErr), pullErr)
-			}
-			if !strings.Contains(pullErr.Error(), tt.wantSubstr) {
-				t.Fatalf("expected message containing %q, got %q", tt.wantSubstr, pullErr.Error())
-			}
-		})
-	}
-}
 
 // TestErrNoTransportCredentials covers the SPEC R2 error-table row "Request
 // without valid transport credentials → UNAUTHENTICATED". The sentinel is a

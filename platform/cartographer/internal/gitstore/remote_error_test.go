@@ -98,7 +98,7 @@ func TestMapFetchError(t *testing.T) {
 
 // TestFetchAndMergeAuthConfigMissing verifies that FetchAndMerge with a nil
 // authFn returns ErrAuthConfigMissing — the SPEC error-table row "Remote auth
-// config missing (PullFromRemote)". The divergent path is covered by
+// config missing (Sync)". The divergent path is covered by
 // TestFetchAndMerge_Diverged; this pins the pre-fetch auth-guard branch.
 func TestFetchAndMergeAuthConfigMissing(t *testing.T) {
 	gs := setupTestStore(t)
@@ -120,7 +120,7 @@ func TestFetchAndMergeAuthConfigMissing(t *testing.T) {
 // FetchAndMerge surfaces ErrAuthConfigMissing when the configured authFn
 // returns a generic (non-sentinel) error — the readSecretFn-failure (Secret
 // missing) and invalid-credential (unparseable ssh-privatekey PEM) sub-cases
-// of the SPEC error-table row "Remote auth config missing (PullFromRemote)",
+// of the SPEC error-table row "Remote auth config missing (Sync)",
 // which mandates FAILED_PRECONDITION for "Secret missing, invalid, or missing
 // expected key for the URL scheme". This is distinct from ErrAuthConfigMissing
 // (nil authFn), ErrAuthFailed (typed transport sentinel from the server), and
@@ -152,7 +152,7 @@ func TestFetchAndMergeAuthFnFailureCollapsesToAuthConfigMissing(t *testing.T) {
 // TestFetchAndMergeAuthConfigMissingFromFn verifies that FetchAndMerge preserves
 // the ErrAuthConfigMissing sentinel returned by the authFn itself (resolveAuth)
 // — the missing-expected-key sub-case of the SPEC error-table row "Remote auth
-// config missing (PullFromRemote)".
+// config missing (Sync)".
 func TestFetchAndMergeAuthConfigMissingFromFn(t *testing.T) {
 	gs := setupTestStore(t)
 	err := gs.WithGitLock(func() error {
@@ -177,7 +177,7 @@ func TestFetchAndMergeAuthConfigMissingFromFn(t *testing.T) {
 // ssh-privatekey PEM), or the ErrAuthConfigMissing sentinel (missing expected
 // key) — collapses to ErrAuthConfigMissing so mapGitError returns
 // FAILED_PRECONDITION (SPEC error-table row "Remote auth config missing
-// (PullFromRemote)"). The success branches return the resolved auth unchanged,
+// (Sync)"). The success branches return the resolved auth unchanged,
 // and nil for an explicit anonymous public remote when allowed.
 func TestResolveAuthBranches(t *testing.T) {
 	gs := setupTestStore(t)

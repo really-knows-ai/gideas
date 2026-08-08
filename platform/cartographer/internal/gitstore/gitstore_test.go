@@ -78,15 +78,15 @@ func pushGraphUpdate(t *testing.T, tmpDir, remoteDir, content string) plumbing.H
 
 // configureAnonymousRemote configures the remote on an already-cloned gitStore.
 // It is only valid after a successful clone of the remote's main branch: the
-// local main already points at the remote's HEAD, so the FetchRemote call is a
+// local main already points at the remote's HEAD, so the FetchAndMerge call is a
 // no-op (up-to-date). It is not meant to seed an empty local repo.
 func configureAnonymousRemote(t *testing.T, gs *gitStore, remoteURL string) {
 	t.Helper()
 	if err := gs.SetRemote(ctx(), remoteURL, func() (transport.AuthMethod, error) { return nil, nil }); err != nil {
 		t.Fatalf("SetRemote: %v", err)
 	}
-	if err := gs.FetchRemote(ctx()); err != nil {
-		t.Fatalf("anonymous FetchRemote: %v", err)
+	if _, err := gs.FetchAndMerge(ctx(), "origin", "main"); err != nil {
+		t.Fatalf("anonymous FetchAndMerge: %v", err)
 	}
 }
 
@@ -2351,43 +2351,6 @@ func TestFastForwardMergeNonDefaultInto(t *testing.T) {
 // T7: Remote operations
 // ============================================================================
 
-func TestHasRemote(t *testing.T) {
-	gs := setupTestStore(t)
-	err := gs.WithGitLock(func() error {
-		has, err := gs.HasRemote(ctx())
-		if err != nil {
-			return err
-		}
-		if has {
-			return fmt.Errorf("expected false for no remote")
-		}
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("HasRemote: %v", err)
-	}
-}
-
-func TestSetRemoteHasRemote(t *testing.T) {
-	gs := setupTestStore(t)
-	err := gs.WithGitLock(func() error {
-		if err := gs.SetRemote(ctx(), "https://example.com/repo.git", nil); err != nil {
-			return err
-		}
-		has, err := gs.HasRemote(ctx())
-		if err != nil {
-			return err
-		}
-		if !has {
-			return fmt.Errorf("expected true after SetRemote")
-		}
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("SetRemoteHasRemote: %v", err)
-	}
-}
-
 func TestSetRemoteInvalidScheme(t *testing.T) {
 	gs := setupTestStore(t)
 	err := gs.WithGitLock(func() error {
@@ -2560,34 +2523,6 @@ func TestPushRemoteNoRemote(t *testing.T) {
 	}
 }
 
-func TestFetchRemoteNoRemote(t *testing.T) {
-	gs := setupTestStore(t)
-	err := gs.WithGitLock(func() error {
-		err := gs.FetchRemote(ctx())
-		if !errors.Is(err, ErrNoRemote) {
-			return fmt.Errorf("expected ErrNoRemote, got %v", err)
-		}
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("FetchRemoteNoRemote: %v", err)
-	}
-}
-
-func TestPullAndFastForwardNoRemote(t *testing.T) {
-	gs := setupTestStore(t)
-	err := gs.WithGitLock(func() error {
-		err := gs.PullAndFastForward(ctx())
-		if !errors.Is(err, ErrNoRemote) {
-			return fmt.Errorf("expected ErrNoRemote, got %v", err)
-		}
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("PullAndFastForwardNoRemote: %v", err)
-	}
-}
-
 // TestPushRemoteWithAuth verifies PushRemote returns expected errors
 // for auth-related issues.
 func TestPushRemoteWithAuth(t *testing.T) {
@@ -2604,7 +2539,7 @@ func TestPushRemoteWithAuth(t *testing.T) {
 
 		// Set authFn that returns an error (readSecretFn failure / invalid
 		// credential) → ErrAuthConfigMissing (SPEC error row "Remote auth
-		// config missing (PullFromRemote)", line 932 → FAILED_PRECONDITION)
+		// config missing (Sync)", line 932 → FAILED_PRECONDITION)
 		if err := gs.SetRemote(ctx(), "https://example.com/repo.git", func() (transport.AuthMethod, error) {
 			return nil, fmt.Errorf("auth resolution failure")
 		}); err != nil {
@@ -2630,72 +2565,6 @@ func TestPushRemoteWithAuth(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("PushRemoteWithAuth: %v", err)
-	}
-}
-
-// TestFetchRemoteWithAuth verifies FetchRemote returns expected errors
-// for auth-related issues.
-func TestFetchRemoteWithAuth(t *testing.T) {
-	gs := setupTestStore(t)
-	err := gs.WithGitLock(func() error {
-		if err := gs.SetRemote(ctx(), "https://example.com/repo.git", nil); err != nil {
-			return err
-		}
-		err := gs.FetchRemote(ctx())
-		if !errors.Is(err, ErrAuthConfigMissing) {
-			return fmt.Errorf("expected ErrAuthConfigMissing, got %v", err)
-		}
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("FetchRemoteWithAuth: %v", err)
-	}
-}
-
-// TestPullWithAuth verifies PullAndFastForward returns expected errors
-// for auth-related issues.
-func TestPullWithAuth(t *testing.T) {
-	gs := setupTestStore(t)
-	err := gs.WithGitLock(func() error {
-		if err := gs.SetRemote(ctx(), "https://example.com/repo.git", nil); err != nil {
-			return err
-		}
-		err := gs.PullAndFastForward(ctx())
-		if !errors.Is(err, ErrAuthConfigMissing) {
-			return fmt.Errorf("expected ErrAuthConfigMissing, got %v", err)
-		}
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("PullWithAuth: %v", err)
-	}
-}
-
-// TestPullAndFastForwardAuthConfigMissing verifies that pulling with a nil
-// auth provider (authFn) returns ErrAuthConfigMissing.
-func TestPullAndFastForwardAuthConfigMissing(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	gs, err := New(tmpDir)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	defer func() { _ = gs.Close() }()
-
-	err = gs.WithGitLock(func() error {
-		if err := gs.SetRemote(ctx(), "https://example.com/repo.git", nil); err != nil {
-			return err
-		}
-		// We can't actually test a successful pull without a real remote,
-		// but we can verify the error path (ErrAuthConfigMissing since authFn is nil)
-		err := gs.PullAndFastForward(ctx())
-		if !errors.Is(err, ErrAuthConfigMissing) {
-			return fmt.Errorf("expected ErrAuthConfigMissing, got %v", err)
-		}
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("TestPullAndFastForwardAuthConfigMissing: %v", err)
 	}
 }
 
@@ -2826,8 +2695,8 @@ func TestCloneSingleBranchNoAuth(t *testing.T) {
 	const updatedGraphContent = `{"graph":"updated"}`
 	updatedHash := pushGraphUpdate(t, tmpDir, remoteDir, updatedGraphContent)
 
-	if err := gs.PullAndFastForward(ctx()); err != nil {
-		t.Fatalf("anonymous PullAndFastForward: %v", err)
+	if _, err := gs.FetchAndMerge(ctx(), "origin", "main"); err != nil {
+		t.Fatalf("anonymous FetchAndMerge: %v", err)
 	}
 	mainRef, err = gs.repo.Reference(plumbing.NewBranchReferenceName("main"), true)
 	if err != nil {
@@ -2931,9 +2800,9 @@ func TestCloneSingleAuthConfigMissingHTTPS(t *testing.T) {
 // TestCloneSingleAuthSentinelPreserved verifies that CloneSingleBranch
 // preserves the ErrAuthConfigMissing sentinel returned by a configured authFn
 // — the missing-expected-key sub-case of the SPEC error-table row "Remote auth
-// config missing (PullFromRemote)". CloneSingleBranch is the PullFromRemote
-// empty-repo path, so the credential failure must surface as
-// ErrAuthConfigMissing for mapGitError to return FAILED_PRECONDITION.
+// config missing (Sync)". CloneSingleBranch is the clone-on-init path, so the
+// credential failure must surface as ErrAuthConfigMissing for mapGitError to
+// return FAILED_PRECONDITION.
 func TestCloneSingleAuthSentinelPreserved(t *testing.T) {
 	gs := setupTestStore(t)
 	gs.authFn = func() (transport.AuthMethod, error) {
@@ -2955,8 +2824,8 @@ func TestCloneSingleAuthSentinelPreserved(t *testing.T) {
 // CloneSingleBranch surfaces ErrAuthConfigMissing when a configured authFn
 // returns a generic (non-sentinel) error — the readSecretFn-failure (Secret
 // missing) and invalid-credential (unparseable ssh-privatekey PEM) sub-cases
-// of the SPEC error-table row "Remote auth config missing (PullFromRemote)"
-// on the PullFromRemote empty-repo path.
+// of the SPEC error-table row "Remote auth config missing (Sync)"
+// on the clone-on-init path.
 func TestCloneSingleAuthFnFailureCollapsesToAuthConfigMissing(t *testing.T) {
 	gs := setupTestStore(t)
 	gs.authFn = func() (transport.AuthMethod, error) {
@@ -3344,8 +3213,8 @@ type noopAuth struct{}
 func (a noopAuth) Name() string   { return "noop" }
 func (a noopAuth) String() string { return "noop" }
 
-// TestRemotePushPull exercises PushRemote, FetchRemote, and PullAndFastForward
-// using temp directory repos with file:// URLs set directly on the gitStore.
+// TestRemotePushPull exercises PushRemote and FetchAndMerge using temp
+// directory repos with file:// URLs set directly on the gitStore.
 func TestRemotePushPull(t *testing.T) {
 	tmpDir := t.TempDir()
 	bareDir := filepath.Join(tmpDir, "remote.git")
@@ -3421,7 +3290,7 @@ func TestRemotePushPull(t *testing.T) {
 		}
 
 		// Fetch back from remote (should be up-to-date)
-		if err := gs.FetchRemote(ctx()); err != nil {
+		if _, err := gs.FetchAndMerge(ctx(), "origin", "main"); err != nil {
 			return fmt.Errorf("fetch: %w", err)
 		}
 
@@ -3429,320 +3298,6 @@ func TestRemotePushPull(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("RemotePushPull: %v", err)
-	}
-}
-
-// TestPullFromRemote exercises pulling from a remote with commits.
-func TestPullFromRemote(t *testing.T) {
-	tmpDir := t.TempDir()
-	bareDir := filepath.Join(tmpDir, "remote.git")
-
-	// Create a non-bare working repo first, make a commit, then clone as bare
-	workDir := filepath.Join(tmpDir, "work")
-	workRepo, err := git.PlainInitWithOptions(workDir, &git.PlainInitOptions{
-		InitOptions: git.InitOptions{
-			DefaultBranch: plumbing.ReferenceName("refs/heads/main"),
-		},
-	})
-	if err != nil {
-		t.Fatalf("init work repo: %v", err)
-	}
-	wt, err := workRepo.Worktree()
-	if err != nil {
-		t.Fatalf("worktree: %v", err)
-	}
-
-	// Make initial commit in work repo
-	seedFile, seedErr := wt.Filesystem.Create("seed.txt")
-	if seedErr != nil {
-		t.Fatalf("create seed file: %v", seedErr)
-	}
-	_ = seedFile.Close()
-	if _, err := wt.Add("seed.txt"); err != nil {
-		t.Fatalf("add seed: %v", err)
-	}
-	if _, err := wt.Commit("seed commit", &git.CommitOptions{
-		Author: &object.Signature{Name: "test", Email: "test@test"},
-	}); err != nil {
-		t.Fatalf("seed commit: %v", err)
-	}
-
-	// Clone work repo as bare to create the "remote"
-	_, err = git.PlainClone(bareDir, true, &git.CloneOptions{
-		URL: "file://" + workDir,
-	})
-	if err != nil {
-		t.Fatalf("clone bare: %v", err)
-	}
-
-	// Clone the bare remote, make a commit, and push back
-	cloneDir := filepath.Join(tmpDir, "clone")
-	cloned, err := git.PlainClone(cloneDir, false, &git.CloneOptions{
-		URL: "file://" + bareDir,
-	})
-	if err != nil {
-		t.Fatalf("clone: %v", err)
-	}
-
-	clonedWT, err := cloned.Worktree()
-	if err != nil {
-		t.Fatalf("cloned worktree: %v", err)
-	}
-
-	// Make a commit on the clone
-	cloneFile, cloneErr := clonedWT.Filesystem.Create("initial.txt")
-	if cloneErr != nil {
-		t.Fatalf("create file: %v", cloneErr)
-	}
-	_ = cloneFile.Close()
-	if _, err := clonedWT.Add("initial.txt"); err != nil {
-		t.Fatalf("add: %v", err)
-	}
-	if _, err := clonedWT.Commit("initial commit", &git.CommitOptions{
-		Author: &object.Signature{Name: "test", Email: "test@test"},
-	}); err != nil {
-		t.Fatalf("commit: %v", err)
-	}
-	if err := cloned.Push(&git.PushOptions{}); err != nil {
-		t.Fatalf("push: %v", err)
-	}
-
-	// Now create local repo by cloning from remote
-	localDir := filepath.Join(tmpDir, "local")
-	clonedLocalRepo, err := git.PlainClone(localDir, false, &git.CloneOptions{
-		URL: "file://" + bareDir,
-	})
-	if err != nil {
-		t.Fatalf("clone local: %v", err)
-	}
-
-	clonedLocalWT, err := clonedLocalRepo.Worktree()
-	if err != nil {
-		t.Fatalf("cloned worktree: %v", err)
-	}
-
-	// Create a gitStore from the cloned repo
-	gs := &gitStore{
-		repo:     clonedLocalRepo,
-		wt:       clonedLocalWT,
-		fs:       clonedLocalWT.Filesystem,
-		backend:  clonedLocalRepo.Storer,
-		basePath: t.TempDir(),
-	}
-
-	err = gs.WithGitLock(func() error {
-		// The cloned repo already has origin set up; just configure URL and auth
-		gs.remoteURL = "file://" + bareDir
-		gs.authFn = func() (transport.AuthMethod, error) {
-			return noopAuth{}, nil
-		}
-
-		// Pull from remote (should be no-op, already up-to-date)
-		if err := gs.PullAndFastForward(ctx()); err != nil {
-			return fmt.Errorf("first pull: %w", err)
-		}
-
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("PullFromRemote setup: %v", err)
-	}
-
-	// Make another commit on the remote (push from the clone)
-	cloneFile2, err := clonedWT.Filesystem.Create("another.txt")
-	if err != nil {
-		t.Fatalf("create another: %v", err)
-	}
-	_ = cloneFile2.Close()
-	if _, err := clonedWT.Add("another.txt"); err != nil {
-		t.Fatalf("add another: %v", err)
-	}
-	secondHash, err := clonedWT.Commit("second commit", &git.CommitOptions{
-		Author: &object.Signature{Name: "test", Email: "test@test"},
-	})
-	if err != nil {
-		t.Fatalf("second commit: %v", err)
-	}
-	if err := cloned.Push(&git.PushOptions{}); err != nil {
-		t.Fatalf("push second: %v", err)
-	}
-
-	// Pull the new commit into local
-	err = gs.WithGitLock(func() error {
-		if err := gs.PullAndFastForward(ctx()); err != nil {
-			return fmt.Errorf("second pull: %w", err)
-		}
-
-		// The pull must have advanced the local main ref to the remote HEAD,
-		// not merely fetched the objects into the store.
-		mainRef, err := gs.repo.Reference(plumbing.NewBranchReferenceName("main"), true)
-		if err != nil {
-			return fmt.Errorf("main ref: %w", err)
-		}
-		if mainRef.Hash() != secondHash {
-			return fmt.Errorf("main ref = %s, want %s", mainRef.Hash(), secondHash)
-		}
-
-		// Verify the second commit appears in the log.
-		log, err := gs.repo.Log(&git.LogOptions{})
-		if err != nil {
-			return err
-		}
-		defer log.Close()
-
-		if err := log.ForEach(func(c *object.Commit) error {
-			if strings.HasPrefix(c.Message, "second commit") {
-				return errStop
-			}
-			return nil
-		}); err != nil && !errors.Is(err, errStop) {
-			return err
-		}
-
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("PullFromRemote: %v", err)
-	}
-}
-
-// TestPullAndFastForwardDiverged verifies the ErrPullDiverged branch directly:
-// a genuinely diverged pull (local main and remote main have each advanced past
-// a common ancestor, so a fast-forward is impossible) surfaces git's
-// ErrNonFastForwardUpdate from worktree.Pull, which PullAndFastForward maps to
-// ErrPullDiverged. This is the direct unit-tested coverage for that branch,
-// which is contractually unreachable in production because the service pulls via
-// FetchAndMerge (merge-commit semantics), never PullAndFastForward.
-func TestPullAndFastForwardDiverged(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	// Seed repo with a base commit.
-	seedDir := filepath.Join(tmpDir, "seed")
-	seedRepo, err := git.PlainInitWithOptions(seedDir, &git.PlainInitOptions{
-		InitOptions: git.InitOptions{
-			DefaultBranch: plumbing.ReferenceName("refs/heads/main"),
-		},
-	})
-	if err != nil {
-		t.Fatalf("init seed: %v", err)
-	}
-	seedWT, err := seedRepo.Worktree()
-	if err != nil {
-		t.Fatalf("seed worktree: %v", err)
-	}
-	seedFile, err := seedWT.Filesystem.Create("seed.txt")
-	if err != nil {
-		t.Fatalf("create seed: %v", err)
-	}
-	_ = seedFile.Close()
-	if _, err := seedWT.Add("seed.txt"); err != nil {
-		t.Fatalf("add seed: %v", err)
-	}
-	if _, err := seedWT.Commit("base", &git.CommitOptions{
-		Author: &object.Signature{Name: "test", Email: "test@test"},
-	}); err != nil {
-		t.Fatalf("base commit: %v", err)
-	}
-
-	// Create a bare remote from the seed.
-	bareDir := filepath.Join(tmpDir, "remote.git")
-	_, err = git.PlainClone(bareDir, true, &git.CloneOptions{URL: "file://" + seedDir})
-	if err != nil {
-		t.Fatalf("clone bare remote: %v", err)
-	}
-
-	// Peer clone: owns the remote for advancing it and for pushing the "remote"
-	// fresh commits.
-	peerDir := filepath.Join(tmpDir, "peer")
-	peer, err := git.PlainClone(peerDir, false, &git.CloneOptions{URL: "file://" + bareDir})
-	if err != nil {
-		t.Fatalf("clone peer: %v", err)
-	}
-	peerWT, err := peer.Worktree()
-	if err != nil {
-		t.Fatalf("peer worktree: %v", err)
-	}
-	// Advance the remote main by one commit (peer:first).
-	pf, err := peerWT.Filesystem.Create("peer1.txt")
-	if err != nil {
-		t.Fatalf("create peer1: %v", err)
-	}
-	_ = pf.Close()
-	if _, err := peerWT.Add("peer1.txt"); err != nil {
-		t.Fatalf("add peer1: %v", err)
-	}
-	if _, err := peerWT.Commit("peer:first", &git.CommitOptions{
-		Author: &object.Signature{Name: "test", Email: "test@test"},
-	}); err != nil {
-		t.Fatalf("peer first commit: %v", err)
-	}
-	if err := peer.Push(&git.PushOptions{}); err != nil {
-		t.Fatalf("peer first push: %v", err)
-	}
-
-	// Local gitStore cloned from the remote at peer:first.
-	localDir := filepath.Join(tmpDir, "local")
-	localRepo, err := git.PlainClone(localDir, false, &git.CloneOptions{URL: "file://" + bareDir})
-	if err != nil {
-		t.Fatalf("clone local: %v", err)
-	}
-	localWT, err := localRepo.Worktree()
-	if err != nil {
-		t.Fatalf("local worktree: %v", err)
-	}
-	gs := &gitStore{
-		repo:     localRepo,
-		wt:       localWT,
-		fs:       localWT.Filesystem,
-		backend:  localRepo.Storer,
-		basePath: t.TempDir(),
-	}
-	gs.remoteURL = "file://" + bareDir
-	gs.authFn = func() (transport.AuthMethod, error) { return noopAuth{}, nil }
-
-	// Diverge: local advances past the base commit while remote also advances.
-	localFile, err := localWT.Filesystem.Create("local.txt")
-	if err != nil {
-		t.Fatalf("create local file: %v", err)
-	}
-	_ = localFile.Close()
-	if _, err := localWT.Add("local.txt"); err != nil {
-		t.Fatalf("add local file: %v", err)
-	}
-	if _, err := localWT.Commit("local:diverge", &git.CommitOptions{
-		Author: &object.Signature{Name: "test", Email: "test@test"},
-	}); err != nil {
-		t.Fatalf("local diverge commit: %v", err)
-	}
-
-	// Advance remote main further so remote and local truly diverge.
-	peer2File, err := peerWT.Filesystem.Create("peer2.txt")
-	if err != nil {
-		t.Fatalf("create peer2: %v", err)
-	}
-	_ = peer2File.Close()
-	if _, err := peerWT.Add("peer2.txt"); err != nil {
-		t.Fatalf("add peer2: %v", err)
-	}
-	if _, err := peerWT.Commit("peer:second", &git.CommitOptions{
-		Author: &object.Signature{Name: "test", Email: "test@test"},
-	}); err != nil {
-		t.Fatalf("peer second commit: %v", err)
-	}
-	if err := peer.Push(&git.PushOptions{}); err != nil {
-		t.Fatalf("peer second push: %v", err)
-	}
-
-	err = gs.WithGitLock(func() error {
-		if err := gs.PullAndFastForward(ctx()); err == nil {
-			return fmt.Errorf("expected ErrPullDiverged, got nil")
-		} else if !errors.Is(err, ErrPullDiverged) {
-			return fmt.Errorf("expected ErrPullDiverged, got %v", err)
-		}
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("PullAndFastForwardDiverged: %v", err)
 	}
 }
 
@@ -4046,111 +3601,6 @@ func TestWriteEntityEmptyEmbeddingSlice(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("TestWriteEntityEmptyEmbeddingSlice: %v", err)
-	}
-}
-
-// TestFetchRemoteSuccess tests FetchRemote when there are new commits on the remote.
-func TestFetchRemoteSuccess(t *testing.T) {
-	tmpDir := t.TempDir()
-	bareDir := filepath.Join(tmpDir, "remote.git")
-
-	// Create bare remote with initial commit
-	workDir := filepath.Join(tmpDir, "work")
-	workRepo, err := git.PlainInitWithOptions(workDir, &git.PlainInitOptions{
-		InitOptions: git.InitOptions{
-			DefaultBranch: plumbing.ReferenceName("refs/heads/main"),
-		},
-	})
-	if err != nil {
-		t.Fatalf("init work: %v", err)
-	}
-	workWT, err := workRepo.Worktree()
-	if err != nil {
-		t.Fatalf("work worktree: %v", err)
-	}
-	initFile, _ := workWT.Filesystem.Create("init.txt")
-	_ = initFile.Close()
-	if _, err := workWT.Add("init.txt"); err != nil {
-		t.Fatalf("add: %v", err)
-	}
-	if _, err := workWT.Commit("initial", &git.CommitOptions{
-		Author: &object.Signature{Name: "test", Email: "test@test"},
-	}); err != nil {
-		t.Fatalf("commit: %v", err)
-	}
-
-	_, err = git.PlainClone(bareDir, true, &git.CloneOptions{
-		URL: "file://" + workDir,
-	})
-	if err != nil {
-		t.Fatalf("clone bare: %v", err)
-	}
-
-	// Create local repo by cloning from bare
-	localDir := filepath.Join(tmpDir, "local")
-	_, err = git.PlainClone(localDir, false, &git.CloneOptions{
-		URL: "file://" + bareDir,
-	})
-	if err != nil {
-		t.Fatalf("clone local: %v", err)
-	}
-
-	// Make a new commit on the remote via work repo
-	newFile, _ := workWT.Filesystem.Create("new.txt")
-	_ = newFile.Close()
-	if _, err := workWT.Add("new.txt"); err != nil {
-		t.Fatalf("add new: %v", err)
-	}
-	if _, err := workWT.Commit("new commit", &git.CommitOptions{
-		Author: &object.Signature{Name: "test", Email: "test@test"},
-	}); err != nil {
-		t.Fatalf("commit new: %v", err)
-	}
-	// Push to bare — need to configure remote first
-	if _, err := workRepo.CreateRemote(&config.RemoteConfig{
-		Name: "origin",
-		URLs: []string{"file://" + bareDir},
-	}); err != nil {
-		t.Fatalf("create remote on work: %v", err)
-	}
-	if err := workRepo.Push(&git.PushOptions{
-		RemoteName: "origin",
-	}); err != nil {
-		t.Fatalf("push new: %v", err)
-	}
-
-	// Open local repo and test fetch
-	localRepo, err := git.PlainOpen(localDir)
-	if err != nil {
-		t.Fatalf("open local: %v", err)
-	}
-	localWT, err := localRepo.Worktree()
-	if err != nil {
-		t.Fatalf("local worktree: %v", err)
-	}
-
-	gs := &gitStore{
-		repo:     localRepo,
-		wt:       localWT,
-		fs:       localWT.Filesystem,
-		backend:  localRepo.Storer,
-		basePath: t.TempDir(),
-	}
-
-	err = gs.WithGitLock(func() error {
-		gs.remoteURL = "file://" + bareDir
-		gs.authFn = func() (transport.AuthMethod, error) {
-			return noopAuth{}, nil
-		}
-
-		if err := gs.FetchRemote(ctx()); err != nil {
-			return fmt.Errorf("fetch: %w", err)
-		}
-
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("TestFetchRemoteSuccess: %v", err)
 	}
 }
 
@@ -4528,9 +3978,9 @@ func TestFetchAndMerge_FastForward(t *testing.T) {
 // TestFetchAndMerge_Diverged asserts that FetchAndMerge fails with
 // ErrPullDiverged when local main and the remote have diverged (neither side
 // is an ancestor of the other) and leaves the local main ref unchanged. This
-// is the delivered divergence behavior of the explicit PullFromRemote path:
-// service mapGitError maps ErrPullDiverged to FAILED_PRECONDITION, matching
-// SPEC R10 / error-table row "Remote pull diverged" (line 926).
+// is the delivered divergence behavior of the sync pull path: service mapGitError
+// maps ErrPullDiverged to FAILED_PRECONDITION, matching SPEC R10 / error-table
+// row "Remote pull diverged" (line 926).
 func TestFetchAndMerge_Diverged(t *testing.T) {
 	tmpDir := t.TempDir()
 	bareDir := filepath.Join(tmpDir, "remote.git")
@@ -4984,7 +4434,7 @@ func TestPullAlreadyUpToDate2(t *testing.T) {
 		}
 
 		// First pull — should be no-op (already up-to-date)
-		if err := gs.PullAndFastForward(ctx()); err != nil {
+		if _, err := gs.FetchAndMerge(ctx(), "origin", "main"); err != nil {
 			return fmt.Errorf("pull: %w", err)
 		}
 

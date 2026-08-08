@@ -1358,6 +1358,7 @@ func (x *BeginTransactionResponse) GetAppliedTimeout() *durationpb.Duration {
 type CommitTransactionRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	TransactionId string                 `protobuf:"bytes,1,opt,name=transaction_id,json=transactionId,proto3" json:"transaction_id,omitempty"`
+	Ack           bool                   `protobuf:"varint,2,opt,name=ack,proto3" json:"ack,omitempty"` // When true, Commit blocks until the sync worker pushes to remote.
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1397,6 +1398,13 @@ func (x *CommitTransactionRequest) GetTransactionId() string {
 		return x.TransactionId
 	}
 	return ""
+}
+
+func (x *CommitTransactionRequest) GetAck() bool {
+	if x != nil {
+		return x.Ack
+	}
+	return false
 }
 
 type CommitTransactionResponse struct {
@@ -2540,26 +2548,26 @@ func (x *HealthCheckResponse) GetPvcWritable() bool {
 	return false
 }
 
-type PullFromRemoteRequest struct {
+type SyncRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *PullFromRemoteRequest) Reset() {
-	*x = PullFromRemoteRequest{}
+func (x *SyncRequest) Reset() {
+	*x = SyncRequest{}
 	mi := &file_flow_v1_cartographer_proto_msgTypes[45]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *PullFromRemoteRequest) String() string {
+func (x *SyncRequest) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*PullFromRemoteRequest) ProtoMessage() {}
+func (*SyncRequest) ProtoMessage() {}
 
-func (x *PullFromRemoteRequest) ProtoReflect() protoreflect.Message {
+func (x *SyncRequest) ProtoReflect() protoreflect.Message {
 	mi := &file_flow_v1_cartographer_proto_msgTypes[45]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -2571,31 +2579,31 @@ func (x *PullFromRemoteRequest) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use PullFromRemoteRequest.ProtoReflect.Descriptor instead.
-func (*PullFromRemoteRequest) Descriptor() ([]byte, []int) {
+// Deprecated: Use SyncRequest.ProtoReflect.Descriptor instead.
+func (*SyncRequest) Descriptor() ([]byte, []int) {
 	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{45}
 }
 
-type PullFromRemoteResponse struct {
+type SyncResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *PullFromRemoteResponse) Reset() {
-	*x = PullFromRemoteResponse{}
+func (x *SyncResponse) Reset() {
+	*x = SyncResponse{}
 	mi := &file_flow_v1_cartographer_proto_msgTypes[46]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *PullFromRemoteResponse) String() string {
+func (x *SyncResponse) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*PullFromRemoteResponse) ProtoMessage() {}
+func (*SyncResponse) ProtoMessage() {}
 
-func (x *PullFromRemoteResponse) ProtoReflect() protoreflect.Message {
+func (x *SyncResponse) ProtoReflect() protoreflect.Message {
 	mi := &file_flow_v1_cartographer_proto_msgTypes[46]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -2607,8 +2615,8 @@ func (x *PullFromRemoteResponse) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use PullFromRemoteResponse.ProtoReflect.Descriptor instead.
-func (*PullFromRemoteResponse) Descriptor() ([]byte, []int) {
+// Deprecated: Use SyncResponse.ProtoReflect.Descriptor instead.
+func (*SyncResponse) Descriptor() ([]byte, []int) {
 	return file_flow_v1_cartographer_proto_rawDescGZIP(), []int{46}
 }
 
@@ -2850,9 +2858,10 @@ const file_flow_v1_cartographer_proto_rawDesc = "" +
 	"\atimeout\x18\x01 \x01(\v2\x19.google.protobuf.DurationR\atimeout\"\x85\x01\n" +
 	"\x18BeginTransactionResponse\x12%\n" +
 	"\x0etransaction_id\x18\x01 \x01(\tR\rtransactionId\x12B\n" +
-	"\x0fapplied_timeout\x18\x02 \x01(\v2\x19.google.protobuf.DurationR\x0eappliedTimeout\"A\n" +
+	"\x0fapplied_timeout\x18\x02 \x01(\v2\x19.google.protobuf.DurationR\x0eappliedTimeout\"S\n" +
 	"\x18CommitTransactionRequest\x12%\n" +
-	"\x0etransaction_id\x18\x01 \x01(\tR\rtransactionId\"\x1b\n" +
+	"\x0etransaction_id\x18\x01 \x01(\tR\rtransactionId\x12\x10\n" +
+	"\x03ack\x18\x02 \x01(\bR\x03ack\"\x1b\n" +
 	"\x19CommitTransactionResponse\"C\n" +
 	"\x1aRollbackTransactionRequest\x12%\n" +
 	"\x0etransaction_id\x18\x01 \x01(\tR\rtransactionId\"\x1d\n" +
@@ -2934,13 +2943,13 @@ const file_flow_v1_cartographer_proto_rawDesc = "" +
 	"\n" +
 	"ladybug_ok\x18\x01 \x01(\bR\tladybugOk\x12%\n" +
 	"\x0eschema_applied\x18\x02 \x01(\bR\rschemaApplied\x12!\n" +
-	"\fpvc_writable\x18\x03 \x01(\bR\vpvcWritable\"\x17\n" +
-	"\x15PullFromRemoteRequest\"\x18\n" +
-	"\x16PullFromRemoteResponse\",\n" +
+	"\fpvc_writable\x18\x03 \x01(\bR\vpvcWritable\"\r\n" +
+	"\vSyncRequest\"\x0e\n" +
+	"\fSyncResponse\",\n" +
 	"\x12ExportGraphRequest\x12\x16\n" +
 	"\x06format\x18\x01 \x01(\tR\x06format\"+\n" +
 	"\x13ExportGraphResponse\x12\x14\n" +
-	"\x05chunk\x18\x01 \x01(\fR\x05chunk2\xec\f\n" +
+	"\x05chunk\x18\x01 \x01(\fR\x05chunk2\xce\f\n" +
 	"\x13CartographerService\x12N\n" +
 	"\rExecuteCypher\x12\x1d.flow.v1.ExecuteCypherRequest\x1a\x1e.flow.v1.ExecuteCypherResponse\x12T\n" +
 	"\x0fSearchNeighbors\x12\x1f.flow.v1.SearchNeighborsRequest\x1a .flow.v1.SearchNeighborsResponse\x12Q\n" +
@@ -2961,8 +2970,8 @@ const file_flow_v1_cartographer_proto_rawDesc = "" +
 	"\rExtendTimeout\x12\x1d.flow.v1.ExtendTimeoutRequest\x1a\x1e.flow.v1.ExtendTimeoutResponse\x12H\n" +
 	"\vApplySchema\x12\x1b.flow.v1.ApplySchemaRequest\x1a\x1c.flow.v1.ApplySchemaResponse\x12B\n" +
 	"\tWipeGraph\x12\x19.flow.v1.WipeGraphRequest\x1a\x1a.flow.v1.WipeGraphResponse\x12H\n" +
-	"\vHealthCheck\x12\x1b.flow.v1.HealthCheckRequest\x1a\x1c.flow.v1.HealthCheckResponse\x12Q\n" +
-	"\x0ePullFromRemote\x12\x1e.flow.v1.PullFromRemoteRequest\x1a\x1f.flow.v1.PullFromRemoteResponse\x12J\n" +
+	"\vHealthCheck\x12\x1b.flow.v1.HealthCheckRequest\x1a\x1c.flow.v1.HealthCheckResponse\x123\n" +
+	"\x04Sync\x12\x14.flow.v1.SyncRequest\x1a\x15.flow.v1.SyncResponse\x12J\n" +
 	"\vExportGraph\x12\x1b.flow.v1.ExportGraphRequest\x1a\x1c.flow.v1.ExportGraphResponse0\x01B\x89\x01\n" +
 	"\vcom.flow.v1B\x11CartographerProtoP\x01Z*github.com/foundry/flow/gen/flow/v1;flowv1\xa2\x02\x03FXX\xaa\x02\aFlow.V1\xca\x02\aFlow\\V1\xe2\x02\x13Flow\\V1\\GPBMetadata\xea\x02\bFlow::V1b\x06proto3"
 
@@ -3025,8 +3034,8 @@ var file_flow_v1_cartographer_proto_goTypes = []any{
 	(*WipeGraphResponse)(nil),           // 42: flow.v1.WipeGraphResponse
 	(*HealthCheckRequest)(nil),          // 43: flow.v1.HealthCheckRequest
 	(*HealthCheckResponse)(nil),         // 44: flow.v1.HealthCheckResponse
-	(*PullFromRemoteRequest)(nil),       // 45: flow.v1.PullFromRemoteRequest
-	(*PullFromRemoteResponse)(nil),      // 46: flow.v1.PullFromRemoteResponse
+	(*SyncRequest)(nil),                 // 45: flow.v1.SyncRequest
+	(*SyncResponse)(nil),                // 46: flow.v1.SyncResponse
 	(*ExportGraphRequest)(nil),          // 47: flow.v1.ExportGraphRequest
 	(*ExportGraphResponse)(nil),         // 48: flow.v1.ExportGraphResponse
 	nil,                                 // 49: flow.v1.SearchNeighborResult.PropertiesEntry
@@ -3094,7 +3103,7 @@ var file_flow_v1_cartographer_proto_depIdxs = []int32{
 	39, // 47: flow.v1.CartographerService.ApplySchema:input_type -> flow.v1.ApplySchemaRequest
 	41, // 48: flow.v1.CartographerService.WipeGraph:input_type -> flow.v1.WipeGraphRequest
 	43, // 49: flow.v1.CartographerService.HealthCheck:input_type -> flow.v1.HealthCheckRequest
-	45, // 50: flow.v1.CartographerService.PullFromRemote:input_type -> flow.v1.PullFromRemoteRequest
+	45, // 50: flow.v1.CartographerService.Sync:input_type -> flow.v1.SyncRequest
 	47, // 51: flow.v1.CartographerService.ExportGraph:input_type -> flow.v1.ExportGraphRequest
 	2,  // 52: flow.v1.CartographerService.ExecuteCypher:output_type -> flow.v1.ExecuteCypherResponse
 	4,  // 53: flow.v1.CartographerService.SearchNeighbors:output_type -> flow.v1.SearchNeighborsResponse
@@ -3114,7 +3123,7 @@ var file_flow_v1_cartographer_proto_depIdxs = []int32{
 	40, // 67: flow.v1.CartographerService.ApplySchema:output_type -> flow.v1.ApplySchemaResponse
 	42, // 68: flow.v1.CartographerService.WipeGraph:output_type -> flow.v1.WipeGraphResponse
 	44, // 69: flow.v1.CartographerService.HealthCheck:output_type -> flow.v1.HealthCheckResponse
-	46, // 70: flow.v1.CartographerService.PullFromRemote:output_type -> flow.v1.PullFromRemoteResponse
+	46, // 70: flow.v1.CartographerService.Sync:output_type -> flow.v1.SyncResponse
 	48, // 71: flow.v1.CartographerService.ExportGraph:output_type -> flow.v1.ExportGraphResponse
 	52, // [52:72] is the sub-list for method output_type
 	32, // [32:52] is the sub-list for method input_type

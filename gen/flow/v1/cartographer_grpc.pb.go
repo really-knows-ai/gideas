@@ -37,7 +37,7 @@ const (
 	CartographerService_ApplySchema_FullMethodName         = "/flow.v1.CartographerService/ApplySchema"
 	CartographerService_WipeGraph_FullMethodName           = "/flow.v1.CartographerService/WipeGraph"
 	CartographerService_HealthCheck_FullMethodName         = "/flow.v1.CartographerService/HealthCheck"
-	CartographerService_PullFromRemote_FullMethodName      = "/flow.v1.CartographerService/PullFromRemote"
+	CartographerService_Sync_FullMethodName                = "/flow.v1.CartographerService/Sync"
 	CartographerService_ExportGraph_FullMethodName         = "/flow.v1.CartographerService/ExportGraph"
 )
 
@@ -72,7 +72,7 @@ type CartographerServiceClient interface {
 	WipeGraph(ctx context.Context, in *WipeGraphRequest, opts ...grpc.CallOption) (*WipeGraphResponse, error)
 	HealthCheck(ctx context.Context, in *HealthCheckRequest, opts ...grpc.CallOption) (*HealthCheckResponse, error)
 	// --- Administrative Path (Node-Facing) ---
-	PullFromRemote(ctx context.Context, in *PullFromRemoteRequest, opts ...grpc.CallOption) (*PullFromRemoteResponse, error)
+	Sync(ctx context.Context, in *SyncRequest, opts ...grpc.CallOption) (*SyncResponse, error)
 	ExportGraph(ctx context.Context, in *ExportGraphRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ExportGraphResponse], error)
 }
 
@@ -264,10 +264,10 @@ func (c *cartographerServiceClient) HealthCheck(ctx context.Context, in *HealthC
 	return out, nil
 }
 
-func (c *cartographerServiceClient) PullFromRemote(ctx context.Context, in *PullFromRemoteRequest, opts ...grpc.CallOption) (*PullFromRemoteResponse, error) {
+func (c *cartographerServiceClient) Sync(ctx context.Context, in *SyncRequest, opts ...grpc.CallOption) (*SyncResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(PullFromRemoteResponse)
-	err := c.cc.Invoke(ctx, CartographerService_PullFromRemote_FullMethodName, in, out, cOpts...)
+	out := new(SyncResponse)
+	err := c.cc.Invoke(ctx, CartographerService_Sync_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -324,7 +324,7 @@ type CartographerServiceServer interface {
 	WipeGraph(context.Context, *WipeGraphRequest) (*WipeGraphResponse, error)
 	HealthCheck(context.Context, *HealthCheckRequest) (*HealthCheckResponse, error)
 	// --- Administrative Path (Node-Facing) ---
-	PullFromRemote(context.Context, *PullFromRemoteRequest) (*PullFromRemoteResponse, error)
+	Sync(context.Context, *SyncRequest) (*SyncResponse, error)
 	ExportGraph(*ExportGraphRequest, grpc.ServerStreamingServer[ExportGraphResponse]) error
 	mustEmbedUnimplementedCartographerServiceServer()
 }
@@ -390,8 +390,8 @@ func (UnimplementedCartographerServiceServer) WipeGraph(context.Context, *WipeGr
 func (UnimplementedCartographerServiceServer) HealthCheck(context.Context, *HealthCheckRequest) (*HealthCheckResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method HealthCheck not implemented")
 }
-func (UnimplementedCartographerServiceServer) PullFromRemote(context.Context, *PullFromRemoteRequest) (*PullFromRemoteResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method PullFromRemote not implemented")
+func (UnimplementedCartographerServiceServer) Sync(context.Context, *SyncRequest) (*SyncResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Sync not implemented")
 }
 func (UnimplementedCartographerServiceServer) ExportGraph(*ExportGraphRequest, grpc.ServerStreamingServer[ExportGraphResponse]) error {
 	return status.Error(codes.Unimplemented, "method ExportGraph not implemented")
@@ -741,20 +741,20 @@ func _CartographerService_HealthCheck_Handler(srv interface{}, ctx context.Conte
 	return interceptor(ctx, in, info, handler)
 }
 
-func _CartographerService_PullFromRemote_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(PullFromRemoteRequest)
+func _CartographerService_Sync_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SyncRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(CartographerServiceServer).PullFromRemote(ctx, in)
+		return srv.(CartographerServiceServer).Sync(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: CartographerService_PullFromRemote_FullMethodName,
+		FullMethod: CartographerService_Sync_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(CartographerServiceServer).PullFromRemote(ctx, req.(*PullFromRemoteRequest))
+		return srv.(CartographerServiceServer).Sync(ctx, req.(*SyncRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -850,8 +850,8 @@ var CartographerService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _CartographerService_HealthCheck_Handler,
 		},
 		{
-			MethodName: "PullFromRemote",
-			Handler:    _CartographerService_PullFromRemote_Handler,
+			MethodName: "Sync",
+			Handler:    _CartographerService_Sync_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

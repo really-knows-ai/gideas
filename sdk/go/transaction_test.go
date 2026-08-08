@@ -16,6 +16,14 @@ import (
 )
 
 func newMockTx(mock *mockCartographerClient) *Transaction {
+	return newMockTxWithID(mock, embassyTestTxID)
+}
+
+// newMockTxWithID returns a Transaction bound to the mock with the given
+// transaction ID. An empty ID simulates a write issued without an active
+// transaction — the wire carries no transactionId, and the Cartographer
+// rejects it (FAILED_PRECONDITION "No active transaction").
+func newMockTxWithID(mock *mockCartographerClient, txID string) *Transaction {
 	ctx, cancel := context.WithCancel(context.Background())
 	sess := &session{
 		Cartographer: mock,
@@ -24,8 +32,173 @@ func newMockTx(mock *mockCartographerClient) *Transaction {
 	}
 	return &Transaction{
 		session:   sess,
-		id:        embassyTestTxID,
+		id:        txID,
 		idTypeMap: newIDTypeMap(),
+	}
+}
+
+// noActiveTransactionMsg is the server's transaction-only enforcement
+// rejection message (SPEC Phase 1): every write RPC without an active
+// transaction is refused with FAILED_PRECONDITION carrying this message.
+const noActiveTransactionMsg = "No active transaction"
+
+// ---------------------------------------------------------------------------
+// Transaction-only write model: server rejection propagation (Phase 1)
+// ---------------------------------------------------------------------------
+//
+// The Cartographer rejects every write RPC carrying an empty transactionId
+// with FAILED_PRECONDITION "No active transaction" (SPEC Phase 1
+// transaction-only enforcement; the Graph object no longer exposes mutation
+// methods). Each test below pins both halves of the contract on the SDK
+// layer: a Transaction handle injects its transaction ID, so the write
+// succeeds; a write issued without a transaction (empty transactionId) is
+// rejected by the server, and the SDK propagates that rejection verbatim to
+// the caller.
+
+func TestCreateEntity_NoTransaction_Rejected(t *testing.T) {
+	mock := &mockCartographerClient{
+		createEntity: func(ctx context.Context, req *flowv1.CreateEntityRequest) (*flowv1.CreateEntityResponse, error) {
+			if req.GetTransactionId() == "" {
+				return nil, status.Error(codes.FailedPrecondition, noActiveTransactionMsg)
+			}
+			return &flowv1.CreateEntityResponse{EntityId: "entity-1", EntityType: componentType}, nil
+		},
+	}
+
+	// A Transaction handle injects the transaction ID -> the write succeeds.
+	tx := newMockTx(mock)
+	if _, err := tx.CreateEntity(componentType, nil, nil, nil); err != nil {
+		t.Fatalf("CreateEntity through a Transaction handle should succeed: %v", err)
+	}
+
+	// Issued without a transaction, the server rejects the write and the SDK
+	// surfaces the rejection to the caller.
+	noTx := newMockTxWithID(mock, "")
+	_, err := noTx.CreateEntity(componentType, nil, nil, nil)
+	if err == nil {
+		t.Fatal("expected rejection for CreateEntity without an active transaction")
+	}
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("expected FailedPrecondition, got %v (%v)", status.Code(err), err)
+	}
+	if got, want := status.Convert(err).Message(), noActiveTransactionMsg; got != want {
+		t.Fatalf("expected server rejection message %q, got %q", want, got)
+	}
+}
+
+func TestUpdateEntity_NoTransaction_Rejected(t *testing.T) {
+	mock := &mockCartographerClient{
+		updateEntity: func(ctx context.Context, req *flowv1.UpdateEntityRequest) (*flowv1.UpdateEntityResponse, error) {
+			if req.GetTransactionId() == "" {
+				return nil, status.Error(codes.FailedPrecondition, noActiveTransactionMsg)
+			}
+			return &flowv1.UpdateEntityResponse{EntityId: req.GetId()}, nil
+		},
+	}
+
+	tx := newMockTx(mock)
+	if _, err := tx.UpdateEntity("e1", nil, nil); err != nil {
+		t.Fatalf("UpdateEntity through a Transaction handle should succeed: %v", err)
+	}
+
+	noTx := newMockTxWithID(mock, "")
+	_, err := noTx.UpdateEntity("e1", nil, nil)
+	if err == nil {
+		t.Fatal("expected rejection for UpdateEntity without an active transaction")
+	}
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("expected FailedPrecondition, got %v (%v)", status.Code(err), err)
+	}
+	if got, want := status.Convert(err).Message(), noActiveTransactionMsg; got != want {
+		t.Fatalf("expected server rejection message %q, got %q", want, got)
+	}
+}
+
+//nolint:dupl // DeleteEntity/DeleteEdge rejection tests share the same mock-rejection shape.
+func TestDeleteEntity_NoTransaction_Rejected(t *testing.T) {
+	mock := &mockCartographerClient{
+		deleteEntity: func(ctx context.Context, req *flowv1.DeleteEntityRequest) (*flowv1.DeleteEntityResponse, error) {
+			if req.GetTransactionId() == "" {
+				return nil, status.Error(codes.FailedPrecondition, noActiveTransactionMsg)
+			}
+			return &flowv1.DeleteEntityResponse{EntityId: req.GetId()}, nil
+		},
+	}
+
+	tx := newMockTx(mock)
+	if _, err := tx.DeleteEntity("e1"); err != nil {
+		t.Fatalf("DeleteEntity through a Transaction handle should succeed: %v", err)
+	}
+
+	noTx := newMockTxWithID(mock, "")
+	_, err := noTx.DeleteEntity("e1")
+	if err == nil {
+		t.Fatal("expected rejection for DeleteEntity without an active transaction")
+	}
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("expected FailedPrecondition, got %v (%v)", status.Code(err), err)
+	}
+	if got, want := status.Convert(err).Message(), noActiveTransactionMsg; got != want {
+		t.Fatalf("expected server rejection message %q, got %q", want, got)
+	}
+}
+
+func TestCreateEdge_NoTransaction_Rejected(t *testing.T) {
+	mock := &mockCartographerClient{
+		createEdge: func(ctx context.Context, req *flowv1.CreateEdgeRequest) (*flowv1.CreateEdgeResponse, error) {
+			if req.GetTransactionId() == "" {
+				return nil, status.Error(codes.FailedPrecondition, noActiveTransactionMsg)
+			}
+			return &flowv1.CreateEdgeResponse{
+				EdgeId: "edge-1", FromEntityId: req.GetFromEntityId(), ToEntityId: req.GetToEntityId(),
+			}, nil
+		},
+	}
+
+	tx := newMockTx(mock)
+	if _, err := tx.CreateEdge("DEPENDS_ON", "from-1", "to-1", nil); err != nil {
+		t.Fatalf("CreateEdge through a Transaction handle should succeed: %v", err)
+	}
+
+	noTx := newMockTxWithID(mock, "")
+	_, err := noTx.CreateEdge("DEPENDS_ON", "from-1", "to-1", nil)
+	if err == nil {
+		t.Fatal("expected rejection for CreateEdge without an active transaction")
+	}
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("expected FailedPrecondition, got %v (%v)", status.Code(err), err)
+	}
+	if got, want := status.Convert(err).Message(), noActiveTransactionMsg; got != want {
+		t.Fatalf("expected server rejection message %q, got %q", want, got)
+	}
+}
+
+//nolint:dupl // DeleteEntity/DeleteEdge rejection tests share the same mock-rejection shape.
+func TestDeleteEdge_NoTransaction_Rejected(t *testing.T) {
+	mock := &mockCartographerClient{
+		deleteEdge: func(ctx context.Context, req *flowv1.DeleteEdgeRequest) (*flowv1.DeleteEdgeResponse, error) {
+			if req.GetTransactionId() == "" {
+				return nil, status.Error(codes.FailedPrecondition, noActiveTransactionMsg)
+			}
+			return &flowv1.DeleteEdgeResponse{EdgeId: req.GetId()}, nil
+		},
+	}
+
+	tx := newMockTx(mock)
+	if _, err := tx.DeleteEdge("edge-1"); err != nil {
+		t.Fatalf("DeleteEdge through a Transaction handle should succeed: %v", err)
+	}
+
+	noTx := newMockTxWithID(mock, "")
+	_, err := noTx.DeleteEdge("edge-1")
+	if err == nil {
+		t.Fatal("expected rejection for DeleteEdge without an active transaction")
+	}
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("expected FailedPrecondition, got %v (%v)", status.Code(err), err)
+	}
+	if got, want := status.Convert(err).Message(), noActiveTransactionMsg; got != want {
+		t.Fatalf("expected server rejection message %q, got %q", want, got)
 	}
 }
 

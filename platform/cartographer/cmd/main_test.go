@@ -458,33 +458,14 @@ func (g *recoveryGitStore) IsEmpty(context.Context) (bool, error) { return g.isE
 func (g *recoveryGitStore) HydrationDirs() (string, string)       { return g.dirs[0], g.dirs[1] }
 func (g *recoveryGitStore) WithGitLock(fn func() error) error     { return fn() }
 
-// recoveryStore is a store.Store stub that reports whether main holds graph
-// data (via the same count queries rehydrateMainAfterRecovery issues) and
-// counts RehydrateMainFromFiles invocations.
+// recoveryStore is a store.Store stub that counts RehydrateMainFromFiles
+// invocations. The transaction-only write model removed the main-graph-data
+// probe (rehydrateMainAfterRecovery re-hydrates unconditionally when the repo
+// is non-empty), so the stub no longer models count-query responses.
 type recoveryStore struct {
 	store.Store
-	hasEntities    bool
-	hasEdges       bool
-	cypherErr      error
 	rehydrateCalls int
 	rehydrateErr   error
-}
-
-func (s *recoveryStore) ExecuteCypher(
-	_ context.Context, cypher string, _ map[string]any, _ string,
-) ([]store.CypherRow, error) {
-	if s.cypherErr != nil {
-		return nil, s.cypherErr
-	}
-	count := float64(0)
-	if strings.Contains(cypher, "-[r]->") {
-		if s.hasEdges {
-			count = 1
-		}
-	} else if s.hasEntities {
-		count = 1
-	}
-	return []store.CypherRow{{Values: []any{count}}}, nil
 }
 
 func (s *recoveryStore) RehydrateMainFromFiles(context.Context, string, string) error {
@@ -492,10 +473,11 @@ func (s *recoveryStore) RehydrateMainFromFiles(context.Context, string, string) 
 	return s.rehydrateErr
 }
 
-// TestRehydrateMainAfterRecovery pins the SPEC R8 gating of the startup
-// re-hydration: it must run only when the git repository has commits AND main
-// holds no graph data, and any failure must be surfaced (fail loudly) rather
-// than silently serving a vacuous graph.
+// TestRehydrateMainAfterRecovery pins the SPEC R8 re-hydration behavior: with
+// the transaction-only write model there are no local-only writes to protect,
+// so whenever the git repository has commits (not empty) main is re-hydrated
+// from git unconditionally, and any failure must be surfaced (fail loudly)
+// rather than silently serving a vacuous graph.
 func TestRehydrateMainAfterRecovery(t *testing.T) {
 	ctx := context.Background()
 
@@ -510,29 +492,7 @@ func TestRehydrateMainAfterRecovery(t *testing.T) {
 		}
 	})
 
-	t.Run("populated main skips re-hydration (protects uncommitted writes)", func(t *testing.T) {
-		gs := &recoveryGitStore{isEmpty: false}
-		st := &recoveryStore{hasEntities: true}
-		if err := rehydrateMainAfterRecovery(ctx, st, gs); err != nil {
-			t.Fatalf("rehydrateMainAfterRecovery: %v", err)
-		}
-		if st.rehydrateCalls != 0 {
-			t.Fatalf("re-hydration ran for a populated main: %d calls", st.rehydrateCalls)
-		}
-	})
-
-	t.Run("main holding only edges also skips re-hydration", func(t *testing.T) {
-		gs := &recoveryGitStore{isEmpty: false}
-		st := &recoveryStore{hasEdges: true}
-		if err := rehydrateMainAfterRecovery(ctx, st, gs); err != nil {
-			t.Fatalf("rehydrateMainAfterRecovery: %v", err)
-		}
-		if st.rehydrateCalls != 0 {
-			t.Fatalf("re-hydration ran for a main holding edges: %d calls", st.rehydrateCalls)
-		}
-	})
-
-	t.Run("empty main with committed git re-hydrates", func(t *testing.T) {
+	t.Run("committed git re-hydrates unconditionally", func(t *testing.T) {
 		gs := &recoveryGitStore{isEmpty: false, dirs: [2]string{"entities", "edges"}}
 		st := &recoveryStore{}
 		if err := rehydrateMainAfterRecovery(ctx, st, gs); err != nil {
@@ -564,18 +524,6 @@ func TestRehydrateMainAfterRecovery(t *testing.T) {
 		}
 		if st.rehydrateCalls != 0 {
 			t.Fatalf("re-hydration ran after git state-check failure: %d calls", st.rehydrateCalls)
-		}
-	})
-
-	t.Run("count-query failure is surfaced", func(t *testing.T) {
-		gs := &recoveryGitStore{isEmpty: false}
-		st := &recoveryStore{cypherErr: errors.New("count boom")}
-		err := rehydrateMainAfterRecovery(ctx, st, gs)
-		if err == nil {
-			t.Fatal("expected count-query failure to be surfaced, got nil")
-		}
-		if st.rehydrateCalls != 0 {
-			t.Fatalf("re-hydration ran after count-query failure: %d calls", st.rehydrateCalls)
 		}
 	})
 }
@@ -631,43 +579,6 @@ func TestRehydrateMainAfterRecoveryRestoresCommittedGraph(t *testing.T) {
 	}
 	if ent.Type != "Component" {
 		t.Fatalf("restored entity type = %q, want %q", ent.Type, "Component")
-	}
-}
-
-// TestCountValueIsPositive pins the count() discriminator behind the SPEC R8
-// recovery gate: known numeric kinds classify by sign, and an unexpected
-// numeric kind is an error (fail loudly) instead of returning false — a false
-// would make a populated main look empty and trigger the recovery re-hydration
-// that wipes durable non-transactional writes.
-func TestCountValueIsPositive(t *testing.T) {
-	cases := []struct {
-		name    string
-		value   any
-		want    bool
-		wantErr bool
-	}{
-		{"float64 positive", float64(1), true, false},
-		{"float64 zero", float64(0), false, false},
-		{"float64 negative", float64(-1), false, false},
-		{"int64 positive", int64(1), true, false},
-		{"int64 zero", int64(0), false, false},
-		{"uint64 positive", uint64(1), true, false},
-		{"uint64 zero", uint64(0), false, false},
-		{"int positive", 1, true, false},
-		{"int zero", 0, false, false},
-		{"unexpected string kind errors", "42", false, true},
-		{"unexpected uint32 kind errors", uint32(1), false, true},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got, err := countValueIsPositive(tc.value)
-			if (err != nil) != tc.wantErr {
-				t.Fatalf("countValueIsPositive(%v) error = %v, wantErr %v", tc.value, err, tc.wantErr)
-			}
-			if err == nil && got != tc.want {
-				t.Errorf("countValueIsPositive(%v) = %v, want %v", tc.value, got, tc.want)
-			}
-		})
 	}
 }
 
@@ -1206,7 +1117,7 @@ func TestWaitForShutdownTeardownCompletes(t *testing.T) {
 
 	sigCh := make(chan os.Signal, 1)
 	shutdownDone := make(chan struct{})
-	go waitForShutdown(shutdownDone, sigCh, healthSrv, grpcServer, server, db, gs, nil, nil)
+	go waitForShutdown(shutdownDone, sigCh, healthSrv, grpcServer, server, db, gs, nil, nil, nil)
 
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- grpcServer.Serve(lis) }()
@@ -1273,7 +1184,7 @@ func TestWaitForShutdownLockFailureStillCompletes(t *testing.T) {
 
 	sigCh := make(chan os.Signal, 1)
 	shutdownDone := make(chan struct{})
-	go waitForShutdown(shutdownDone, sigCh, healthSrv, grpcServer, server, db, gs, nil, nil)
+	go waitForShutdown(shutdownDone, sigCh, healthSrv, grpcServer, server, db, gs, nil, nil, nil)
 
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- grpcServer.Serve(lis) }()

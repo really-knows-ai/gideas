@@ -101,9 +101,8 @@ func main() {
 	// (OpenConnection / extension LOAD / rebuildSchemaCache /
 	// restoreMainSchemaMetadata) — it does NOT prove main.lbug is corrupt. The
 	// store deliberately refuses to delete a database it cannot prove corrupt
-	// (see corruptionCandidate in ladybug.go), so deleting main.lbug here would
-	// permanently destroy durable non-transactional writes from a possibly-valid
-	// database. Fail closed without touching the file.
+	// (see corruptionCandidate in ladybug.go), so deleting main.lbug here could
+	// destroy a possibly-valid database. Fail closed without touching the file.
 	if dbErr != nil {
 		slog.Error("Failed to open main.lbug; refusing to delete database (failure is not proven corruption)",
 			"path", filepath.Join(ladybugDBPath, "main.lbug"),
@@ -116,13 +115,14 @@ func main() {
 	// main.lbug by deleting and re-opening it fresh, main holds schema metadata
 	// but no graph data. When the git repository has commits, re-hydrate main
 	// from the file-per-element representation so the service does not serve a
-	// vacuous empty graph while committed data exists. A normal open of a
-	// populated main.lbug is never re-hydrated (its data may include durable
-	// non-transactional writes that git does not yet contain — wiping them on
-	// every restart would be silent data loss), and a fresh install is a no-op
-	// (an empty git repo has no committed state to recover). A failure here is
-	// fatal: serving an empty graph after a corrupt-reopen silently drops all
-	// committed data, so fail loudly instead.
+	// vacuous empty graph while committed data exists. With the
+	// transaction-only write model, re-hydration from git is always complete
+	// and safe (there are no non-transactional writes to main.lbug that git
+	// does not already contain), so any non-empty repo is re-hydrated
+	// unconditionally; a fresh install is a no-op (an empty git repo has no
+	// committed state to recover). A failure here is fatal: serving an empty
+	// graph after a corrupt-reopen silently drops all committed data, so fail
+	// loudly instead.
 	if err := rehydrateMainAfterRecovery(context.Background(), dbStore, gs); err != nil {
 		slog.Error("Failed to re-hydrate main from git after open (SPEC R8 recovery)",
 			"error", err,
@@ -173,8 +173,8 @@ func main() {
 			// fatal at startup. SetRemote validates the URL scheme and returns
 			// ErrUnsupportedURLScheme for non-https/ssh schemes, but the failure
 			// is only surfaced here; the scheme is never re-validated until the
-			// next runtime PullFromRemote (error-table "Unsupported remote URL
-			// scheme" → INVALID_ARGUMENT). Consequence: when pullOnInit is false
+			// next runtime sync (error-table "Unsupported remote URL scheme" →
+			// INVALID_ARGUMENT). Consequence: when pullOnInit is false
 			// (the common default), a broken remote URL silently degrades — the
 			// operator sees only a Warn log at startup and an INVALID_ARGUMENT
 			// on the first pull/push, with no init-time signal for the
@@ -235,25 +235,20 @@ func main() {
 			// re-hydrate main from the cloned file-per-element representation so
 			// the graph is not empty.
 			//
-			// ponytail: this re-hydration is unconditional — unlike
-			// rehydrateMainAfterRecovery it is not gated on mainHasGraphData —
-			// so a clone-on-init wipes durable non-transactional writes that a
-			// healthy main.lbug held before the clone. The clone supersedes
-			// local state by design: the operator explicitly configured
-			// pullOnInit + REMOTE_URL to seed from the remote; the clone path
-			// runs only when the local repo has no graph-data commits (IsEmpty);
-			// and per SPEC R8 non-transactional writes are "only durable once
-			// committed" — writes that never reached git fall in the same
-			// acceptable-loss class as corruption recovery. The R8 gate would
-			// not protect them anyway: the first transaction commit re-hydrates
-			// main from the cloned working tree, so a gate would only defer the
-			// loss and leave main.lbug diverging from git in the interim.
-			// Ceiling: a pullOnInit first boot following a local-only period
-			// silently discards the local graph in favor of the remote seed.
-			// Upgrade path: commit pending main writes to git before cloning
-			// (write-through), or refuse the clone loudly (gate on
-			// mainHasGraphData and fail startup) if preserving local state over
-			// remote seeding becomes a product requirement.
+			// ponytail: this re-hydration is unconditional — like
+			// rehydrateMainAfterRecovery it re-hydrates whenever the repo is
+			// non-empty — so a clone-on-init replaces main.lbug's prior content
+			// with the remote seed. That is the intended design: with the
+			// transaction-only write model there are no non-transactional
+			// writes to main.lbug that git does not already contain, so
+			// re-hydration from git is always complete and safe. The clone
+			// supersedes local state by design: the operator explicitly
+			// configured pullOnInit + REMOTE_URL to seed from the remote, and
+			// the clone path runs only when the local repo has no graph-data
+			// commits (IsEmpty). Ceiling: a pullOnInit first boot following a
+			// local-only period replaces the local graph with the remote seed —
+			// acceptable because committed data is git-backed and survives, and
+			// uncommitted data cannot exist under the transaction-only model.
 			func() error {
 				entitiesDir := filepath.Join(ladybugDBPath, "graph-repo/entities")
 				edgesDir := filepath.Join(ladybugDBPath, "graph-repo/edges")
@@ -273,6 +268,15 @@ func main() {
 		opts = append(opts, service.WithAuditPublisher(auditPub))
 	}
 	opts = append(opts, service.WithLadybugPath(ladybugDBPath))
+
+	// Create and start the background sync worker if a remote URL is configured.
+	var syncW *service.SyncWorker
+	if remoteURL != "" {
+		syncW = service.NewSyncWorker(remoteURL, gs, dbStore, service.RealClock{})
+		opts = append(opts, service.WithSyncWorker(syncW))
+		go syncW.Run()
+		slog.Info("Background sync worker started")
+	}
 
 	// The per-transaction change-log admission cap (100K entries, SPEC change-log
 	// capacity requirement) is passed to NewChangeLogWithCap inside the
@@ -345,7 +349,7 @@ func main() {
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
 	shutdownDone := make(chan struct{})
-	go waitForShutdown(shutdownDone, sigCh, healthSrv, grpcServer, server, dbStore, gs, auditPub, eventBusCloser)
+	go waitForShutdown(shutdownDone, sigCh, healthSrv, grpcServer, server, dbStore, gs, auditPub, eventBusCloser, syncW)
 
 	// -----------------------------------------------------------------------
 	// 15. Serve
@@ -369,13 +373,13 @@ func main() {
 // git repository has commits (SPEC R8 corruption recovery, SPEC.md:509-519).
 // ladybug.Open performs the destructive half of R8 recovery — deleting a
 // corrupted main.lbug and re-opening a fresh, empty database — but does not
-// restore the committed graph; that is this function's job. Re-hydration is
-// gated so a normal open of a populated main.lbug is never re-hydrated: its
-// data may include durable non-transactional writes that git does not yet
-// contain (SPEC Data Flow: mutations outside transactions go through main.lbug
-// directly), and wiping them on every restart would be silent data loss. A
-// fresh install is a no-op (an empty git repo has no committed state to
-// recover). Any error is propagated so the caller can fail startup loudly.
+// restore the committed graph; that is this function's job. With the
+// transaction-only write model there are no non-transactional writes to
+// main.lbug that git does not already contain, so re-hydration from git is
+// always complete and safe: whenever the repo is not empty, main is re-hydrated
+// unconditionally. A fresh install is a no-op (an empty git repo has no
+// committed state to recover). Any error is propagated so the caller can fail
+// startup loudly.
 func rehydrateMainAfterRecovery(ctx context.Context, dbStore store.Store, gs gitstore.GitStore) error {
 	// IsEmpty must be called with the git lock held (GitStore interface
 	// contract); startup is single-threaded, but the check still goes through
@@ -391,67 +395,12 @@ func rehydrateMainAfterRecovery(ctx context.Context, dbStore store.Store, gs git
 	if empty {
 		return nil
 	}
-	hasData, err := mainHasGraphData(ctx, dbStore)
-	if err != nil {
-		return fmt.Errorf("inspect main graph state: %w", err)
-	}
-	if hasData {
-		return nil
-	}
 	entitiesDir, edgesDir := gs.HydrationDirs()
 	if err := dbStore.RehydrateMainFromFiles(ctx, entitiesDir, edgesDir); err != nil {
 		return fmt.Errorf("re-hydrate main from git files: %w", err)
 	}
 	slog.Info("Main re-hydrated from git working tree (SPEC R8 recovery)")
 	return nil
-}
-
-// mainHasGraphData reports whether main holds any entities or edges. It is the
-// discriminator between a corruption-recovery reopen (schema metadata restored,
-// data lost — re-hydration required) and a normal open of a populated database
-// (data present — re-hydration would destroy uncommitted non-transactional
-// writes). Count queries are engine-side aggregations returning a single row,
-// so the check is cheap enough to run on every startup.
-func mainHasGraphData(ctx context.Context, dbStore store.Store) (bool, error) {
-	for _, q := range []string{"MATCH (n) RETURN count(n);", "MATCH ()-[r]->() RETURN count(r);"} {
-		rows, err := dbStore.ExecuteCypher(ctx, q, nil, "")
-		if err != nil {
-			return false, err
-		}
-		if len(rows) != 1 || len(rows[0].Values) != 1 {
-			continue
-		}
-		positive, err := countValueIsPositive(rows[0].Values[0])
-		if err != nil {
-			return false, err
-		}
-		if positive {
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
-// countValueIsPositive reports whether a LadybugDB count() result value is
-// greater than zero. The go-ladybug wrapper surfaces DuckDB numerics as
-// float64; the other numeric kinds are handled defensively because treating a
-// count of a populated database as zero would wrongly re-hydrate (and wipe) it.
-// An unexpected numeric kind is surfaced as an error (fail loudly): returning
-// false for it would make a populated main look empty and trigger the R8
-// recovery re-hydration, wiping durable non-transactional writes.
-func countValueIsPositive(v any) (bool, error) {
-	switch n := v.(type) {
-	case float64:
-		return n > 0, nil
-	case int64:
-		return n > 0, nil
-	case uint64:
-		return n > 0, nil
-	case int:
-		return n > 0, nil
-	default:
-		return false, fmt.Errorf("unexpected count() result kind %T from LadybugDB", v)
-	}
 }
 
 func tryRemotePullOnInit(
@@ -704,6 +653,7 @@ func waitForShutdown(
 	gs gitstore.GitStore,
 	auditPub *eventbus.AsyncPublisher,
 	eventBusCloser func() error,
+	syncW *service.SyncWorker,
 ) {
 	sig := <-sigCh
 	slog.Info("Received signal, shutting down", "signal", sig)
@@ -727,9 +677,8 @@ func waitForShutdown(
 		// Failure mode: if the teardown (a slow dbStore.Close flushing the branch
 		// connections + main handle, or a slow git lock acquisition + RestoreMain
 		// + CleanUntracked) exceeds that leftover ~70s window, the process is
-		// SIGKILLed mid-write — the tail of durable non-transactional writes is
-		// lost and git is left on a stranded transaction branch that the next
-		// startup's R8 re-hydration must reconcile. If deployment.yaml's grace
+		// SIGKILLed mid-teardown and git is left on a stranded transaction branch
+		// that the next startup's R8 re-hydration must reconcile. If deployment.yaml's grace
 		// period is ever lowered below this 30s budget, a slow drain consumes the
 		// whole window and the durability steps never run at all. Ceiling: the
 		// budget number lives only on each side (code 30s / manifest 100s) with no
@@ -739,6 +688,11 @@ func waitForShutdown(
 		// independently bounded and surface (log) when it approaches the grace
 		// window so operators can size terminationGracePeriodSeconds from evidence.
 		grpcServer.Stop()
+	}
+
+	if syncW != nil {
+		slog.Info("Shutting down sync worker")
+		syncW.Stop()
 	}
 
 	server.StopGC()
