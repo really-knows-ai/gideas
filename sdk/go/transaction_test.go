@@ -8,7 +8,9 @@ import (
 	"time"
 
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/structpb"
 )
@@ -769,6 +771,31 @@ func TestRefresh(t *testing.T) {
 	}
 }
 
+// TestRefresh_AbortedSurfaces pins the SPEC R4 refresh-conflict boundary
+// (error-table row "Refresh conflict") on the SDK layer: when the server
+// rejects Refresh with ABORTED — the same entity/edge modified on main since
+// the transaction was last refreshed (or began) — the SDK surfaces that
+// status to the caller, matching the R4 example's "start over" branch on
+// tx.Refresh()'s error.
+func TestRefresh_AbortedSurfaces(t *testing.T) {
+	mock := &mockCartographerClient{
+		refreshTx: func(ctx context.Context,
+			req *flowv1.RefreshTransactionRequest,
+		) (*flowv1.RefreshTransactionResponse, error) {
+			return nil, status.Error(codes.Aborted, "refresh conflict: same entity modified on main")
+		},
+	}
+	tx := newMockTx(mock)
+
+	err := tx.Refresh()
+	if err == nil {
+		t.Fatal("expected ABORTED from Refresh on conflict")
+	}
+	if status.Code(err) != codes.Aborted {
+		t.Errorf("expected ABORTED, got %v", status.Code(err))
+	}
+}
+
 func TestCommit(t *testing.T) {
 	var capturedTxID string
 	mock := &mockCartographerClient{
@@ -909,6 +936,40 @@ func TestExtendTimeout_SurfacesAppliedTimeout(t *testing.T) {
 	}
 	if tx.timeout != 48*time.Hour {
 		t.Errorf("expected tx.timeout set to applied 48h, got %v", tx.timeout)
+	}
+}
+
+// TestExtendTimeout_ServerRejectsOverCap pins the SPEC error-table row
+// "Invalid transaction timeout duration" on the SDK layer: an extension whose
+// total lifetime would exceed the 7-day hard maximum is rejected by the
+// server with INVALID_ARGUMENT — never silently capped — and the SDK surfaces
+// that rejection to the caller (mirroring TestBeginTransaction_WithTimeout's
+// pin of the symmetric BeginTransaction rejection).
+func TestExtendTimeout_ServerRejectsOverCap(t *testing.T) {
+	var capturedDuration *durationpb.Duration
+	mock := &mockCartographerClient{
+		extendTimeout: func(ctx context.Context, req *flowv1.ExtendTimeoutRequest) (*flowv1.ExtendTimeoutResponse, error) {
+			capturedDuration = req.GetDuration()
+			return nil, status.Error(codes.InvalidArgument, "invalid transaction timeout duration")
+		},
+	}
+	tx := newMockTx(mock)
+
+	got, err := tx.ExtendTimeout(10 * 24 * time.Hour)
+	if err == nil {
+		t.Fatal("expected INVALID_ARGUMENT rejection for over-cap extension")
+	}
+	if status.Code(err) != codes.InvalidArgument {
+		t.Errorf("expected INVALID_ARGUMENT, got %v", status.Code(err))
+	}
+	if got != 0 {
+		t.Errorf("expected zero duration on rejection, got %v", got)
+	}
+	if capturedDuration == nil {
+		t.Fatal("expected duration to be set on request")
+	}
+	if capturedDuration.AsDuration() != 10*24*time.Hour {
+		t.Errorf("expected requested duration 10d sent verbatim, got %v", capturedDuration.AsDuration())
 	}
 }
 

@@ -12,12 +12,12 @@
 // role.yaml, rolebinding.yaml, and serviceaccount.yaml from config/rbac/).
 //
 //go:generate rm -f crd/*.yaml operator/*.yaml
-//go:generate cp ../../platform/operator/config/crd/bases/*.yaml crd/
-//go:generate sed '1,/^---$/d; s/namespace: system/namespace: foundry-system/' ../../platform/operator/config/manager/manager.yaml > operator/deployment.yaml
-//go:generate sed -n '1,/^---$/{/^---$/d;s/name: system/name: foundry-system/;p}' ../../platform/operator/config/manager/manager.yaml > operator/namespace.yaml
-//go:generate cp ../../platform/operator/config/rbac/role.yaml operator/role.yaml
-//go:generate sed 's/namespace: system/namespace: foundry-system/' ../../platform/operator/config/rbac/role_binding.yaml > operator/rolebinding.yaml
-//go:generate sed 's/namespace: system/namespace: foundry-system/' ../../platform/operator/config/rbac/service_account.yaml > operator/serviceaccount.yaml
+//go:generate cp ../../../platform/operator/config/crd/bases/*.yaml crd/
+//go:generate sed '1,/^---$/d; s/namespace: system/namespace: foundry-system/' ../../../platform/operator/config/manager/manager.yaml > operator/deployment.yaml
+//go:generate sed -n '1,/^---$/{/^---$/d;s/name: system/name: foundry-system/;p}' ../../../platform/operator/config/manager/manager.yaml > operator/namespace.yaml
+//go:generate cp ../../../platform/operator/config/rbac/role.yaml operator/role.yaml
+//go:generate sed 's/namespace: system/namespace: foundry-system/' ../../../platform/operator/config/rbac/role_binding.yaml > operator/rolebinding.yaml
+//go:generate sed 's/namespace: system/namespace: foundry-system/' ../../../platform/operator/config/rbac/service_account.yaml > operator/serviceaccount.yaml
 package manifestfs
 
 import (

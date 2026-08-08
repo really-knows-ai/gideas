@@ -2046,6 +2046,235 @@ func TestReconcileBlockedThenFailedClearsBlocked(t *testing.T) {
 	}
 }
 
+// TestApplySchemaUsesSnapshotSpecNotRefetchedSpec pins the step-10 snapshot contract of
+// applySchema (foundrygraph_controller.go): the schema sent to the Cartographer is built
+// from the passed reconcile-start snapshot, NOT from the CR re-fetched inside
+// applySchema. A spec edited on the apiserver between the reconcile-start snapshot and
+// the re-fetch must not be applied while the schema diff and the last-applied-spec
+// annotation still reference the start snapshot — otherwise the next reconcile
+// re-detects a phantom diff and, for destructive changes, re-runs WipeGraph (wiping
+// graph data written since the first apply).
+func TestApplySchemaUsesSnapshotSpecNotRefetchedSpec(t *testing.T) {
+	s := scheme.Scheme
+	_ = flowv1.AddToScheme(s)
+
+	// The spec the reconcile diff was computed against (reconcile-start snapshot).
+	snapshot := &flowv1.FoundryGraphSpec{EntityTypes: []flowv1.EntityTypeSpec{{Name: "Widget"}}}
+	// The CR's spec at applySchema's re-fetch — a mid-reconcile user edit.
+	edited := flowv1.FoundryGraphSpec{EntityTypes: []flowv1.EntityTypeSpec{{Name: "Gadget"}}}
+
+	var pushed *flowv1gen.Schema
+	dialer := func(ctx context.Context, endpoint string) (CartographerClient, error) {
+		return &mockCartographerClient{
+			applySchemaFn: func(ctx context.Context, req *flowv1gen.ApplySchemaRequest) (*flowv1gen.ApplySchemaResponse, error) {
+				pushed = req.Schema
+				return &flowv1gen.ApplySchemaResponse{}, nil
+			},
+		}, nil
+	}
+
+	// The re-fetch inside applySchema returns a CR whose spec differs from the
+	// snapshot (the mid-reconcile edit). applySchema must still apply the snapshot.
+	fakeCli := fake.NewClientBuilder().WithScheme(s).WithInterceptorFuncs(interceptor.Funcs{
+		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			fg := obj.(*flowv1.FoundryGraph)
+			fg.Name = defaultGraphName
+			fg.Namespace = testNS
+			fg.Spec = *edited.DeepCopy()
+			return nil
+		},
+	}).Build()
+	r := &FoundryGraphReconciler{Client: fakeCli, Scheme: s, CartographerDialer: dialer}
+	fg := &flowv1.FoundryGraph{ObjectMeta: metav1.ObjectMeta{Name: defaultGraphName, Namespace: testNS}}
+
+	if err := r.applySchema(context.Background(), fg, snapshot); err != nil {
+		t.Fatalf("applySchema: %v", err)
+	}
+	want := (&FoundryGraphReconciler{}).schemaFromCRD(snapshot)
+	if !reflect.DeepEqual(pushed, want) {
+		t.Errorf("expected the applied schema to be built from the reconcile-start snapshot, got %+v", pushed)
+	}
+	if notWant := (&FoundryGraphReconciler{}).schemaFromCRD(&edited); reflect.DeepEqual(pushed, notWant) {
+		t.Error("expected applySchema NOT to apply the re-fetched (edited) spec")
+	}
+}
+
+// TestReconcileMidReconcileEditKeepsAnnotationAndAppliedSchemaInSync pins the step-10
+// snapshot contract end to end: a user spec edit landing between the reconcile-start
+// snapshot and the step-10 re-fetch must NOT be applied at step 10. The reconcile
+// applies the reconcile-start spec, records exactly that spec in the last-applied-spec
+// annotation (so annotation == applied schema — the next reconcile sees no phantom
+// diff), and leaves the edited spec for the next reconcile's diff, which re-evaluates
+// the destructive decision (WipeGraph) against it. Before the fix, step 10 applied the
+// re-fetched (edited) spec while the annotation recorded the start spec — the next
+// reconcile re-detected a diff for an already-applied change and, for destructive
+// edits, re-ran WipeGraph over a converged graph (wiping graph data written since the
+// first apply).
+func TestReconcileMidReconcileEditKeepsAnnotationAndAppliedSchemaInSync(t *testing.T) {
+	s := scheme.Scheme
+	_ = flowv1.AddToScheme(s)
+	_ = appsv1.AddToScheme(s)
+	_ = corev1.AddToScheme(s)
+	_ = rbacv1.AddToScheme(s)
+
+	ns := testNS
+	// Last-applied annotation records Widget with property a; the reconcile-start spec
+	// adds property b → a non-destructive diff.
+	startSpec := flowv1.FoundryGraphSpec{
+		EntityTypes: []flowv1.EntityTypeSpec{{
+			Name: "Widget",
+			Properties: []flowv1.PropertySpec{
+				{Name: "a"},
+				{Name: "b"},
+			},
+		}},
+	}
+	// The mid-reconcile user edit removes property b → destructive relative to the
+	// start spec (would require WipeGraph if the operator converged to it in the same
+	// reconcile the diff was computed against).
+	editedSpec := flowv1.FoundryGraphSpec{
+		EntityTypes: []flowv1.EntityTypeSpec{{
+			Name:       "Widget",
+			Properties: []flowv1.PropertySpec{{Name: "a"}},
+		}},
+	}
+
+	fg := &flowv1.FoundryGraph{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       defaultGraphName,
+			Namespace:  ns,
+			Finalizers: []string{finalizerName},
+			Annotations: map[string]string{
+				lastAppliedSpecAnnotation: `{"entityTypes":[{"name":"Widget","properties":[{"name":"a"}]}]}`,
+			},
+		},
+		Spec: startSpec,
+	}
+
+	// Operator-namespace signing secrets so reconcileSecrets succeeds.
+	osign := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: operatorSigningKeySecretName, Namespace: "operator-ns"}, Data: map[string][]byte{"key": []byte("op"), "private-key": []byte("op-p")}}
+	ssign := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: sidecarSigningKeySecretName, Namespace: "operator-ns"}, Data: map[string][]byte{"key": []byte("sd"), "private-key": []byte("sd-p")}}
+	// A ready Deployment so waitForReadiness returns immediately.
+	replicas := int32(1)
+	readyDeploy := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: cartographerSvcName, Namespace: ns},
+		Spec:       appsv1.DeploymentSpec{Replicas: &replicas},
+		Status:     appsv1.DeploymentStatus{AvailableReplicas: 1, ReadyReplicas: 1, UpdatedReplicas: 1},
+	}
+
+	// The 2nd FoundryGraph Get of a reconcile is the step-10 re-fetch inside
+	// applySchema. Serve the mid-reconcile edit there AND persist it to the store so
+	// reconcile 2's initial Get (and diff) sees it — a faithful simulation of the
+	// user's apiserver edit. Non-FoundryGraph Gets delegate to the store.
+	fgGets := 0
+	interceptorFuncs := interceptor.Funcs{
+		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if _, ok := obj.(*flowv1.FoundryGraph); !ok {
+				return c.Get(ctx, key, obj, opts...)
+			}
+			fgGets++
+			if err := c.Get(ctx, key, obj, opts...); err != nil {
+				return err
+			}
+			if fgGets == 2 {
+				edit := obj.(*flowv1.FoundryGraph)
+				edit.Spec = *editedSpec.DeepCopy()
+				if err := c.Update(ctx, obj); err != nil {
+					return err
+				}
+			}
+			return nil
+		},
+	}
+	fakeCli := fake.NewClientBuilder().WithScheme(s).WithObjects(fg, osign, ssign, readyDeploy).WithStatusSubresource(fg).WithInterceptorFuncs(interceptorFuncs).Build()
+
+	var applied []*flowv1gen.Schema
+	wipeCalls := 0
+	r := &FoundryGraphReconciler{
+		Client:            fakeCli,
+		Scheme:            s,
+		OperatorNamespace: "operator-ns",
+		CartographerPort:  50051,
+		CartographerImage: "cartographer:latest",
+		ReadinessTimeout:  time.Second,
+		ProxyRoutingTable: NewProxyRoutingTable(),
+		CartographerDialer: func(ctx context.Context, endpoint string) (CartographerClient, error) {
+			return &mockCartographerClient{
+				applySchemaFn: func(ctx context.Context, req *flowv1gen.ApplySchemaRequest) (*flowv1gen.ApplySchemaResponse, error) {
+					applied = append(applied, req.Schema)
+					return &flowv1gen.ApplySchemaResponse{}, nil
+				},
+				wipeGraphFn: func(ctx context.Context, _ *flowv1gen.WipeGraphRequest) (*flowv1gen.WipeGraphResponse, error) {
+					wipeCalls++
+					return &flowv1gen.WipeGraphResponse{}, nil
+				},
+			}, nil
+		},
+	}
+
+	ctx := context.Background()
+	nn := types.NamespacedName{Name: defaultGraphName, Namespace: ns}
+
+	// Reconcile 1: the annotation→start diff is non-destructive (adds property b), so
+	// no WipeGraph. The step-10 re-fetch lands on the mid-reconcile edit, but the
+	// applied schema and the last-applied annotation must BOTH record the
+	// reconcile-start spec — the annotation may not lag the schema actually applied.
+	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: nn}); err != nil {
+		t.Fatalf("reconcile 1: %v", err)
+	}
+	if wipeCalls != 0 {
+		t.Errorf("expected no WipeGraph on reconcile 1 (non-destructive diff), got %d", wipeCalls)
+	}
+	if len(applied) != 2 {
+		t.Fatalf("expected 2 ApplySchema calls on reconcile 1 (existing pod + step 10), got %d", len(applied))
+	}
+	wantStart := (&FoundryGraphReconciler{}).schemaFromCRD(&startSpec)
+	if !reflect.DeepEqual(applied[len(applied)-1], wantStart) {
+		t.Errorf("expected the step-10 ApplySchema to receive the reconcile-start spec, got %+v", applied[len(applied)-1])
+	}
+	if notWant := (&FoundryGraphReconciler{}).schemaFromCRD(&editedSpec); reflect.DeepEqual(applied[len(applied)-1], notWant) {
+		t.Error("expected the step-10 ApplySchema NOT to apply the mid-reconcile edited spec")
+	}
+
+	var got flowv1.FoundryGraph
+	if err := fakeCli.Get(ctx, nn, &got); err != nil {
+		t.Fatalf("get FoundryGraph after reconcile 1: %v", err)
+	}
+	ann, ok := got.Annotations[lastAppliedSpecAnnotation]
+	if !ok {
+		t.Fatal("expected the last-applied-spec annotation after reconcile 1")
+	}
+	var recorded flowv1.FoundryGraphSpec
+	if err := json.Unmarshal([]byte(ann), &recorded); err != nil {
+		t.Fatalf("unmarshal annotation: %v", err)
+	}
+	if !specSemanticallyEqual(&recorded, &startSpec) {
+		t.Errorf("expected the annotation to record the reconcile-start spec (== the applied schema), got %s", ann)
+	}
+	if specSemanticallyEqual(&recorded, &editedSpec) {
+		t.Error("expected the annotation NOT to record the mid-reconcile edited spec")
+	}
+
+	// Reconcile 2: the persisted mid-reconcile edit (removes property b) is now the
+	// current spec, so the annotation→current diff is destructive and is applied
+	// exactly once — the first, legitimate application of the edited spec, with the
+	// WipeGraph decision made against the edited spec (not re-discovered for an
+	// already-applied change).
+	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: nn}); err != nil {
+		t.Fatalf("reconcile 2: %v", err)
+	}
+	if wipeCalls != 1 {
+		t.Errorf("expected exactly 1 WipeGraph across both reconciles (the destructive edit, applied once), got %d", wipeCalls)
+	}
+	if len(applied) != 4 {
+		t.Fatalf("expected 4 ApplySchema calls across both reconciles, got %d", len(applied))
+	}
+	wantEdited := (&FoundryGraphReconciler{}).schemaFromCRD(&editedSpec)
+	if !reflect.DeepEqual(applied[len(applied)-1], wantEdited) {
+		t.Errorf("expected reconcile 2 to converge to the edited spec, got %+v", applied[len(applied)-1])
+	}
+}
+
 // TestWaitForReadinessTimeout exercises the SPEC R6 readiness-timeout boundary: a
 // Deployment that never becomes ready must make waitForReadiness return the timeout error
 // (the ctx.Done / time.After loop exits via the deadline). Without ready replicas, the poll

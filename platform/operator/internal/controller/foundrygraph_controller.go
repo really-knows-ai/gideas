@@ -226,19 +226,7 @@ func (r *FoundryGraphReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	}
 
 	// Steps 4-8: Reconcile infrastructure.
-	if err := r.reconcilePVC(ctx, &fg); err != nil {
-		return r.setFailedCondition(ctx, &fg, err)
-	}
-	if err := r.reconcileSecrets(ctx, &fg); err != nil {
-		return r.setFailedCondition(ctx, &fg, err)
-	}
-	if err := r.reconcileRBAC(ctx, &fg); err != nil {
-		return r.setFailedCondition(ctx, &fg, err)
-	}
-	if err := r.reconcileDeployment(ctx, &fg); err != nil {
-		return r.setFailedCondition(ctx, &fg, err)
-	}
-	if err := r.reconcileService(ctx, &fg); err != nil {
+	if err := r.reconcileInfrastructure(ctx, &fg); err != nil {
 		return r.setFailedCondition(ctx, &fg, err)
 	}
 
@@ -251,7 +239,14 @@ func (r *FoundryGraphReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	}
 
 	// Step 10: ApplySchema on new pod. Idempotent — no-op if schema already applied.
-	if err := r.applySchema(ctx, &fg); err != nil {
+	// Apply the reconcile-start snapshot (currentSpec) — the same spec the schema diff
+	// and the last-applied-spec annotation reference — never a re-fetched latest spec:
+	// a spec edited mid-reconcile must not be applied while the annotation records a
+	// different snapshot, or the next reconcile re-detects a phantom diff and, for
+	// destructive changes, re-runs WipeGraph (wiping graph data written since the
+	// first apply). Any mid-reconcile edit is picked up by the next reconcile's diff,
+	// which re-evaluates the destructive decision against the edited spec.
+	if err := r.applySchema(ctx, &fg, &currentSpec); err != nil {
 		return r.setFailedCondition(ctx, &fg, err)
 	}
 
@@ -364,13 +359,25 @@ func (r *FoundryGraphReconciler) applySchemaOnExisting(ctx context.Context, fg *
 	return nil
 }
 
-// applySchema applies the schema to a (newly-ready) Cartographer pod.
-func (r *FoundryGraphReconciler) applySchema(ctx context.Context, fg *flowv1.FoundryGraph) error {
-	// Re-fetch the CR to get the latest spec. A concurrently-deleted CR must not fall
-	// through as a zero-valued object and have an empty schema dialed+applied against a
-	// live Cartographer (SPEC R6 step 6: ApplySchema runs only on the CR this reconciler
-	// owns). Surface any re-fetch error — IsNotFound included — so the schema-apply
-	// aborts and the next reconcile's initial Get drops the now-absent request.
+// applySchema applies the reconcile-start schema snapshot to a (newly-ready)
+// Cartographer pod. The schema is built from `spec` — the same snapshot the schema
+// diff, the WipeGraph decision, and the last-applied-spec annotation reference — NOT
+// from the re-fetched CR's latest spec. Applying the latest spec while the diff (and
+// the annotation) reference the reconcile-start snapshot would let a spec edited
+// mid-reconcile be applied while the annotation records a different spec; the next
+// reconcile would re-detect a phantom diff and, for destructive changes, re-run
+// WipeGraph — wiping graph data written since the first apply. The CR is still
+// re-fetched so a concurrently-deleted CR cannot fall through as a zero-valued object
+// and have an empty schema dialed+applied against a live Cartographer (SPEC R6 step 6:
+// ApplySchema runs only on the CR this reconciler owns), but only the object's
+// existence is checked — the schema applied is the reconcile-start snapshot. Any
+// mid-reconcile edit is picked up by the next reconcile's diff, which re-evaluates the
+// destructive decision against the edited spec.
+func (r *FoundryGraphReconciler) applySchema(ctx context.Context, fg *flowv1.FoundryGraph, spec *flowv1.FoundryGraphSpec) error {
+	// Re-fetch the CR purely as a concurrent-deletion guard (a deleted CR must not
+	// fall through as a zero-valued object and have a schema applied to a live
+	// Cartographer). The re-fetched spec is intentionally not used: the schema applied
+	// below is the reconcile-start snapshot so diff, apply, and annotation stay in sync.
 	if err := r.Get(ctx, client.ObjectKeyFromObject(fg), fg); err != nil {
 		return fmt.Errorf("re-fetch FoundryGraph before ApplySchema: %w", err)
 	}
@@ -392,7 +399,7 @@ func (r *FoundryGraphReconciler) applySchema(ctx context.Context, fg *flowv1.Fou
 	}
 
 	// ApplySchema
-	schema := r.schemaFromCRD(&fg.Spec)
+	schema := r.schemaFromCRD(spec)
 	if _, err := c.ApplySchema(rpcCtx, &flowv1gen.ApplySchemaRequest{Schema: schema}); err != nil {
 		return fmt.Errorf("apply schema: %w", err)
 	}

@@ -74,17 +74,18 @@ type GraphChunk struct {
 // Stop cancels the stream. A finalizer provides best-effort cancellation if
 // the caller forgets to call Stop().
 type ExportStream struct {
-	ctx    context.Context
 	cancel context.CancelFunc
 	stream grpc.ServerStreamingClient[flowv1.ExportGraphResponse]
 }
 
 // newExportStream creates an ExportStream with a finalizer that cancels the
-// stream context on GC.
+// stream context on GC. The stream's context is pinned by the gRPC client at
+// the ExportGraph call site; the stream type itself only needs the cancel
+// function to release it early.
 func newExportStream(
-	ctx context.Context, cancel context.CancelFunc, stream grpc.ServerStreamingClient[flowv1.ExportGraphResponse],
+	cancel context.CancelFunc, stream grpc.ServerStreamingClient[flowv1.ExportGraphResponse],
 ) *ExportStream {
-	s := &ExportStream{ctx: ctx, cancel: cancel, stream: stream}
+	s := &ExportStream{cancel: cancel, stream: stream}
 	runtime.SetFinalizer(s, func(s *ExportStream) { s.cancel() })
 	return s
 }
@@ -371,7 +372,7 @@ func (g *Graph) SearchNeighbors(embedding []float32, entityType string, topK int
 		var callErr error
 		resp, callErr = g.session.Cartographer.SearchNeighbors(ctx, req)
 		return callErr
-	}, "", entityType)
+	}, "")
 	if err != nil {
 		return nil, err
 	}
@@ -406,7 +407,7 @@ func (g *Graph) FullTextSearch(query, entityType string) ([]Entity, error) {
 		var callErr error
 		resp, callErr = g.session.Cartographer.FullTextSearch(ctx, req)
 		return callErr
-	}, "", entityType)
+	}, "")
 	if err != nil {
 		return nil, err
 	}
@@ -448,7 +449,7 @@ func (g *Graph) ListEntities(entityType string, opts ...ListEntitiesOption) (*En
 		var callErr error
 		resp, callErr = g.session.Cartographer.ListEntities(ctx, req)
 		return callErr
-	}, "", entityType)
+	}, "")
 	if err != nil {
 		return nil, err
 	}
@@ -503,7 +504,7 @@ func (g *Graph) CreateEntity(
 		var callErr error
 		resp, callErr = g.session.Cartographer.CreateEntity(ctx, req)
 		return callErr
-	}, "", entityType)
+	}, "")
 	if err != nil {
 		return nil, err
 	}
@@ -773,7 +774,7 @@ func (g *Graph) ExportGraph(format string) (*ExportStream, error) {
 		cancel()
 		return nil, err
 	}
-	return newExportStream(establishCtx, streamCancel, stream), nil
+	return newExportStream(streamCancel, stream), nil
 }
 
 // ---------------------------------------------------------------------------

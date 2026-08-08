@@ -108,6 +108,7 @@ const (
 	ChangeModEntity
 	ChangeDelEntity
 	ChangeAddEdge
+	ChangeModEdge
 	ChangeDelEdge
 )
 
@@ -135,6 +136,7 @@ type ChangeLog struct {
 	ModifiedEntities map[string]*EntityEntry  // entityID -> entry
 	DeletedEntities  map[string]*DeletionInfo // entityID -> deletion info (type + suspected flag)
 	AddedEdges       map[string]*EdgeEntry    // edgeID -> entry
+	ModifiedEdges    map[string]*EdgeEntry    // edgeID -> entry
 	DeletedEdges     map[string]*DeletionInfo // edgeID -> deletion info (type + suspected flag)
 	mu               sync.Mutex
 	count            int // total tracked changes

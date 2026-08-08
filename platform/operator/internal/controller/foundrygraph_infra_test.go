@@ -996,7 +996,7 @@ func TestApplySchemaReFetchNotFoundSurfacesError(t *testing.T) {
 
 	// The in-memory zero-valued object stands in for the stale object the reconciler holds.
 	fg := &flowv1.FoundryGraph{ObjectMeta: metav1.ObjectMeta{Name: defaultGraphName, Namespace: testNS}}
-	err := r.applySchema(context.Background(), fg)
+	err := r.applySchema(context.Background(), fg, &fg.Spec)
 	if err == nil {
 		t.Fatal("expected applySchema to surface the NotFound re-fetch, got nil")
 	}

@@ -72,7 +72,7 @@ func (db *ladybugDB) CreateEntity(
 	dim := 0
 	if def.EnableVectorIndex {
 		var derr error
-		dim, derr = getEmbeddingDimension(conn, entityType)
+		dim, derr = getEmbeddingDimension(conn, entityType, def.EnableVectorIndex)
 		if derr != nil {
 			return nil, fmt.Errorf("read embedding dimension for %q: %w", entityType, derr)
 		}
@@ -245,7 +245,7 @@ func (db *ladybugDB) UpdateEntity(
 		}
 	}
 	if def.EnableVectorIndex && hasNewEmb {
-		dim, derr := getEmbeddingDimension(conn, entity.Type)
+		dim, derr := getEmbeddingDimension(conn, entity.Type, def.EnableVectorIndex)
 		if derr != nil {
 			return nil, fmt.Errorf("read embedding dimension for %q: %w", entity.Type, derr)
 		}
@@ -688,7 +688,7 @@ func findEntityByID(conn *lbug.Connection, typeDefs map[string]*store.EntityType
 			if !ok {
 				return nil, fmt.Errorf("unexpected type in entity result for %q: got %T, expected Node", typeName, m["n"])
 			}
-			return entityFromNode(node, typeName), nil
+			return entityFromNode(node, typeName, typeDefs[typeName].EnableVectorIndex), nil
 		}
 		result.Close()
 	}
@@ -734,32 +734,46 @@ func findEdgeByID(conn *lbug.Connection, typeDefs map[string]*store.EdgeTypeDef,
 	return nil, fmt.Errorf("%w: edge with id %q", store.ErrEdgeNotFound, id)
 }
 
-// entityFromNode converts a LadybugDB Node to a store.Entity.
-func entityFromNode(node lbug.Node, entityType string) *store.Entity {
+// entityFromNode converts a LadybugDB Node to a store.Entity. The embedding key
+// is only structural for a vector-enabled type (its FLOAT[] vector column); a
+// non-vector entity type may legally declare a property named `embedding`
+// (schema.Validate rejects the name only for enableVectorIndex types, and SPEC
+// R1 reserves it only in that position), so it is skipped — and only extracted
+// as a vector — when vectorIndexed is true. Skipping it unconditionally would
+// silently drop a legal property on every read.
+func entityFromNode(node lbug.Node, entityType string, vectorIndexed bool) *store.Entity {
 	e := &store.Entity{
 		Id:         fmt.Sprintf("%v", node.Properties["id"]),
 		Type:       entityType,
 		Properties: make(map[string]string),
 	}
 	for k, v := range node.Properties {
-		if k == "id" || k == "embedding" {
+		if k == "id" {
+			continue
+		}
+		if vectorIndexed && k == "embedding" {
 			continue
 		}
 		e.Properties[k] = fmt.Sprintf("%v", v)
 	}
-	// Extract embedding.
-	if raw, ok := node.Properties["embedding"]; ok {
-		if list, ok := raw.([]any); ok {
-			emb := make([]float32, len(list))
-			for i, v := range list {
-				switch val := v.(type) {
-				case float32:
-					emb[i] = val
-				case float64:
-					emb[i] = float32(val)
+	// Extract embedding. Only a vector-enabled type's embedding column is a
+	// vector: on a non-vector type the embedding key is a real property (kept
+	// above) whose value is a string, so the []any assertion fails and nothing
+	// is extracted.
+	if vectorIndexed {
+		if raw, ok := node.Properties["embedding"]; ok {
+			if list, ok := raw.([]any); ok {
+				emb := make([]float32, len(list))
+				for i, v := range list {
+					switch val := v.(type) {
+					case float32:
+						emb[i] = val
+					case float64:
+						emb[i] = float32(val)
+					}
 				}
+				e.Embedding = emb
 			}
-			e.Embedding = emb
 		}
 	}
 	return e
@@ -816,15 +830,19 @@ func validateEmbeddingForCreate(embedding []float32, def *store.EntityTypeDef, b
 // dimension. It returns (0, nil) when the embedding column has not been
 // bootstrapped for the entity type — including when the node table has not
 // been created yet (fresh schema, SPEC R7 lazy bootstrap) — and (dim, nil)
-// when it has. It returns a non-nil error when it cannot determine the
-// answer (e.g. a present embedding column whose type is not a parseable
-// FLOAT[n]), so callers can distinguish "no dimension locked in yet" and
-// "schema read failed" from a present-but-anomalous column instead of
-// treating every non-empty case as "not bootstrapped". Table existence is
-// checked via CALL show_tables() — a durable predicate — rather than by
-// matching LadybugDB's query error text (which is a message, not a
-// contract).
-func getEmbeddingDimension(conn *lbug.Connection, entityType string) (int, error) {
+// when it has. It returns a non-nil error when a vector-enabled type's
+// embedding column is present but not a parseable FLOAT[n] (anomalous), so
+// callers can distinguish "no dimension locked in yet" and "schema read
+// failed" from a present-but-anomalous column instead of treating every
+// non-empty case as "not bootstrapped". A non-vector entity type may legally
+// declare a property named `embedding` (schema.Validate rejects the name only
+// for enableVectorIndex types), which creates a plain STRING column — that is
+// a real property, not an anomalous vector column, so a non-FLOAT[n] embedding
+// column on a non-vector type (vectorIndexed false) reports "not bootstrapped"
+// (0, nil). Table existence is checked via CALL show_tables() — a durable
+// predicate — rather than by matching LadybugDB's query error text (which is a
+// message, not a contract).
+func getEmbeddingDimension(conn *lbug.Connection, entityType string, vectorIndexed bool) (int, error) {
 	// A node table that does not exist has no embedding column yet; that is
 	// the "not bootstrapped" state, not a read failure.
 	exists, err := connTableExists(conn, entityType)
@@ -861,15 +879,20 @@ func getEmbeddingDimension(conn *lbug.Connection, entityType string) (int, error
 		}
 		colType := fmt.Sprintf("%v", vals[2])
 		// Parse FLOAT[n]. A present embedding column whose type is not a
-		// parseable FLOAT[n] is anomalous (it should only ever be created here
-		// with a FLOAT[n] shape), so surface it rather than treating it as
-		// "not bootstrapped" — callers that recreate the index over a malformed
-		// column would silently corrupt the vector store.
+		// parseable FLOAT[n] is only anomalous for a vector-enabled type (it
+		// should only ever be created here with a FLOAT[n] shape), so surface
+		// it rather than treating it as "not bootstrapped" — callers that
+		// recreate the index over a malformed column would silently corrupt
+		// the vector store. A non-vector type's `embedding` property column is
+		// a real property and reports "not bootstrapped" (0).
 		if strings.HasPrefix(colType, "FLOAT[") && strings.HasSuffix(colType, "]") {
 			var dim int
 			if _, err := fmt.Sscanf(colType, "FLOAT[%d]", &dim); err == nil && dim > 0 {
 				return dim, nil
 			}
+		}
+		if !vectorIndexed {
+			return 0, nil
 		}
 		return 0, fmt.Errorf("entity type %q has an anomalous embedding column type %q", entityType, colType)
 	}

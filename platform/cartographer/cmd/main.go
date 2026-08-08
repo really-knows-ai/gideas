@@ -232,8 +232,28 @@ func main() {
 	if remotePullOnInit && remoteURL != "" {
 		if err := tryRemotePullOnInit(gs, remoteURL, remoteAuthSecretRef, readSecretFn, auditPub,
 			// SPEC R10 Init: after clone-on-init seeds the git working tree,
-			// re-hydrate the freshly-opened empty main.lbug from the cloned
-			// file-per-element representation so the graph is not empty.
+			// re-hydrate main from the cloned file-per-element representation so
+			// the graph is not empty.
+			//
+			// ponytail: this re-hydration is unconditional — unlike
+			// rehydrateMainAfterRecovery it is not gated on mainHasGraphData —
+			// so a clone-on-init wipes durable non-transactional writes that a
+			// healthy main.lbug held before the clone. The clone supersedes
+			// local state by design: the operator explicitly configured
+			// pullOnInit + REMOTE_URL to seed from the remote; the clone path
+			// runs only when the local repo has no graph-data commits (IsEmpty);
+			// and per SPEC R8 non-transactional writes are "only durable once
+			// committed" — writes that never reached git fall in the same
+			// acceptable-loss class as corruption recovery. The R8 gate would
+			// not protect them anyway: the first transaction commit re-hydrates
+			// main from the cloned working tree, so a gate would only defer the
+			// loss and leave main.lbug diverging from git in the interim.
+			// Ceiling: a pullOnInit first boot following a local-only period
+			// silently discards the local graph in favor of the remote seed.
+			// Upgrade path: commit pending main writes to git before cloning
+			// (write-through), or refuse the clone loudly (gate on
+			// mainHasGraphData and fail startup) if preserving local state over
+			// remote seeding becomes a product requirement.
 			func() error {
 				entitiesDir := filepath.Join(ladybugDBPath, "graph-repo/entities")
 				edgesDir := filepath.Join(ladybugDBPath, "graph-repo/edges")
@@ -254,21 +274,23 @@ func main() {
 	}
 	opts = append(opts, service.WithLadybugPath(ladybugDBPath))
 
-	// ponytail: 100000 is the per-transaction change-log admission cap (100K
-	// entries) mandated by the SPEC's change-log capacity requirement and
-	// handed to NewChangeLogWithCap inside the TransactionManager; exceeding it
-	// yields ErrChangeLogFull → RESOURCE_EXHAUSTED with transaction rollback.
-	// The enforcement ceiling lives at the store layer and is threaded here via
-	// the constructor argument. If this call-site literal and the store default
-	// ever diverge, mutation-cap behavior silently differs from the documented
-	// ceiling. Ceiling: hard-coded in cmd/main and mirrored only by tests that
-	// pass 100000 by rote; no single definition of truth. Upgrade path: hoist a
-	// shared constant (e.g. in the service package) that both this call and the
-	// store default read, so divergence is a compile error rather than a drift.
+	// The per-transaction change-log admission cap (100K entries, SPEC change-log
+	// capacity requirement) is passed to NewChangeLogWithCap inside the
+	// TransactionManager; exceeding it yields ErrChangeLogFull →
+	// RESOURCE_EXHAUSTED with transaction rollback. The cap is sourced from
+	// gitstore.DefaultChangeLogCap — the same constant the store default
+	// (NewChangeLog) and the startup-recovery path (RecoverOpenTransactions)
+	// read — so the admission ceiling and the recovery ceiling cannot silently
+	// diverge.
+	// ponytail: the cap value still lives in gitstore while the service
+	// package's own tests mirror it by rote (100000 literals); a future cap
+	// change must touch the gitstore constant plus every service-test literal.
+	// Upgrade path: hoist the constant to the service package and have gitstore
+	// import it, collapsing the mirror surfaces to a single definition.
 	server := service.NewCartographerServer(
 		dbStore, gs, operatorKey, sidecarKey,
 		readSecretFn, remoteURL, stalenessWindow,
-		podNamespace, transactionTimeout, 100000,
+		podNamespace, transactionTimeout, gitstore.DefaultChangeLogCap,
 		opts...,
 	)
 	slog.Info("Cartographer server constructed")
@@ -355,8 +377,15 @@ func main() {
 // fresh install is a no-op (an empty git repo has no committed state to
 // recover). Any error is propagated so the caller can fail startup loudly.
 func rehydrateMainAfterRecovery(ctx context.Context, dbStore store.Store, gs gitstore.GitStore) error {
-	empty, err := gs.IsEmpty(ctx)
-	if err != nil {
+	// IsEmpty must be called with the git lock held (GitStore interface
+	// contract); startup is single-threaded, but the check still goes through
+	// WithGitLock so no caller can observe an unlocked gitstore read.
+	var empty bool
+	if err := gs.WithGitLock(func() error {
+		var err error
+		empty, err = gs.IsEmpty(ctx)
+		return err
+	}); err != nil {
 		return fmt.Errorf("check git repo state for recovery: %w", err)
 	}
 	if empty {
@@ -389,7 +418,14 @@ func mainHasGraphData(ctx context.Context, dbStore store.Store) (bool, error) {
 		if err != nil {
 			return false, err
 		}
-		if len(rows) == 1 && len(rows[0].Values) == 1 && countValueIsPositive(rows[0].Values[0]) {
+		if len(rows) != 1 || len(rows[0].Values) != 1 {
+			continue
+		}
+		positive, err := countValueIsPositive(rows[0].Values[0])
+		if err != nil {
+			return false, err
+		}
+		if positive {
 			return true, nil
 		}
 	}
@@ -400,18 +436,21 @@ func mainHasGraphData(ctx context.Context, dbStore store.Store) (bool, error) {
 // greater than zero. The go-ladybug wrapper surfaces DuckDB numerics as
 // float64; the other numeric kinds are handled defensively because treating a
 // count of a populated database as zero would wrongly re-hydrate (and wipe) it.
-func countValueIsPositive(v any) bool {
+// An unexpected numeric kind is surfaced as an error (fail loudly): returning
+// false for it would make a populated main look empty and trigger the R8
+// recovery re-hydration, wiping durable non-transactional writes.
+func countValueIsPositive(v any) (bool, error) {
 	switch n := v.(type) {
 	case float64:
-		return n > 0
+		return n > 0, nil
 	case int64:
-		return n > 0
+		return n > 0, nil
 	case uint64:
-		return n > 0
+		return n > 0, nil
 	case int:
-		return n > 0
+		return n > 0, nil
 	default:
-		return false
+		return false, fmt.Errorf("unexpected count() result kind %T from LadybugDB", v)
 	}
 }
 
@@ -423,8 +462,15 @@ func tryRemotePullOnInit(
 	auditPub *eventbus.AsyncPublisher,
 	rehydrate func() error,
 ) error {
-	empty, err := gs.IsEmpty(context.Background())
-	if err != nil {
+	// IsEmpty must be called with the git lock held (GitStore interface
+	// contract); startup is single-threaded, but the check still goes through
+	// WithGitLock so no caller can observe an unlocked gitstore read.
+	var empty bool
+	if err := gs.WithGitLock(func() error {
+		var err error
+		empty, err = gs.IsEmpty(context.Background())
+		return err
+	}); err != nil {
 		// SPEC R10 Init: repository-state check failures are logged, not fatal.
 		slog.Warn("Failed to check git repo state on init (non-blocking)", "error", err)
 		return nil

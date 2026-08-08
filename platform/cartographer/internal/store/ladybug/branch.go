@@ -344,7 +344,7 @@ func (db *ladybugDB) ReplicateSchemaToBranch(_ context.Context, txID string) err
 	// We need to recreate the node and rel tables.
 	for _, name := range sortedKeys(db.entityTypeDefs) {
 		def := db.entityTypeDefs[name]
-		dimension, derr := getEmbeddingDimension(db.conn, name)
+		dimension, derr := getEmbeddingDimension(db.conn, name, def.EnableVectorIndex)
 		if derr != nil {
 			return fmt.Errorf("read embedding dimension for %q: %w", name, derr)
 		}
@@ -438,7 +438,7 @@ func (db *ladybugDB) RehydrateFromBranch(ctx context.Context, txID string) error
 				result.Close()
 				return fmt.Errorf("branch entity of type %q: unexpected node type %T", name, m["n"])
 			}
-			entity := entityFromNode(node, name)
+			entity := entityFromNode(node, name, entDefs[name].EnableVectorIndex)
 			// Ensure main's embedding column / vector index exists before
 			// inserting an entity that carries an embedding. The branch may have
 			// bootstrapped the dimension (SPEC R7 lazy bootstrap on the first
@@ -595,7 +595,7 @@ func (db *ladybugDB) DumpAllEntities(ctx context.Context, txID string) ([]store.
 				result.Close()
 				return nil, fmt.Errorf("dump entity type %q: unexpected node type %T", name, m["n"])
 			}
-			results = append(results, *entityFromNode(node, name))
+			results = append(results, *entityFromNode(node, name, typeDefs.entityTypeDefs[name].EnableVectorIndex))
 		}
 		result.Close()
 	}
@@ -1034,7 +1034,11 @@ func (db *ladybugDB) ensureEmbeddingLoadSchema(
 	conn *lbug.Connection, typeName string, embedding []float32,
 	defs map[string]*store.EntityTypeDef,
 ) error {
-	if dim, derr := getEmbeddingDimension(conn, typeName); derr != nil {
+	vectorIndexed := false
+	if def, ok := defs[typeName]; ok {
+		vectorIndexed = def.EnableVectorIndex
+	}
+	if dim, derr := getEmbeddingDimension(conn, typeName, vectorIndexed); derr != nil {
 		return fmt.Errorf("read embedding dimension for %q: %w", typeName, derr)
 	} else if dim > 0 {
 		return nil

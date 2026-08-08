@@ -4197,6 +4197,77 @@ func TestRecoveryDiffPropagatesSuspectedDeletions(t *testing.T) {
 	}
 }
 
+// TestRecoveryDiffClassifiesModifiedEdges pins SPEC R9 recovery step 2 ("For
+// each edge table in the branch DB, iterate all relationships using the same
+// comparison logic" as step 1) and step 3 (Diff returns "lists of added,
+// modified, and deleted entities and edges"): an edge present in main with
+// different content must be classified as a modification (ChangeModEdge) — not
+// collapsed into ChangeAddEdge — and must surface through GetTransactionDiff's
+// modified_edges wire field.
+func TestRecoveryDiffClassifiesModifiedEdges(t *testing.T) {
+	srv, _ := newTestServer(t)
+	ctx := testCtx()
+	txID := testMutationEntityID
+	state, err := srv.txManager.Create(txID, time.Minute, "")
+	if err != nil {
+		t.Fatalf("Create transaction: %v", err)
+	}
+	changed, err := srv.recoverEdgeChanges(state.ChangeLog, []store.Edge{
+		{
+			Id: "edge-mod", Type: "DEPENDS_ON", FromEntityID: "a", ToEntityID: "b",
+			Properties: map[string]string{"weight": "high"},
+		},
+	}, map[string]map[string]gitstore.EdgeFile{
+		"DEPENDS_ON": {
+			"edge-mod": {
+				ID: "edge-mod", Type: "DEPENDS_ON", FromEntityID: "a", ToEntityID: "b",
+				Properties: map[string]string{"weight": "low"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("recoverEdgeChanges: %v", err)
+	}
+	if !changed {
+		t.Fatal("expected an edge change to be recorded")
+	}
+
+	diff, err := srv.GetTransactionDiff(ctx, &flowv1.GetTransactionDiffRequest{TransactionId: txID})
+	if err != nil {
+		t.Fatalf("GetTransactionDiff: %v", err)
+	}
+	if len(diff.ModifiedEdges) != 1 || diff.ModifiedEdges[0].Id != "edge-mod" ||
+		diff.ModifiedEdges[0].Properties["weight"] != "high" {
+		t.Fatalf("expected recovered edge modification in diff, got %+v", diff.ModifiedEdges)
+	}
+	if len(diff.AddedEdges) != 0 {
+		t.Fatalf("expected no added edges for a modified edge, got %+v", diff.AddedEdges)
+	}
+
+	// A recovered modification must never re-apply as a deletion/creation or
+	// silently pass a refresh: a ChangeModEdge whose branch content differs
+	// from main always conflicts at validateRefresh (before/current edge files
+	// differ), leaving the branch clean and the change log preserved.
+	before := gitGraphSnapshot{edges: map[string]gitstore.EdgeFile{
+		"edge-mod": {
+			ID: "edge-mod", Type: "DEPENDS_ON", FromEntityID: "a", ToEntityID: "b",
+			Properties: map[string]string{"weight": "high"},
+		},
+	}}
+	current := gitGraphSnapshot{edges: map[string]gitstore.EdgeFile{
+		"edge-mod": {
+			ID: "edge-mod", Type: "DEPENDS_ON", FromEntityID: "a", ToEntityID: "b",
+			Properties: map[string]string{"weight": "low"},
+		},
+	}}
+	if err := srv.validateRefresh(state, before, current); status.Code(err) != codes.Aborted {
+		t.Fatalf("expected ABORTED refresh conflict for recovered edge modification, got %v", err)
+	}
+	if err := srv.reapplyTransactionChanges(ctx, txID, state.ChangeLog); status.Code(err) != codes.Aborted {
+		t.Fatalf("expected re-apply of a recovered edge modification to fail loudly with ABORTED, got %v", err)
+	}
+}
+
 //nolint:gocyclo
 func TestRecoverOpenTransactionsAfterStoreRestart(t *testing.T) {
 	ctx := testCtx()
@@ -5681,6 +5752,50 @@ func TestBeginTransaction_ResourceExhausted(t *testing.T) {
 	}
 }
 
+// TestBeginTransaction_GitBranchCreationResourceExhausted pins the SPEC
+// error-table row "BeginTransaction resource exhausted" → RESOURCE_EXHAUSTED
+// ("Out of file handles, memory, or disk space; branch or LadybugDB creation
+// failed"): a git-side branch-creation failure (CreateBranch, HardResetToBranch
+// — e.g. disk full) must surface RESOURCE_EXHAUSTED, matching the store-side
+// branch-DB path, not INTERNAL via mapGitError.
+func TestBeginTransaction_GitBranchCreationResourceExhausted(t *testing.T) {
+	tests := []struct {
+		name   string
+		failFn func(*cleanupFailingGitStore)
+	}{
+		{"CreateBranch", func(g *cleanupFailingGitStore) { g.failCreateBranch = true }},
+		{"HardResetToBranch", func(g *cleanupFailingGitStore) { g.failHardReset = true }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opPub, _ := generateTestKey()
+			scPub := initTestKey()
+			st, _ := ladybug.OpenInMemory()
+			t.Cleanup(func() { _ = st.Close() })
+			gs, _ := gitstore.New(t.TempDir())
+			srv := NewCartographerServer(st, gs, opPub, scPub, nil, "",
+				30*time.Second, "test-ns", 30*time.Minute, 100000)
+			srv.MarkDBReady()
+
+			failing := &cleanupFailingGitStore{GitStore: gs}
+			tt.failFn(failing)
+			srv.gitstore = failing
+
+			ctx := testCtx()
+			_, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			if status.Code(err) != codes.ResourceExhausted {
+				t.Fatalf("expected ResourceExhausted for git branch creation failure, got %v", status.Code(err))
+			}
+			if !strings.Contains(err.Error(), "simulated "+tt.name+" failure") {
+				t.Fatalf("error should contain original failure, got: %v", err)
+			}
+		})
+	}
+}
+
 // cleanupFailingStore fails on CreateBranchDB and on DropBranchDB to test
 // that cleanup failures during BeginTransaction are surfaced.
 type cleanupFailingStore struct {
@@ -5703,9 +5818,25 @@ func (s *cleanupFailingStore) DropBranchDB(ctx context.Context, txID string) err
 // that cleanup failures during BeginTransaction are surfaced.
 type cleanupFailingGitStore struct {
 	gitstore.GitStore
-	failRestore bool
-	failClean   bool
-	failDelete  bool
+	failRestore      bool
+	failClean        bool
+	failDelete       bool
+	failCreateBranch bool
+	failHardReset    bool
+}
+
+func (s *cleanupFailingGitStore) CreateBranch(ctx context.Context, txID string) error {
+	if s.failCreateBranch {
+		return fmt.Errorf("simulated CreateBranch failure")
+	}
+	return s.GitStore.CreateBranch(ctx, txID)
+}
+
+func (s *cleanupFailingGitStore) HardResetToBranch(ctx context.Context, branch string) error {
+	if s.failHardReset {
+		return fmt.Errorf("simulated HardResetToBranch failure")
+	}
+	return s.GitStore.HardResetToBranch(ctx, branch)
 }
 
 func (s *cleanupFailingGitStore) RestoreMain(ctx context.Context) error {

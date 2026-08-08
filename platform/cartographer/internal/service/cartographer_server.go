@@ -557,8 +557,20 @@ func (s *CartographerServer) recoverEdgeChanges(
 		if exists && edgeContentEqual(edge, mainFile) {
 			continue // unchanged — skip
 		}
+		// SPEC R9 recovery step 2 requires "the same comparison logic" as step 1:
+		// an edge whose UUID exists in main with different content was modified,
+		// an edge absent from main was added. Edge modification cannot be produced
+		// through the write path (there is no UpdateEdge), but the recovered
+		// branch can legitimately diverge from main on an edge when main advanced
+		// out-of-band (e.g. a PullFromRemote brought in a changed edge file), so
+		// the classification must distinguish the two instead of collapsing every
+		// differing edge into ChangeAddEdge.
+		kind := gitstore.ChangeModEdge
+		if !exists {
+			kind = gitstore.ChangeAddEdge
+		}
 		if err := cl.AddEntry(gitstore.ChangeLogEntry{
-			Kind: gitstore.ChangeAddEdge,
+			Kind: kind,
 			ID:   edge.Id, Type: edge.Type,
 			Edge: &gitstore.EdgeEntry{
 				ID: edge.Id, Type: edge.Type,
@@ -1391,6 +1403,17 @@ func (s *CartographerServer) DeleteEdge(
 // Transaction Path
 // =========================================================================
 
+// branchResourceError marks git branch-creation failures in BeginTransaction
+// (CreateBranch, HardResetToBranch) that SPEC error-table row "BeginTransaction
+// resource exhausted" classifies as RESOURCE_EXHAUSTED: "Out of file handles,
+// memory, or disk space; branch or LadybugDB creation failed". BranchHEAD is
+// deliberately not wrapped — it is a read of main, so a failure there (e.g. a
+// corrupt repo) stays INTERNAL via mapGitError.
+type branchResourceError struct{ err error }
+
+func (e *branchResourceError) Error() string { return e.err.Error() }
+func (e *branchResourceError) Unwrap() error { return e.err }
+
 func (s *CartographerServer) BeginTransaction(
 	ctx context.Context,
 	req *flowv1.BeginTransactionRequest,
@@ -1414,10 +1437,10 @@ func (s *CartographerServer) BeginTransaction(
 			return fmt.Errorf("get main HEAD: %w", err)
 		}
 		if err := s.gitstore.CreateBranch(ctx, txID); err != nil {
-			return fmt.Errorf("create branch: %w", err)
+			return &branchResourceError{err: fmt.Errorf("create branch: %w", err)}
 		}
 		if err := s.gitstore.HardResetToBranch(ctx, txID); err != nil {
-			return fmt.Errorf("hard reset: %w", err)
+			return &branchResourceError{err: fmt.Errorf("hard reset: %w", err)}
 		}
 		if err := s.store.CreateBranchDB(ctx, txID); err != nil {
 			branchStoreErr = fmt.Errorf("create branch DB: %w", err)
@@ -1449,6 +1472,15 @@ func (s *CartographerServer) BeginTransaction(
 		}
 		return nil
 	}); err != nil {
+		// Git branch-creation failures (CreateBranch/HardResetToBranch) map to
+		// the SPEC error-table row "BeginTransaction resource exhausted"
+		// (RESOURCE_EXHAUSTED — branch creation failed), matching the store-side
+		// branchStoreErr path below. Other git failures (e.g. BranchHEAD read)
+		// keep their mapGitError mapping.
+		var resErr *branchResourceError
+		if errors.As(err, &resErr) {
+			return nil, errBeginTransactionResourceExhausted(resErr.Error())
+		}
 		return nil, mapGitError(err)
 	}
 	if branchStoreErr != nil {
@@ -1617,6 +1649,12 @@ func (s *CartographerServer) CommitTransaction(
 			for et, entries := range tc.addedEdges {
 				if err := s.gitstore.WriteEdgeFiles(ctx, et, toGitEdges(entries)); err != nil {
 					commitErr = fmt.Errorf("write edge files: %w", err)
+					return nil
+				}
+			}
+			for et, entries := range tc.modifiedEdges {
+				if err := s.gitstore.WriteEdgeFiles(ctx, et, toGitEdges(entries)); err != nil {
+					commitErr = fmt.Errorf("write modified edge files: %w", err)
 					return nil
 				}
 			}
@@ -1876,6 +1914,17 @@ func (s *CartographerServer) reapplyTransactionChanges(
 				}
 				return mapStoreError(err)
 			}
+		case gitstore.ChangeModEdge:
+			// The store has no edge-update primitive (edges are immutable through
+			// the write path), so a modification cannot be re-applied. A
+			// ChangeModEdge only exists in a recovered change log and only when
+			// the branch's edge content differs from main's — a divergence
+			// validateRefresh always rejects above (before/current edge files
+			// differ), so this case is unreachable. Fail loudly instead of
+			// silently dropping the modification, leaving the branch in the clean
+			// re-hydrated state with the change log preserved (SPEC R9 refresh
+			// conflict semantics).
+			return errRefreshConflict(txID)
 		case gitstore.ChangeDelEdge:
 			_, err := s.store.DeleteEdge(ctx, entry.ID, txID)
 			if err != nil && !errors.Is(err, store.ErrEdgeNotFound) {
@@ -1944,7 +1993,7 @@ func (s *CartographerServer) validateRefresh(
 			if _, exists := current.edges[entry.ID]; exists {
 				return errRefreshConflict(state.ID)
 			}
-		case gitstore.ChangeDelEdge:
+		case gitstore.ChangeModEdge, gitstore.ChangeDelEdge:
 			oldFile, existed := before.edges[entry.ID]
 			newFile, exists := current.edges[entry.ID]
 			if !existed || !exists || !reflect.DeepEqual(oldFile, newFile) {
@@ -2117,6 +2166,8 @@ func (s *CartographerServer) GetTransactionDiff(
 			resp.DeletedEntities = append(resp.DeletedEntities, de)
 		case gitstore.ChangeAddEdge:
 			resp.AddedEdges = append(resp.AddedEdges, de)
+		case gitstore.ChangeModEdge:
+			resp.ModifiedEdges = append(resp.ModifiedEdges, de)
 		case gitstore.ChangeDelEdge:
 			resp.DeletedEdges = append(resp.DeletedEdges, de)
 		}
@@ -2349,6 +2400,7 @@ type typeChanges struct {
 	modifiedEntities map[string][]*gitstore.EntityEntry
 	deletedEntities  map[string][]string
 	addedEdges       map[string][]*gitstore.EdgeEntry
+	modifiedEdges    map[string][]*gitstore.EdgeEntry
 	deletedEdges     map[string][]string
 }
 
@@ -2358,6 +2410,7 @@ func groupChanges(cl *gitstore.ChangeLog) typeChanges {
 		modifiedEntities: make(map[string][]*gitstore.EntityEntry),
 		deletedEntities:  make(map[string][]string),
 		addedEdges:       make(map[string][]*gitstore.EdgeEntry),
+		modifiedEdges:    make(map[string][]*gitstore.EdgeEntry),
 		deletedEdges:     make(map[string][]string),
 	}
 	for _, entry := range cl.Entries() {
@@ -2370,6 +2423,8 @@ func groupChanges(cl *gitstore.ChangeLog) typeChanges {
 			tc.deletedEntities[entry.Type] = append(tc.deletedEntities[entry.Type], entry.ID)
 		case gitstore.ChangeAddEdge:
 			tc.addedEdges[entry.Type] = append(tc.addedEdges[entry.Type], entry.Edge)
+		case gitstore.ChangeModEdge:
+			tc.modifiedEdges[entry.Type] = append(tc.modifiedEdges[entry.Type], entry.Edge)
 		case gitstore.ChangeDelEdge:
 			tc.deletedEdges[entry.Type] = append(tc.deletedEdges[entry.Type], entry.ID)
 		}

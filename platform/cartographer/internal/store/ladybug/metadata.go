@@ -415,6 +415,13 @@ func validateMetadataAgainstCatalog(
 		}
 	}
 	for name := range catalogEntities {
+		// The `_untyped` placeholder NODE table (createRelTableOnConn) is an
+		// internal table for edgeless rel types, legitimately absent from
+		// schema metadata, so it is skipped here. The skip is safe and can
+		// never mask a user type: schema.Validate rejects `_untyped` as a user
+		// entity/edge type name (ErrReservedWord), so the metadata side cannot
+		// legitimately carry it, and readSchemaMetadata's own Validate fails
+		// loudly on a metadata file that declares it.
 		if name == untypedTableName {
 			continue
 		}
@@ -437,7 +444,7 @@ func validateMetadataAgainstCatalog(
 		if actual.EnableVectorIndex != metadata.VectorIndexes[name] {
 			return fmt.Errorf("entity type %q vector index does not match schema metadata", name)
 		}
-		actualDim, derr := getEmbeddingDimension(conn, name)
+		actualDim, derr := getEmbeddingDimension(conn, name, expected.EnableVectorIndex)
 		if derr != nil {
 			return fmt.Errorf("entity type %q read vector dimension: %w", name, derr)
 		}
@@ -461,7 +468,7 @@ func validateMetadataAgainstCatalog(
 			}
 			expected := expectedPairs[name]
 			if len(expected) == 0 {
-				expected = []fromToPair{{From: "_untyped", To: "_untyped"}}
+				expected = []fromToPair{{From: untypedTableName, To: untypedTableName}}
 			}
 			if !equalFromToPairs(actualPairs, expected) {
 				return fmt.Errorf("relationship %q endpoints do not match schema metadata", name)
@@ -540,7 +547,7 @@ func captureVectorState(conn *lbug.Connection, metadata schemaMetadata) (schemaM
 	}
 	for _, entity := range metadata.EntityTypes {
 		metadata.VectorIndexes[entity.Name] = indexes[entity.Name]
-		dim, derr := getEmbeddingDimension(conn, entity.Name)
+		dim, derr := getEmbeddingDimension(conn, entity.Name, entity.EnableVectorIndex)
 		if derr != nil {
 			return schemaMetadata{}, fmt.Errorf("read vector dimension for %q: %w", entity.Name, derr)
 		}

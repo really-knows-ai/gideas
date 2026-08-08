@@ -16,6 +16,7 @@ import (
 	"time"
 
 	lbug "github.com/LadybugDB/go-ladybug"
+	schemavalidator "github.com/foundry/flow/cartographer/internal/schema"
 	"github.com/foundry/flow/cartographer/internal/store"
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
 	"github.com/google/uuid"
@@ -28,6 +29,12 @@ const strengthValue = "strong"
 // inferredValue is the test property value for schema-absent types inferred
 // from the directory structure, shared across the re-hydration inference tests.
 const inferredValue = "inferred"
+
+// embeddingPropertyValue is the test value of a non-vector entity type's
+// `embedding` property (SPEC R1: the name is reserved only for vector-enabled
+// types), shared across the round-trip assertions in
+// TestNonVectorTypeEmbeddingProperty_RoundTrips.
+const embeddingPropertyValue = "not-a-vector"
 
 func TestOpenClose(t *testing.T) {
 	s, err := OpenInMemory()
@@ -603,6 +610,42 @@ func TestValidateSchema(t *testing.T) {
 	}
 	if err := s.ValidateSchema(context.Background(), invalid); err == nil {
 		t.Error("expected error for empty entity type name")
+	}
+}
+
+// The store's internal placeholder NODE table for edgeless rel types is named
+// `_untyped` (schemavalidator.UntypedTableName). schema.Validate reserves it: a
+// user entity or edge type with that name would alias the placeholder table
+// (and be silently skipped by validateMetadataAgainstCatalog's structural check
+// on reopen), so ApplySchema — which validates first — must reject it with the
+// schema package's reserved-word sentinel (INVALID_ARGUMENT at the gRPC
+// boundary via mapStoreError/isSchemaError).
+func TestApplySchema_RejectsUntypedPlaceholderName(t *testing.T) {
+	tests := []struct {
+		name string
+		s    *flowv1.Schema
+	}{
+		{"entity type named _untyped", &flowv1.Schema{
+			EntityTypes: []*flowv1.EntityType{{Name: schemavalidator.UntypedTableName}},
+		}},
+		{"edge type named _untyped", &flowv1.Schema{
+			EdgeTypes: []*flowv1.EdgeType{{Name: schemavalidator.UntypedTableName}},
+		}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			s, err := OpenInMemory()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer closeStore(t, s)
+			err = s.ApplySchema(context.Background(), tc.s)
+			if err == nil {
+				t.Fatal("expected ApplySchema to reject, got nil")
+			} else if !errors.Is(err, schemavalidator.ErrReservedWord) {
+				t.Fatalf("expected schemavalidator.ErrReservedWord, got: %v", err)
+			}
+		})
 	}
 }
 
@@ -4410,6 +4453,98 @@ func TestEntityPropertiesNamedToAndType(t *testing.T) {
 	}
 }
 
+// TestNonVectorTypeEmbeddingProperty_RoundTrips pins the SPEC R1 implicit-column
+// collision scope for the name `embedding`: it is reserved only for
+// vector-enabled entity types (SPEC:81, validate.go:113), so a non-vector type
+// may legally declare a property named `embedding`. The property must
+// round-trip through every boundary that special-cases the embedding column:
+// entityFromNode (which previously skipped the key unconditionally, silently
+// dropping the property on every read and thereby on the git file commit),
+// getEmbeddingDimension's anomaly guard (which previously rejected a STRING
+// embedding column as "anomalous", bricking Open's validateMetadataAgainstCatalog,
+// ApplySchema re-apply's captureVectorState, and ReplicateSchemaToBranch).
+// The shape is pinned with a file-backed write-and-reopen, an idempotent
+// ApplySchema re-apply (SPEC R6), and a CreateBranchDB + ReplicateSchemaToBranch
+// (the store-side begin-transaction sequence).
+func TestNonVectorTypeEmbeddingProperty_RoundTrips(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+
+	schema := &flowv1.Schema{
+		EntityTypes: []*flowv1.EntityType{{
+			Name: "Document",
+			Properties: []*flowv1.Property{
+				{Name: "embedding", Type: "string"},
+				{Name: "title", Type: "string"},
+			},
+		}},
+	}
+	if err := s.ApplySchema(ctx, schema); err != nil {
+		t.Fatalf("ApplySchema: %v", err)
+	}
+	// Idempotent re-apply (SPEC R6) must succeed: ApplySchema's
+	// captureVectorState reads the dimension for every type, and a STRING
+	// embedding property column must not be treated as an anomalous vector
+	// column.
+	if err := s.ApplySchema(ctx, schema); err != nil {
+		t.Fatalf("idempotent ApplySchema re-apply: %v", err)
+	}
+
+	doc, err := s.CreateEntity(ctx, "Document", "", map[string]string{
+		"embedding": embeddingPropertyValue, "title": "doc1",
+	}, nil, "main")
+	if err != nil {
+		t.Fatalf("CreateEntity with embedding property: %v", err)
+	}
+	if doc.Properties["embedding"] != embeddingPropertyValue {
+		t.Fatalf("created entity lost embedding property: %+v", doc.Properties)
+	}
+	if doc.Embedding != nil {
+		t.Fatalf("non-vector type must not surface an Embedding vector, got %v", doc.Embedding)
+	}
+
+	// GetEntity must return the property (entityFromNode skip gate).
+	got, err := s.GetEntity(ctx, doc.Id, "main")
+	if err != nil {
+		t.Fatalf("GetEntity: %v", err)
+	}
+	if got.Properties["embedding"] != embeddingPropertyValue {
+		t.Fatalf("embedding property lost on read: %+v", got.Properties)
+	}
+
+	// Begin-transaction sequence: ReplicateSchemaToBranch iterates every entity
+	// type's dimension, and a STRING embedding property column must not brick it.
+	if err := s.CreateBranchDB(ctx, "tx-embed-prop"); err != nil {
+		t.Fatalf("CreateBranchDB: %v", err)
+	}
+	if err := s.ReplicateSchemaToBranch(ctx, "tx-embed-prop"); err != nil {
+		t.Fatalf("ReplicateSchemaToBranch with non-vector embedding property: %v", err)
+	}
+
+	// Close and reopen: validateMetadataAgainstCatalog reads the dimension for
+	// every type, and the STRING embedding column must not be rejected.
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	s2, err := Open(dir)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer closeStore(t, s2)
+
+	got, err = s2.GetEntity(ctx, doc.Id, "main")
+	if err != nil {
+		t.Fatalf("GetEntity after reopen: %v", err)
+	}
+	if got.Properties["embedding"] != embeddingPropertyValue {
+		t.Fatalf("embedding property lost after reopen: %+v", got.Properties)
+	}
+}
+
 func TestApplySchema_AdditiveEdgeProperty(t *testing.T) {
 	dir := t.TempDir()
 	s, err := Open(dir)
@@ -5051,13 +5186,19 @@ func TestRehydrateMainFromFiles_HoldsLockForEntireOperation(t *testing.T) {
 		t.Fatalf("CreateEntity: %v", err)
 	}
 
-	// Prepare rehydration files.
+	// Prepare rehydration files. The pre-existing entity is re-inserted from
+	// the files too, so old.Id is present in main both before the wipe and
+	// after re-hydration — a concurrent read of it can never legitimately
+	// observe ErrEntityNotFound.
 	componentID := uuid.NewString()
 	root := t.TempDir()
 	entitiesDir := filepath.Join(root, "entities")
 	edgesDir := filepath.Join(root, "edges")
 	writeJSONFile(t, filepath.Join(entitiesDir, "Component", componentID+".json"), map[string]any{
 		"id": componentID, "type": "Component", "properties": map[string]string{"name": "new"},
+	})
+	writeJSONFile(t, filepath.Join(entitiesDir, "Component", old.Id+".json"), map[string]any{
+		"id": old.Id, "type": "Component", "properties": map[string]string{"name": "old"},
 	})
 	// Create empty edges directory so the check passes.
 	if err := os.MkdirAll(edgesDir, 0755); err != nil {
@@ -5071,8 +5212,9 @@ func TestRehydrateMainFromFiles_HoldsLockForEntireOperation(t *testing.T) {
 	}()
 
 	// While rehydration is in progress, attempt a concurrent read.
-	// If the lock is held, this read will block until rehydration completes.
-	// We use a short timeout to detect if the read would observe partial state.
+	// If db.mu is held for the entire cycle, this read either runs before the
+	// wipe (sees the old entity) or blocks until rehydration completes (sees
+	// the re-inserted old entity) — never a "not found" in between.
 	type readResult struct {
 		entity *store.Entity
 		err    error
@@ -5089,19 +5231,15 @@ func TestRehydrateMainFromFiles_HoldsLockForEntireOperation(t *testing.T) {
 	}
 
 	// Now the concurrent read should have completed (it was serialized behind
-	// the rehydration lock). It should see either the old entity (if it ran
-	// before the wipe) or the new entity (if it ran after), but never a
-	// "not found" for the old entity (partial wipe without re-insert).
+	// the rehydration lock). Because the files re-insert the old entity, the
+	// read of old.Id must always succeed: it runs either before the wipe
+	// (old present) or after the re-insert (old present again). ErrEntityNotFound
+	// would mean the read observed the wipe without the re-insert — exactly the
+	// partial-wipe outcome the held lock is supposed to prevent.
 	r := <-readCh
-	if r.err != nil && !errors.Is(r.err, store.ErrEntityNotFound) {
-		t.Fatalf("concurrent read error: %v", r.err)
+	if r.err != nil {
+		t.Fatalf("concurrent read observed a partial wipe during RehydrateMainFromFiles: %v", r.err)
 	}
-	// If the read returned the old entity, that's fine — it means the read
-	// happened before the wipe. If it returned ErrEntityNotFound, that's
-	// also fine — it means the read happened after the wipe but before the
-	// new entity was inserted. The key invariant is that the read never
-	// observes a state where the old entity is gone but the new one isn't
-	// fully inserted yet, because the lock serializes everything.
 	// We verify the final state is correct.
 	got, err := s.GetEntity(ctx, componentID, "main")
 	if err != nil {
@@ -5315,6 +5453,42 @@ func TestListEntities_UnknownType(t *testing.T) {
 	}
 	if !errors.Is(err, store.ErrUnknownEntityType) {
 		t.Errorf("expected ErrUnknownEntityType, got %v", err)
+	}
+}
+
+// TestListEntities_CheckOrder pins the SPEC:960 ListEntities structural check
+// order — unknown entity type → pageSize → pageToken — at the store layer: when
+// multiple inputs are invalid, the earliest check in that order is the error
+// surfaced (entity type wins over pageSize and pageToken; pageSize wins over
+// pageToken).
+func TestListEntities_CheckOrder(t *testing.T) {
+	s, err := OpenInMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeStore(t, s)
+	applyTestSchema(t, s)
+
+	badTok := base64.StdEncoding.EncodeToString([]byte("not-a-number"))
+
+	// Unknown entity type surfaces before invalid pageSize (negative and over-max).
+	for _, pageSize := range []int{-1, 1001} {
+		_, _, err := s.ListEntities(context.Background(), "NoSuchType", pageSize, "", "")
+		if !errors.Is(err, store.ErrUnknownEntityType) {
+			t.Errorf("pageSize %d: expected ErrUnknownEntityType, got %v", pageSize, err)
+		}
+	}
+
+	// Unknown entity type surfaces before an invalid page token.
+	_, _, err = s.ListEntities(context.Background(), "NoSuchType", 10, badTok, "")
+	if !errors.Is(err, store.ErrUnknownEntityType) {
+		t.Errorf("expected ErrUnknownEntityType over ErrInvalidPageToken, got %v", err)
+	}
+
+	// Invalid pageSize surfaces before an invalid page token (known type).
+	_, _, err = s.ListEntities(context.Background(), "Component", -1, badTok, "")
+	if !errors.Is(err, store.ErrInvalidPageSize) {
+		t.Errorf("expected ErrInvalidPageSize over ErrInvalidPageToken, got %v", err)
 	}
 }
 

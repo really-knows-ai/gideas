@@ -685,9 +685,14 @@ func collectFromToPairs(s *flowv1.Schema) map[string][]fromToPair {
 }
 
 const (
-	colTypeString    = "STRING"
-	colTypeInt64     = "INT64"
-	untypedTableName = "_untyped"
+	colTypeString = "STRING"
+	colTypeInt64  = "INT64"
+	// untypedTableName is the internal placeholder NODE table created for
+	// edgeless rel types (createRelTableOnConn). The name is reserved for this
+	// purpose: schema.UntypedTableName is rejected as a user entity/edge type
+	// name by schema.Validate, so it can never alias a user type. Aliased here
+	// to keep a single source of truth for the reserved name.
+	untypedTableName = schema.UntypedTableName
 	tableTypeNode    = "NODE"
 	tableTypeRel     = "REL"
 )

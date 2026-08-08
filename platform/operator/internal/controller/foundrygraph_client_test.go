@@ -156,7 +156,7 @@ func TestApplySchemaPushesCompleteSchema(t *testing.T) {
 	fakeCli := fake.NewClientBuilder().WithScheme(scheme.Scheme).WithObjects(fg).Build()
 	r := &FoundryGraphReconciler{Client: fakeCli, CartographerDialer: dialer}
 
-	if err := r.applySchema(context.Background(), fg); err != nil {
+	if err := r.applySchema(context.Background(), fg, spec); err != nil {
 		t.Fatalf("applySchema: %v", err)
 	}
 	if pushed == nil {

@@ -13,6 +13,19 @@ var cypherIdentifierRegex = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
 
 const maxNameLength = 255
 
+// UntypedTableName is the name of the ladybug store's internal placeholder
+// NODE table, created for edge types that declare no FROM/TO endpoint pairs
+// (edgeless rel types — see createRelTableOnConn in the store). It is a valid
+// Cypher identifier, so it must be explicitly reserved here: a user entity or
+// edge type with this name would alias the placeholder table (the store's
+// CREATE NODE TABLE IF NOT EXISTS no-ops against it, silently dropping the
+// user's declared columns) and the store's reopen structural check
+// (validateMetadataAgainstCatalog) skips the name, silently bypassing the
+// metadata↔catalog check for it. Validate rejects it like a reserved word
+// (ErrReservedWord → INVALID_ARGUMENT); the store references this constant
+// for the placeholder table it creates.
+const UntypedTableName = "_untyped"
+
 // Validate validates the given schema and returns the first validation error found.
 // Validation runs in this order:
 //  1. Duplicate type names (entity types, then edge types)
@@ -84,6 +97,14 @@ func validateEntityType(et *flowv1.EntityType, entityTypeNames, edgeTypeNames ma
 		return fmt.Errorf("%w: %q is a reserved word", ErrReservedWord, et.Name)
 	}
 
+	// 2. Internal placeholder name: `_untyped` is the store's placeholder
+	// NODE table for edgeless rel types (UntypedTableName). A user entity
+	// type with that name would alias it and be silently skipped by the
+	// store's reopen structural check, so it is reserved like a keyword.
+	if et.Name == UntypedTableName {
+		return fmt.Errorf("%w: %q is a reserved word", ErrReservedWord, et.Name)
+	}
+
 	// 3. Duplicate property names within this type
 	propNames := make(map[string]bool, len(et.Properties))
 	for i, p := range et.Properties {
@@ -133,6 +154,13 @@ func validateEdgeType(et *flowv1.EdgeType) error {
 
 	// 2. Reserved word check
 	if reservedWords[strings.ToUpper(et.Name)] {
+		return fmt.Errorf("%w: %q is a reserved word", ErrReservedWord, et.Name)
+	}
+
+	// 2. Internal placeholder name: `_untyped` is the store's placeholder
+	// NODE table for edgeless rel types (UntypedTableName). A user edge type
+	// with that name would collide with it, so it is reserved like a keyword.
+	if et.Name == UntypedTableName {
 		return fmt.Errorf("%w: %q is a reserved word", ErrReservedWord, et.Name)
 	}
 

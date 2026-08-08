@@ -113,7 +113,7 @@ func (tx *Transaction) SearchNeighbors(embedding []float32, entityType string, t
 		var callErr error
 		resp, callErr = tx.session.Cartographer.SearchNeighbors(ctx, req)
 		return callErr
-	}, "", entityType)
+	}, "")
 	if err != nil {
 		return nil, err
 	}
@@ -148,7 +148,7 @@ func (tx *Transaction) FullTextSearch(query, entityType string) ([]Entity, error
 		var callErr error
 		resp, callErr = tx.session.Cartographer.FullTextSearch(ctx, req)
 		return callErr
-	}, "", entityType)
+	}, "")
 	if err != nil {
 		return nil, err
 	}
@@ -189,7 +189,7 @@ func (tx *Transaction) ListEntities(entityType string, opts ...ListEntitiesOptio
 		var callErr error
 		resp, callErr = tx.session.Cartographer.ListEntities(ctx, req)
 		return callErr
-	}, "", entityType)
+	}, "")
 	if err != nil {
 		return nil, err
 	}
@@ -241,7 +241,7 @@ func (tx *Transaction) CreateEntity(
 		var callErr error
 		resp, callErr = tx.session.Cartographer.CreateEntity(ctx, req)
 		return callErr
-	}, "", entityType)
+	}, "")
 	if err != nil {
 		return nil, err
 	}

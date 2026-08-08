@@ -20,12 +20,13 @@ func (db *ladybugDB) IsVectorIndexBootstrapped(entityType, branch string) bool {
 	}
 	defer unlock()
 
-	if _, ok := typeDefs.entityTypeDefs[entityType]; !ok {
+	def, ok := typeDefs.entityTypeDefs[entityType]
+	if !ok {
 		return false
 	}
 
 	// Check that the embedding column exists with a dimension > 0.
-	dim, err := getEmbeddingDimension(conn, entityType)
+	dim, err := getEmbeddingDimension(conn, entityType, def.EnableVectorIndex)
 	if err != nil {
 		return false
 	}
@@ -69,11 +70,12 @@ func (db *ladybugDB) GetEstablishedDimension(entityType, branch string) (int, er
 	}
 	defer unlock()
 
-	if _, ok := typeDefs.entityTypeDefs[entityType]; !ok {
+	def, ok := typeDefs.entityTypeDefs[entityType]
+	if !ok {
 		return 0, fmt.Errorf("%w: %q", store.ErrUnknownEntityType, entityType)
 	}
 
-	dim, err := getEmbeddingDimension(conn, entityType)
+	dim, err := getEmbeddingDimension(conn, entityType, def.EnableVectorIndex)
 	if err != nil {
 		return 0, fmt.Errorf("read embedding dimension for %q: %w", entityType, err)
 	}

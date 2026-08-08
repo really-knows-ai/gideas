@@ -86,6 +86,29 @@ func (r *FoundryGraphReconciler) cartographerServiceName(fg *flowv1.FoundryGraph
 	return "cartographer-" + fg.Name
 }
 
+// reconcileInfrastructure runs the SPEC R6 steps 4-8 infra reconciles in order:
+// PVC, Secrets, RBAC, Deployment, Service. Extracted from Reconcile so the
+// reconcile loop stays under the gocyclo complexity limit; each step is
+// idempotent and any failure is returned to the caller's failure path.
+func (r *FoundryGraphReconciler) reconcileInfrastructure(ctx context.Context, fg *flowv1.FoundryGraph) error {
+	if err := r.reconcilePVC(ctx, fg); err != nil {
+		return err
+	}
+	if err := r.reconcileSecrets(ctx, fg); err != nil {
+		return err
+	}
+	if err := r.reconcileRBAC(ctx, fg); err != nil {
+		return err
+	}
+	if err := r.reconcileDeployment(ctx, fg); err != nil {
+		return err
+	}
+	if err := r.reconcileService(ctx, fg); err != nil {
+		return err
+	}
+	return nil
+}
+
 // reconcilePVC creates or updates the PVC for the Cartographer's data directory.
 func (r *FoundryGraphReconciler) reconcilePVC(ctx context.Context, fg *flowv1.FoundryGraph) error {
 	pvc := &corev1.PersistentVolumeClaim{
@@ -482,6 +505,14 @@ func (r *FoundryGraphReconciler) reconcileService(ctx context.Context, fg *flowv
 }
 
 // fsGroupChangePolicyPtr returns a pointer to a PodFSGroupChangePolicy value.
+//
+// The body relies on Go 1.26 new(expr) semantics (go.mod requires go 1.26.0):
+// new(p) allocates a fresh variable holding the resolved value of the expression
+// p and returns its address. This is NOT the classic new(T) zero-allocation,
+// whose argument is a type and would be discarded — do not "simplify" it to
+// new(corev1.PodFSGroupChangePolicy) (which would return a pointer to a zero
+// value, dropping p) or to returning &p (which would alias the function
+// parameter).
 //
 //go:fix inline
 func fsGroupChangePolicyPtr(p corev1.PodFSGroupChangePolicy) *corev1.PodFSGroupChangePolicy {

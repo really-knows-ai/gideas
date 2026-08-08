@@ -25,6 +25,7 @@ func newChangeLog(capacity int) *ChangeLog {
 		ModifiedEntities: make(map[string]*EntityEntry),
 		DeletedEntities:  make(map[string]*DeletionInfo),
 		AddedEdges:       make(map[string]*EdgeEntry),
+		ModifiedEdges:    make(map[string]*EdgeEntry),
 		DeletedEdges:     make(map[string]*DeletionInfo),
 		cap:              capacity,
 	}
@@ -128,6 +129,11 @@ func (cl *ChangeLog) add(entry ChangeLogEntry) error {
 			cl.count++
 		}
 		cl.AddedEdges[entry.ID] = entry.Edge
+	case ChangeModEdge:
+		if _, exists := cl.ModifiedEdges[entry.ID]; !exists {
+			cl.count++
+		}
+		cl.ModifiedEdges[entry.ID] = entry.Edge
 	case ChangeDelEdge:
 		if _, exists := cl.DeletedEdges[entry.ID]; !exists {
 			cl.count++
@@ -182,6 +188,14 @@ func (cl *ChangeLog) Entries() []ChangeLogEntry {
 			Edge: edge,
 		})
 	}
+	for id, edge := range cl.ModifiedEdges {
+		entries = append(entries, ChangeLogEntry{
+			Kind: ChangeModEdge,
+			ID:   id,
+			Type: edge.Type,
+			Edge: edge,
+		})
+	}
 	for id, info := range cl.DeletedEdges {
 		entries = append(entries, ChangeLogEntry{
 			Kind:      ChangeDelEdge,
@@ -208,6 +222,7 @@ func (cl *ChangeLog) Clear() {
 	cl.ModifiedEntities = make(map[string]*EntityEntry)
 	cl.DeletedEntities = make(map[string]*DeletionInfo)
 	cl.AddedEdges = make(map[string]*EdgeEntry)
+	cl.ModifiedEdges = make(map[string]*EdgeEntry)
 	cl.DeletedEdges = make(map[string]*DeletionInfo)
 	cl.count = 0
 }

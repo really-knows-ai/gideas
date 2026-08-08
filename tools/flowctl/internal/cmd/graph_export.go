@@ -143,6 +143,12 @@ func runGraphExport(cmd *cobra.Command, args []string) error {
 		return runGraphExportWith(ctx, exporter, params, os.Stdout)
 	}
 
+	// Validate the format before creating the output file, so a format typo
+	// never truncates (and then removes) a pre-existing file.
+	if err := validateExportFormat(format); err != nil {
+		return err
+	}
+
 	// Output to a file: any stream or write failure removes the partial file so
 	// the caller doesn't mistake truncated data for a full graph.
 	f, err := newExportFileFn(outputPath)

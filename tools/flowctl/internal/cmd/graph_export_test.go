@@ -661,6 +661,49 @@ func TestRunGraphExport_OutputCreateFails(t *testing.T) {
 	}
 }
 
+func TestRunGraphExport_InvalidFormatPreservesExistingOutputFile(t *testing.T) {
+	// A format typo must fail before the output file is created: creating the
+	// file first would truncate a pre-existing file, and the failure cleanup
+	// would then remove it entirely (SPEC R11 fail-fast intent).
+	dir := t.TempDir()
+	outPath := filepath.Join(dir, "export.json")
+	const wantContent = "pre-existing graph data"
+	if err := os.WriteFile(outPath, []byte(wantContent), 0o644); err != nil {
+		t.Fatalf("write pre-existing file: %v", err)
+	}
+
+	// Pin the ordering: the file seam must never be reached for an invalid
+	// format.
+	origFileFn := newExportFileFn
+	var createCalled bool
+	newExportFileFn = func(path string) (io.WriteCloser, error) {
+		createCalled = true
+		f, err := os.Create(path)
+		if err != nil {
+			return nil, err
+		}
+		return f, nil
+	}
+	t.Cleanup(func() { newExportFileFn = origFileFn })
+
+	params := testParams()
+	params.format = "xml"
+	err := runGraphExportToFile(t, successExporter(), outPath, params)
+	if err == nil || !strings.Contains(err.Error(), "invalid export format") {
+		t.Fatalf("expected format rejection error, got: %v", err)
+	}
+	if createCalled {
+		t.Error("newExportFileFn must not be called when the format is invalid")
+	}
+	data, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatalf("read pre-existing file: %v", err)
+	}
+	if string(data) != wantContent {
+		t.Errorf("pre-existing file was modified: got %q, want %q", string(data), wantContent)
+	}
+}
+
 func TestRunGraphExport_FlushFailureCleansUpOutputFile(t *testing.T) {
 	// Drive runGraphExport's flush-failure branch directly: the stream
 	// succeeds, the buffered data fails to flush to the underlying file, and

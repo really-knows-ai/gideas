@@ -648,6 +648,36 @@ func TestValidate_ReservedWordNewlyAdded(t *testing.T) {
 	}
 }
 
+// The store's internal placeholder NODE table for edgeless rel types is named
+// `_untyped` (UntypedTableName). It is a valid Cypher identifier (passes the
+// regex), so it must be explicitly reserved: a user entity or edge type with
+// that name would alias the placeholder table and be silently skipped by the
+// store's reopen structural check (validateMetadataAgainstCatalog). Both
+// entity and edge type names must be rejected with ErrReservedWord (→
+// INVALID_ARGUMENT at the gRPC boundary).
+func TestValidate_ReservedUntypedPlaceholderName(t *testing.T) {
+	tests := []struct {
+		name string
+		s    *flowv1.Schema
+	}{
+		{"entity type name", &flowv1.Schema{
+			EntityTypes: []*flowv1.EntityType{{Name: UntypedTableName}},
+		}},
+		{"edge type name", &flowv1.Schema{
+			EdgeTypes: []*flowv1.EdgeType{{Name: UntypedTableName}},
+		}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := Validate(tc.s); err == nil {
+				t.Fatal("expected ErrReservedWord, got nil")
+			} else if !errors.Is(err, ErrReservedWord) {
+				t.Fatalf("expected ErrReservedWord, got: %v", err)
+			}
+		})
+	}
+}
+
 func TestValidate_CypherIdentifierBoundaryCases(t *testing.T) {
 	tests := []struct {
 		name     string

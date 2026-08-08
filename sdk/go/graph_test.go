@@ -1698,7 +1698,7 @@ func (s *mockStream) Recv() (*flowv1.ExportGraphResponse, error) {
 }
 
 func TestExportStream_Recv(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	_, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	stream := &mockStream{
@@ -1707,7 +1707,7 @@ func TestExportStream_Recv(t *testing.T) {
 			{Chunk: []byte("chunk2")},
 		},
 	}
-	es := newExportStream(ctx, cancel, stream)
+	es := newExportStream(cancel, stream)
 
 	chunk, err := es.Recv()
 	if err != nil {
@@ -1732,7 +1732,7 @@ func TestExportStream_Recv(t *testing.T) {
 func TestExportStream_Stop(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	stream := &mockStream{chunks: []*flowv1.ExportGraphResponse{{Chunk: []byte("data")}}}
-	es := newExportStream(ctx, cancel, stream)
+	es := newExportStream(cancel, stream)
 
 	es.Stop()
 	// After stop, the context is cancelled

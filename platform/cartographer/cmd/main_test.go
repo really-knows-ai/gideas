@@ -456,6 +456,7 @@ type recoveryGitStore struct {
 
 func (g *recoveryGitStore) IsEmpty(context.Context) (bool, error) { return g.isEmpty, g.stateErr }
 func (g *recoveryGitStore) HydrationDirs() (string, string)       { return g.dirs[0], g.dirs[1] }
+func (g *recoveryGitStore) WithGitLock(fn func() error) error     { return fn() }
 
 // recoveryStore is a store.Store stub that reports whether main holds graph
 // data (via the same count queries rehydrateMainAfterRecovery issues) and
@@ -630,6 +631,43 @@ func TestRehydrateMainAfterRecoveryRestoresCommittedGraph(t *testing.T) {
 	}
 	if ent.Type != "Component" {
 		t.Fatalf("restored entity type = %q, want %q", ent.Type, "Component")
+	}
+}
+
+// TestCountValueIsPositive pins the count() discriminator behind the SPEC R8
+// recovery gate: known numeric kinds classify by sign, and an unexpected
+// numeric kind is an error (fail loudly) instead of returning false — a false
+// would make a populated main look empty and trigger the recovery re-hydration
+// that wipes durable non-transactional writes.
+func TestCountValueIsPositive(t *testing.T) {
+	cases := []struct {
+		name    string
+		value   any
+		want    bool
+		wantErr bool
+	}{
+		{"float64 positive", float64(1), true, false},
+		{"float64 zero", float64(0), false, false},
+		{"float64 negative", float64(-1), false, false},
+		{"int64 positive", int64(1), true, false},
+		{"int64 zero", int64(0), false, false},
+		{"uint64 positive", uint64(1), true, false},
+		{"uint64 zero", uint64(0), false, false},
+		{"int positive", 1, true, false},
+		{"int zero", 0, false, false},
+		{"unexpected string kind errors", "42", false, true},
+		{"unexpected uint32 kind errors", uint32(1), false, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := countValueIsPositive(tc.value)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("countValueIsPositive(%v) error = %v, wantErr %v", tc.value, err, tc.wantErr)
+			}
+			if err == nil && got != tc.want {
+				t.Errorf("countValueIsPositive(%v) = %v, want %v", tc.value, got, tc.want)
+			}
+		})
 	}
 }
 
@@ -1155,7 +1193,7 @@ func TestWaitForShutdownTeardownCompletes(t *testing.T) {
 	db := &shutdownStore{}
 	gs := &shutdownGitStore{}
 	server := service.NewCartographerServer(db, gs, nil, nil, nil, "", 30*time.Second,
-		"default", 30*time.Second, 100000)
+		"default", 30*time.Second, gitstore.DefaultChangeLogCap)
 
 	healthSrv := health.NewServer()
 	grpcServer := grpc.NewServer()
@@ -1222,7 +1260,7 @@ func TestWaitForShutdownLockFailureStillCompletes(t *testing.T) {
 	db := &shutdownStore{}
 	gs := &lockErrGitStore{lockErr: errors.New("git lock acquisition failed")}
 	server := service.NewCartographerServer(db, gs, nil, nil, nil, "", 30*time.Second,
-		"default", 30*time.Second, 100000)
+		"default", 30*time.Second, gitstore.DefaultChangeLogCap)
 
 	healthSrv := health.NewServer()
 	grpcServer := grpc.NewServer()

@@ -371,7 +371,8 @@ func (db *ladybugDB) SearchNeighbors(
 	indexedExists := false
 	var foundForType []store.NeighborResult
 	for _, t := range typesToSearch {
-		indexed, matched, found, err := db.searchIndexedType(conn, t, embedding, topK, entityType)
+		indexed, matched, found, err := db.searchIndexedType(conn, t, embedding, topK, entityType,
+			typeDefs.entityTypeDefs[t].EnableVectorIndex)
 		if err != nil {
 			return nil, err
 		}
@@ -420,10 +421,10 @@ func (db *ladybugDB) SearchNeighbors(
 // results and no error, letting the caller distinguish "no index yet" from
 // "established index but dimension mismatch" and aggregate the other types.
 func (db *ladybugDB) searchIndexedType(
-	conn *lbug.Connection, t string, embedding []float32, topK int, entityType string,
+	conn *lbug.Connection, t string, embedding []float32, topK int, entityType string, vectorIndexed bool,
 ) (indexed bool, matched bool, found []store.NeighborResult, err error) {
 	// Check if the index is bootstrapped.
-	dim, derr := getEmbeddingDimension(conn, t)
+	dim, derr := getEmbeddingDimension(conn, t, vectorIndexed)
 	if derr != nil {
 		return false, false, nil, fmt.Errorf("read embedding dimension for %q: %w", t, derr)
 	}
@@ -502,7 +503,7 @@ func (db *ladybugDB) searchIndexedType(
 		default:
 			return true, false, nil, fmt.Errorf("unexpected distance type for %q: got %T", t, m["distance"])
 		}
-		entity := entityFromNode(node, t)
+		entity := entityFromNode(node, t, vectorIndexed)
 		found = append(found, store.NeighborResult{
 			Entity:   *entity,
 			Distance: distance,
@@ -591,7 +592,7 @@ func (db *ladybugDB) FullTextSearch(
 				result.Close()
 				return nil, fmt.Errorf("fts result for %q: unexpected node type %T", t, m["node"])
 			}
-			results = append(results, *entityFromNode(node, t))
+			results = append(results, *entityFromNode(node, t, typeDefs.entityTypeDefs[t].EnableVectorIndex))
 		}
 		result.Close()
 	}
@@ -609,16 +610,11 @@ func (db *ladybugDB) FullTextSearch(
 func (db *ladybugDB) ListEntities(
 	ctx context.Context, entityType string, pageSize int, pageToken, branch string,
 ) ([]store.Entity, string, error) {
-	if pageSize < 0 {
-		return nil, "", store.ErrInvalidPageSize
-	}
-	if pageSize == 0 {
-		pageSize = 1000
-	}
-	if pageSize > 1000 {
-		return nil, "", fmt.Errorf("%w: page size %d exceeds maximum of 1000", store.ErrInvalidPageSize, pageSize)
-	}
-
+	// SPEC:960 check order for ListEntities: capability → structural (unknown
+	// entity type → pageSize → pageToken). The entity-type existence check
+	// requires the type defs from the branch lock, so the lock is acquired
+	// before the pageSize validation; when multiple inputs are invalid the
+	// earliest check in this order is the error surfaced.
 	conn, typeDefs, unlock, err := db.lockForRead(branch)
 	if err != nil {
 		return nil, "", err
@@ -627,6 +623,16 @@ func (db *ladybugDB) ListEntities(
 
 	if _, ok := typeDefs.entityTypeDefs[entityType]; !ok {
 		return nil, "", fmt.Errorf("%w: %q", store.ErrUnknownEntityType, entityType)
+	}
+
+	if pageSize < 0 {
+		return nil, "", store.ErrInvalidPageSize
+	}
+	if pageSize == 0 {
+		pageSize = 1000
+	}
+	if pageSize > 1000 {
+		return nil, "", fmt.Errorf("%w: page size %d exceeds maximum of 1000", store.ErrInvalidPageSize, pageSize)
 	}
 
 	// Decode page token (offset-based: base64-encoded offset as string).
@@ -694,7 +700,7 @@ func (db *ladybugDB) ListEntities(
 		if !ok {
 			return nil, "", fmt.Errorf("entity row for %q: unexpected node type %T", entityType, m["n"])
 		}
-		entities = append(entities, *entityFromNode(node, entityType))
+		entities = append(entities, *entityFromNode(node, entityType, typeDefs.entityTypeDefs[entityType].EnableVectorIndex))
 		count++
 	}
 
