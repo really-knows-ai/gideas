@@ -34,7 +34,9 @@ func newChangeLog(capacity int) *ChangeLog {
 // is rejected with ErrChangeLogFull only when it would grow the log past its
 // cap. At cap, a mutation on an element already tracked by the log is admitted
 // — it reuses the element's slot and does not exceed the limit. Returns
-// ErrUnknownChangeKind for unrecognised ChangeKind values.
+// ErrUnknownChangeKind for unrecognised ChangeKind values and
+// ErrChangeLogNilSnapshot for add/modify entries lacking their required
+// Entity/Edge snapshot (Entries() dereferences the snapshot on read-back).
 func (cl *ChangeLog) Add(entry ChangeLogEntry) error {
 	cl.mu.Lock()
 	defer cl.mu.Unlock()
@@ -87,7 +89,9 @@ func (cl *ChangeLog) checkCapacityLocked(entry ChangeLogEntry) bool {
 // Used during startup recovery reconstruction (RecoverOpenTransactions) where
 // entries were already subject to the cap when originally added — per-transaction
 // re-checking is unnecessary since the original addition was already gated.
-// Returns ErrUnknownChangeKind for unrecognised ChangeKind values.
+// Returns ErrUnknownChangeKind for unrecognised ChangeKind values and
+// ErrChangeLogNilSnapshot for add/modify entries lacking their required
+// Entity/Edge snapshot (Entries() dereferences the snapshot on read-back).
 //
 // ponytail: Recovery bypasses the cap via this method. The per-transaction cap
 // means a single recovered transaction cannot exceed 100K distinct
@@ -114,11 +118,17 @@ func (cl *ChangeLog) AddEntry(entry ChangeLogEntry) error {
 func (cl *ChangeLog) add(entry ChangeLogEntry) error {
 	switch entry.Kind {
 	case ChangeAddEntity:
+		if entry.Entity == nil {
+			return ErrChangeLogNilSnapshot
+		}
 		if !cl.hasElement(entry.ID) {
 			cl.count++
 		}
 		cl.AddedEntities[entry.ID] = entry.Entity
 	case ChangeModEntity:
+		if entry.Entity == nil {
+			return ErrChangeLogNilSnapshot
+		}
 		if !cl.hasElement(entry.ID) {
 			cl.count++
 		}
@@ -132,11 +142,17 @@ func (cl *ChangeLog) add(entry ChangeLogEntry) error {
 			Suspected: entry.Suspected,
 		}
 	case ChangeAddEdge:
+		if entry.Edge == nil {
+			return ErrChangeLogNilSnapshot
+		}
 		if !cl.hasElement(entry.ID) {
 			cl.count++
 		}
 		cl.AddedEdges[entry.ID] = entry.Edge
 	case ChangeModEdge:
+		if entry.Edge == nil {
+			return ErrChangeLogNilSnapshot
+		}
 		if !cl.hasElement(entry.ID) {
 			cl.count++
 		}

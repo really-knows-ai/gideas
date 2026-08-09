@@ -157,6 +157,7 @@ var (
 	ErrPullDiverged         = errors.New("pull would diverge")
 	ErrMergeDiverged        = errors.New("merge would diverge")
 	ErrChangeLogFull        = errors.New("change log full (100K cap)")
+	ErrChangeLogNilSnapshot = errors.New("change log entry missing required snapshot")
 	ErrUnknownChangeKind    = errors.New("unknown change kind")
 	ErrEntityTypeMismatch   = errors.New("entity type mismatch")
 	ErrEdgeTypeMismatch     = errors.New("edge type mismatch")
