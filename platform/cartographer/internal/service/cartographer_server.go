@@ -1712,6 +1712,16 @@ func (s *CartographerServer) CommitTransaction(
 		}
 		// Divergence check: verify main has not advanced since last sync
 		// (SPEC serialisation flow step 5 — must precede step 6 git add+commit).
+		// The mainHeadAtLastSync != "" clause skips the check when no baseline
+		// is recorded (a state created without one) rather than failing closed.
+		// This is a defensive fallback: BeginTransaction always snapshots main's
+		// HEAD as the baseline and persisted branch states are validated to
+		// carry one (transaction_state.go), so the empty value is normally
+		// unreachable. Consequence of the skip: a stale-branch commit is caught
+		// later by step 10's fast-forward merge, surfacing INTERNAL
+		// (ErrMergeDiverged) instead of step 5's FAILED_PRECONDITION
+		// (errCommitNotUpToDate) — an accepted error-code difference for the
+		// no-baseline corner.
 		curHead, err := s.gitstore.BranchHEAD(ctx, "main")
 		if err != nil {
 			commitErr = fmt.Errorf("branch head: %w", err)
