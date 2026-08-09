@@ -1334,6 +1334,71 @@ func TestCreateBranchDuplicate(t *testing.T) {
 	}
 }
 
+// TestCreateBranchRefOnlyExisting pins the branch-already-exists contract for
+// a branch that exists only as a ref: SetBranchRef writes no config entry, so
+// CreateBranch must check the ref itself and refuse to silently overwrite it
+// (which would repoint the branch at main and discard its commits).
+func TestCreateBranchRefOnlyExisting(t *testing.T) {
+	gs := setupTestStore(t)
+	err := gs.WithGitLock(func() error {
+		txID := validUUID(t)
+		initHash, err := gs.BranchHEAD(ctx(), "main")
+		if err != nil {
+			return err
+		}
+
+		// Advance main so the branch's pinned hash differs from where
+		// CreateBranch would repoint it, making the no-overwrite assertion
+		// meaningful.
+		now := time.Now().UTC().Round(time.Millisecond)
+		if err := gs.WriteEntityFiles(ctx(), "Component", []Entity{
+			{ID: validUUID(t), Type: "Component", CreatedAt: now, UpdatedAt: now},
+		}); err != nil {
+			return err
+		}
+		if err := gs.AddAll(ctx(), "."); err != nil {
+			return err
+		}
+		if err := gs.Commit(ctx(), "main data"); err != nil {
+			return err
+		}
+		mainHash, err := gs.BranchHEAD(ctx(), "main")
+		if err != nil {
+			return err
+		}
+		if mainHash == initHash {
+			return fmt.Errorf("test setup: main must advance past the init commit")
+		}
+
+		// SetBranchRef alone creates a ref with no config entry.
+		if err := gs.SetBranchRef(ctx(), txID, initHash); err != nil {
+			return err
+		}
+
+		// CreateBranch must detect the ref-only branch rather than silently
+		// overwriting its ref.
+		if err := gs.CreateBranch(ctx(), txID); err == nil {
+			return fmt.Errorf("expected ErrBranchAlreadyExists")
+		} else if !errors.Is(err, ErrBranchAlreadyExists) {
+			return fmt.Errorf("expected ErrBranchAlreadyExists, got %v", err)
+		}
+
+		// The existing ref must be untouched.
+		head, err := gs.BranchHEAD(ctx(), txID)
+		if err != nil {
+			return err
+		}
+		if head != initHash {
+			return fmt.Errorf("branch ref overwritten: HEAD = %s, want %s", head, initHash)
+		}
+
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("TestCreateBranchRefOnlyExisting: %v", err)
+	}
+}
+
 // TestCreateBranchFromMainWhenHeadNotOnMain pins SPEC Hydration step 1
 // (SPEC:754): CreateBranch must branch from main, not from the current HEAD.
 // After an abandoned failed Commit leaves the working tree checked out on a
