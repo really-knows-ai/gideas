@@ -8093,6 +8093,60 @@ func TestCreateEntity_NonIndexedTypeDiscardsEmbedding(t *testing.T) {
 	}
 }
 
+// SPEC R7 (SPEC:457-458): a non-indexed entity type accepts an embedding of
+// any dimension but does not persist or index it. TestCreateEntity_
+// NonIndexedTypeDiscardsEmbedding pins CreateEntity's discard; this pins the
+// UpdateEntity sibling — for a non-vector type the `def.EnableVectorIndex &&
+// hasNewEmb` guard (crud.go:249) is skipped, so the supplied embedding is
+// neither bootstrapped nor written to the SET clause, and the update succeeds.
+func TestUpdateEntity_NonIndexedTypeDiscardsEmbedding(t *testing.T) {
+	s, err := OpenInMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeStore(t, s)
+	applyTestSchema(t, s)
+	ctx := context.Background()
+
+	// Document is not vector-indexed in testSchema.
+	e, err := s.CreateEntity(ctx, "Document", "",
+		map[string]string{"title": "doc"}, []float32{1, 2, 3}, "")
+	if err != nil {
+		t.Fatalf("non-indexed type must accept an embedding on create: %v", err)
+	}
+	if e.Embedding != nil {
+		t.Fatalf("expected nil Embedding on returned entity for non-indexed type, got %v", e.Embedding)
+	}
+
+	// UpdateEntity the same entity with a fresh embedding and a property
+	// change: the update must succeed, apply the property, and discard the
+	// embedding (the returned entity's Embedding stays nil).
+	updated, err := s.UpdateEntity(ctx, e.Id,
+		map[string]string{"title": "doc-v2"}, []float32{4, 5, 6}, "")
+	if err != nil {
+		t.Fatalf("non-indexed type must accept an embedding on update: %v", err)
+	}
+	if updated.Embedding != nil {
+		t.Fatalf("expected nil Embedding on returned entity from UpdateEntity, got %v", updated.Embedding)
+	}
+	if updated.Properties["title"] != "doc-v2" {
+		t.Fatalf("expected the property update to apply while the embedding is discarded, got %+v", updated.Properties)
+	}
+
+	// The embedding must not be persisted: GetEntity returns nil Embedding,
+	// and the non-vector type never gains a vector index.
+	got, err := s.GetEntity(ctx, e.Id, "")
+	if err != nil {
+		t.Fatalf("GetEntity: %v", err)
+	}
+	if got.Embedding != nil {
+		t.Fatalf("expected non-indexed type to discard the update embedding, got %v", got.Embedding)
+	}
+	if s.IsVectorIndexBootstrapped(ctx, "Document", "") {
+		t.Fatal("expected Document to have no vector index after an embedding-bearing update")
+	}
+}
+
 // SPEC:345-346: before the first ApplySchema (or on a graph with no
 // string-property types), a type-omitted (entityType == "") FullTextSearch is a
 // non-type-referencing method and must succeed on an empty/fresh graph — the
