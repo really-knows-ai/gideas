@@ -2992,6 +2992,99 @@ func TestCloneSingleBranchNoAuth(t *testing.T) {
 	}
 }
 
+// TestCloneSingleBranchCleansUntracked pins the SPEC R10 clone-on-init
+// contract: after the forced checkout the working tree must reflect exactly
+// the cloned state (re-hydration reads the cloned tree). A transaction that
+// crashed between file-write and git-commit on a prior run strands uncommitted
+// files in the working tree that IsEmpty cannot detect (main still points at
+// the init commit), so without the post-checkout clean — mirroring
+// setLocalRefAndCheckout — they survive the clone and are re-hydrated into
+// main.lbug as phantom graph data.
+func TestCloneSingleBranchCleansUntracked(t *testing.T) {
+	tmpDir := t.TempDir()
+	sourceDir := filepath.Join(tmpDir, "source")
+	source, err := git.PlainInitWithOptions(sourceDir, &git.PlainInitOptions{
+		InitOptions: git.InitOptions{DefaultBranch: plumbing.NewBranchReferenceName("main")},
+	})
+	if err != nil {
+		t.Fatalf("init source: %v", err)
+	}
+	sourceWT, err := source.Worktree()
+	if err != nil {
+		t.Fatalf("source worktree: %v", err)
+	}
+	const graphContent = `{"graph":"controlled"}`
+	graphFile, err := sourceWT.Filesystem.Create("data.txt")
+	if err != nil {
+		t.Fatalf("create payload file: %v", err)
+	}
+	if _, err := graphFile.Write([]byte(graphContent)); err != nil {
+		t.Fatalf("write payload file: %v", err)
+	}
+	if err := graphFile.Close(); err != nil {
+		t.Fatalf("close payload file: %v", err)
+	}
+	if _, err := sourceWT.Add("data.txt"); err != nil {
+		t.Fatalf("add payload file: %v", err)
+	}
+	if _, err := sourceWT.Commit("main graph", &git.CommitOptions{
+		Author: &object.Signature{Name: "test", Email: "test@test"},
+	}); err != nil {
+		t.Fatalf("commit graph file: %v", err)
+	}
+
+	remoteDir := filepath.Join(tmpDir, "remote.git")
+	if _, err := git.PlainClone(remoteDir, true, &git.CloneOptions{URL: "file://" + sourceDir}); err != nil {
+		t.Fatalf("create bare remote: %v", err)
+	}
+
+	store, err := New(filepath.Join(tmpDir, "local"))
+	if err != nil {
+		t.Fatalf("new local store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	gs := store.(*gitStore)
+
+	// Simulate a transaction that crashed between file-write and git-commit
+	// on a prior run: an uncommitted file stranded in the re-hydration
+	// directory. main still points at the init commit, so IsEmpty reports the
+	// repo empty and the clone-on-init path runs with this file in the tree.
+	stranded := filepath.Join(tmpDir, "local", "graph-repo", "entities", "phantom.json")
+	if err := os.WriteFile(stranded, []byte(`{"id":"phantom","type":"Person"}`), 0644); err != nil {
+		t.Fatalf("write stranded file: %v", err)
+	}
+
+	err = store.WithGitLock(func() error {
+		return gs.CloneSingleBranch(ctx(), "file://"+remoteDir, "main")
+	})
+	if err != nil {
+		t.Fatalf("CloneSingleBranchCleansUntracked: %v", err)
+	}
+
+	if _, err := os.Stat(stranded); !os.IsNotExist(err) {
+		t.Fatalf("stranded untracked file survived the clone: %v", err)
+	}
+	cloned, err := gs.fs.Open("data.txt")
+	if err != nil {
+		t.Fatalf("open checked-out payload file: %v", err)
+	}
+	got, err := io.ReadAll(cloned)
+	_ = cloned.Close()
+	if err != nil {
+		t.Fatalf("read checked-out graph file: %v", err)
+	}
+	if string(got) != graphContent {
+		t.Fatalf("graph content = %q, want %q", got, graphContent)
+	}
+	status, err := gs.wt.Status()
+	if err != nil {
+		t.Fatalf("worktree status: %v", err)
+	}
+	if !status.IsClean() {
+		t.Fatalf("expected clean checked-out worktree, got %s", status)
+	}
+}
+
 func TestCloneSingleBranchInvalidScheme(t *testing.T) {
 	gs := setupTestStore(t)
 	err := gs.WithGitLock(func() error {

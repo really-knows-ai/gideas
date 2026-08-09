@@ -442,6 +442,17 @@ func (g *gitStore) CloneSingleBranch(ctx context.Context, rawURL, branch string)
 	}); err != nil {
 		return fmt.Errorf("checkout main: %w", err)
 	}
+	// Clean untracked files after the forced checkout so the working tree
+	// exactly matches the cloned commit. Without this, files stranded by a
+	// transaction that crashed between file-write and git-commit on a prior
+	// run survive the clone (Force only resets tracked files; IsEmpty cannot
+	// detect them because main still points at the init commit) and are
+	// re-hydrated into main.lbug as phantom graph data (SPEC R10 Init
+	// re-hydrates from the cloned working tree). Mirrors
+	// setLocalRefAndCheckout's cleanup pattern.
+	if err := g.wt.Clean(&git.CleanOptions{Dir: true}); err != nil {
+		return fmt.Errorf("clean main: %w", err)
+	}
 
 	// Re-open repo to refresh worktree and filesystem
 	// Use g.basePath to locate the repo directory
