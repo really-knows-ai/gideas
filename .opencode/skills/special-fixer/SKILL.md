@@ -1,6 +1,6 @@
 ---
 name: special-fixer
-description: Fix items from a review checklist (REVIEW_ITEMS.md) produced by special-review. Groups items by target file, then dispatches one implementer per file group to avoid stampedes and reduce redundant reads. Each implementer verifies the claim before acting — if they disagree they mark [~] wont-fix. Reads LEARNINGS.md from the companion review directory and provides it to implementers.
+description: Fix items from a review checklist (REVIEW_ITEMS.md) produced by special-review. Groups items by target file, then dispatches one implementer per file group in an isolated git worktree so implementers can run in parallel without clashing on the shared working tree. Each implementer verifies the claim before acting — if they disagree they mark [~] wont-fix. After implementers finish, merges the worktree branches back into main, dispatching implementers to resolve any conflicts. Reads LEARNINGS.md from the companion review directory and provides it to implementers.
 ---
 
 # Special Fixer
@@ -81,17 +81,46 @@ Also determine the **file category** for each group:
 
 This determines which quality gate applies (see Hard Rules).
 
-### 3. Dispatch one implementer per file group
+### 3. Dispatch one implementer per file group (parallel, isolated worktrees)
 
-For each file group, dispatch one `@implementer` subagent.  **Implementers
-must run SERIALLY — one at a time, waiting for each to complete before
-dispatching the next.**  Parallel implementers clash on the shared working
-tree and produce flaky builds and contradictory fixes.  Do not dispatch
-groups concurrently.  Each receives this prompt:
+For each file group, dispatch one `@implementer` subagent.  **Code-file
+groups run IN PARALLEL**, each in its own isolated git worktree, so they
+never clash on the shared working tree.  **Plan-file groups run SERIALLY**
+in the main working tree — plan files live under `plans/`, which is
+gitignored by design and therefore does not exist in any branch or
+worktree, so there is no worktree to isolate them in and nothing to merge.
+
+Before dispatching, determine each group's file category (from Step 2):
+
+- **code groups** — primary file is tracked source (not under `plans/`).
+  Dispatch in parallel; each implementer works in its own worktree.
+- **plan groups** — primary file under `plans/` (gitignored).  Dispatch
+  serially; the implementer works in the main working tree and does not
+  commit (the change is not tracked).
+
+Derive a **group slug** from each group's primary file: lowercase the
+relative path and replace every non-alphanumeric character with `-`
+(`platform/sidecar/server.go` → `platform-sidecar-server-go`).  Assign each
+code group a branch and worktree:
+
+- Branch: `fix/special-fixer/<group-slug>`
+- Worktree: `.worktrees/special-fixer/<group-slug>`
+- Base: the current branch of the main working tree (usually `main`)
+
+If the branch name already exists from a previous run, append `-02` (then
+`-03`, …) to both the branch and the worktree path.
+
+#### 3a. Code-group implementer prompt (parallel, worktree-isolated)
+
+Dispatch all code-group implementers in parallel — issue every
+`task(subagent_type: "implementer")` call up front and wait for all of
+them to complete.  Each receives this prompt:
 
 ```
 You are responsible for fixing all review items assigned to <FILE>.
-Handle them in the order listed below.
+Handle them in the order listed below.  You work in an isolated git
+worktree so you can run in parallel with other implementers without
+clashing on the shared working tree.
 
 **Project context:**
 [one-paragraph summary extracted from AGENTS.md]
@@ -99,6 +128,25 @@ Handle them in the order listed below.
 **Your file:** <FILE>
 **Read-only context files** (read for context, do not edit):
 <comma-separated list of secondary files referenced by items in this group>
+
+**Isolated worktree setup:**
+1. Create your worktree and branch off <BASE>:
+   `git worktree add -b <BRANCH> <WORKTREE-PATH> <BASE>`
+   If the branch already exists, append `-02` (then `-03`, …) to both the
+   branch and the worktree path and retry.
+2. Do ALL of your work inside <WORKTREE-PATH> — read <FILE> there, edit it
+   there, and run quality gates from there (cd into the worktree first).
+3. Context files that live under plans/ (REVIEW.md, LEARNINGS.md, criteria
+   docs) are gitignored and NOT present in the worktree — read them from
+   the main working tree at their absolute path
+   (e.g. /Users/jledrew/platform/plans/<project>/LEARNINGS.md).
+4. When all fixes are done and the quality gate passes, commit your work on
+   your branch inside the worktree:
+   `git add <changed files>` then `git commit -m "fix: resolve review items in <FILE>"`
+   Stage and commit only the files your items required you to change.  Do
+   not merge and do not push.
+5. Report: each item's outcome, the branch name, the worktree path, the
+   commit hash, and the quality-gate outcome.
 
 **Handle these items in order:**
 
@@ -118,7 +166,7 @@ Handle them in the order listed below.
     items.
 2. For each item, verify the claim first — do not take the reviewer's word
     at face value.
- 3. **Classify the fix type based on the item's tag prefix:**
+3. **Classify the fix type based on the item's tag prefix:**
      - `[FIX]` (or unclassified): The plan text is wrong.  Correct it.
      - `[PONYTAIL]`: The plan is intentionally simplified.  Add a `ponytail:`
        comment documenting the known ceiling and upgrade path per AGENTS.md.
@@ -128,9 +176,10 @@ Handle them in the order listed below.
        and either update the SPEC or update the code, or mark `[~]` wont-fix
        citing the SPEC mismatch.  A `ponytail:` annotation alone is never a
        valid fix for a behaviour the SPEC requires.
-      prose, a cross-reference, or an annotation for the implementer.
-      Only applies to plan/spec documents — for code files, treat as `[FIX]`
-      (add missing documentation) or wont-fix (if the code is self-documenting).
+     - `[IMPL-NOTE]`: The plan is correct but incomplete.  Add a note,
+       prose, a cross-reference, or an annotation for the implementer.
+       Only applies to plan/spec documents — for code files, treat as `[FIX]`
+       (add missing documentation) or wont-fix (if the code is self-documenting).
 4. If you agree the claim is valid:
     - Apply the minimum fix that resolves the divergence, respecting Prior
       learnings and the classification tag.
@@ -163,22 +212,137 @@ Handle them in the order listed below.
     run it between items.
 
 **Quality gate:**
-- If file category is "plan files": no build gate.  Verify only that the
-  file parses as valid Markdown (e.g., no unclosed code fences).
-- If file category is "code files": all verification runs through `make` —
-  bare `go`/`buf` and env-prefixed commands are denied by the implementer
-  agent's bash policy.  Run `make check-fix` plus the relevant test targets
-  (`make test-<service>` for the changed service, `make test-sdk`,
-  `make test-operator`, or `make verify`).  If a change touches `proto/**`,
-  run `make proto` first to regenerate `gen/**` — never hand-edit generated
-  code.
+- All verification runs through `make` — bare `go`/`buf` and env-prefixed
+  commands are denied by the implementer agent's bash policy.  Run
+  `make check-fix` plus the relevant test targets (`make test-<service>`
+  for the changed service, `make test-sdk`, `make test-operator`, or
+  `make verify`).  If a change touches `proto/**`, run `make proto` first
+  to regenerate `gen/**` — never hand-edit generated code.
 - Report the quality gate outcome after your last item.
 ```
 
-Wait for each implementer to complete before dispatching the next.  Only
-after all groups have been processed serially may you proceed.
+#### 3b. Plan-group implementer prompt (serial, main working tree)
 
-### 4. Update the review checklist
+Handle plan-group implementers one at a time, waiting for each to complete
+before dispatching the next — they share the main working tree.  Each
+receives this prompt:
+
+```
+You are responsible for fixing all review items assigned to <FILE>.
+Handle them in the order listed below.  <FILE> is a plan document under
+plans/, which is gitignored and exists only in the main working tree —
+work directly in the main working tree and do NOT commit (the change is
+not tracked).
+
+**Project context:**
+[one-paragraph summary extracted from AGENTS.md]
+
+**Your file:** <FILE>
+**Read-only context files** (read for context, do not edit):
+<comma-separated list of secondary files referenced by items in this group>
+
+**Handle these items in order:**
+
+1. [verbatim item 1]
+2. [verbatim item 2]
+...
+
+**Criteria:**
+[criteria from REVIEW.md in the review directory]
+
+**Prior learnings (read this file and follow its rules during the fix):**
+[path to LEARNINGS.md in the review directory, if it exists — otherwise "None."]
+
+**Rules:**
+1. Read <FILE> once.  Then process each item in order, applying fixes
+    sequentially within the same file.  Do not re-read the file between
+    items.
+2. For each item, verify the claim first — do not take the reviewer's word
+    at face value.
+3. **Classify the fix type based on the item's tag prefix:**
+     - `[FIX]` (or unclassified): The plan text is wrong.  Correct it.
+     - `[PONYTAIL]`: The plan is intentionally simplified.  Add a `ponytail:`
+       comment documenting the known ceiling and upgrade path per AGENTS.md.
+     - `[IMPL-NOTE]`: The plan is correct but incomplete.  Add a note,
+       prose, a cross-reference, or an annotation for the implementer.
+4. If you agree the claim is valid:
+    - Apply the minimum fix that resolves the divergence, respecting Prior
+      learnings and the classification tag.
+    - Report: "Item N [TAG] — Fixed: <what you changed and why.>"
+5. If you disagree with the claim, or the claim is valid but is a
+   "Tier-3" not-worth-fixing nice-to-have:
+    - Do not change any code for that item.
+    - Report: "Item N [~] — Wont-fix: <clear explanation with the evidence
+      — file paths, line numbers, spec sections.>"
+6. If two items conflict (e.g., one adds a method, another removes it), do
+    not guess.  Report both as `conflict` with an explanation.
+7. If an item references additional files outside your primary file, read
+    them for context only.  Do not edit them.
+8. Make no changes beyond what the items require.  No opportunistic
+    refactoring.  No bonus fixes.
+9. Run the quality gate after ALL fixes are applied (see below).  Do not
+    run it between items.
+
+**Quality gate:**
+- Plan files: no build gate.  Verify only that the file parses as valid
+  Markdown (e.g., no unclosed code fences).
+- Report the quality gate outcome after your last item.
+```
+
+Wait for all code-group implementers (parallel) and all plan-group
+implementers (serial) to complete before proceeding to the merge phase.
+
+### 4. Merge the worktree branches back into main
+
+Only code groups produced branches; plan-file fixes live directly in the
+main working tree and have nothing to merge.  This phase requires `git
+merge`, `git worktree`, and `git branch` bash permissions — the coordinator
+agent has them.
+
+For each code-group branch, in dispatch order:
+
+1. **Ensure the main working tree is on the base branch:**
+   `git checkout <BASE>` (or `git switch <BASE>`).
+2. **Merge the branch:**
+   `git merge <BRANCH>`
+   - A clean fast-forward or merge commit → the branch is in.  Proceed.
+   - A conflict → resolve it by dispatching an implementer (see below).
+3. **Clean up the merged worktree and branch:**
+   `git worktree remove --force <WORKTREE-PATH>`
+   `git branch -d <BRANCH>`
+
+If the merge reports conflicts, dispatch ONE implementer to resolve them in
+the main working tree (the merge is left in progress there).  Wait for it
+to complete, then continue with the next branch:
+
+```
+You are resolving merge conflicts from merging branch <BRANCH> into
+<BASE> in the main working tree.  A `git merge` is in progress and left
+the working tree with conflicts.
+
+**Rules:**
+1. Run `git status` to see which files conflict.
+2. For each conflicted file, read it and resolve the conflict, preserving
+   the intent of BOTH sides — the branch's fixes for its review items and
+   the base branch's existing content.  Do not discard either side
+   wholesale.
+3. After resolving, run the quality gate (`make check-fix` plus the
+   relevant `make test-<service>` targets) to confirm the merged result
+   still passes.
+4. Stage the resolved files: `git add <files>`.
+5. Complete the merge commit: `git commit --no-edit` (uses the prepared
+   merge message without opening an editor).
+6. Report: which files you resolved and how, and the quality-gate outcome.
+```
+
+After every branch is merged and every worktree cleaned up, run the
+merge-phase quality gate on the merged result in the main working tree:
+
+- `make verify-check` (read-only gate; permitted for the coordinator).  If
+  it fails, dispatch an implementer to fix the failures in the main working
+  tree, commit the fix, and re-run until green.
+
+### 5. Update the review checklist
 
 For each implementer result:
 
@@ -199,19 +363,22 @@ For each implementer result:
     - Wont-fix: <why the implementer still disagrees despite the re-opening reason.>
   ```
 
-### 5. Write the updated checklist
+### 6. Write the updated checklist
 
 Write the modified checklist file back to its original path
 (`REVIEW_ITEMS.md`).  Do not add summary text — only update item states and
 append the fix/wont-fix detail lines.
 
-### 6. Report to the user
+### 7. Report to the user
 
 Report:
 - Number of items fixed (`[ ]` → `[x]`)
 - Number of items marked wont-fix (`[ ]` → `[~]`)
 - Number of re-opened items fixed (`[!]` → `[x]`)
 - Number of re-opened items held (`[!]` → `[~]`)
+- Merge phase: number of worktree branches merged into the base branch,
+  any conflicts resolved (and how), any post-merge quality-gate failures
+  fixed, and the worktrees cleaned up
 - Output file path (`REVIEW_ITEMS.md`)
 
 List each item with its outcome and a one-line summary.
@@ -282,10 +449,16 @@ wont-fix (claim wrong, spec contradicts, or fixing causes harm).
 ## Hard Rules
 
 - Fix exactly the items in the review.  Do not fix things not listed.
-- **Implementers run serially, never in parallel.**  Dispatch one file group
-  at a time and wait for it to complete before dispatching the next.
-  Parallel implementers clash on the shared working tree and produce flaky
-  builds and contradictory fixes.
+- **Code groups run in parallel, each in an isolated worktree.**  Dispatch
+  every code-group implementer up front and wait for all to complete.
+  Plan groups run serially in the main working tree.
+- **Every code group works on its own branch and worktree.**  Never share a
+  worktree between groups.  Derive a unique branch/worktree per group slug
+  (appending `-02`, `-03`, … on collision) and branch off the base branch.
+- **Merge every code-group branch back into the base branch.**  The merge
+  phase is mandatory, not optional — a fix that stays on a worktree branch
+  is a fix that never lands.  Conflicts are resolved by dispatching an
+  implementer; merged worktrees and branches are cleaned up.
 - Verify before acting.  Trust the code, not the reviewer.
 - `[x]` items left as-is — they were previously resolved and verified by
   `special-review`.  Do not re-fix them unless they were re-opened as `[!]`.
@@ -301,8 +474,9 @@ wont-fix (claim wrong, spec contradicts, or fixing causes harm).
     `make` — the implementer agent denies bare `go`/`buf` and env-prefixed
     commands.  If the change touches `proto/**`, run `make proto` first to
     regenerate `gen/**`.
-- Do not commit.  This skill only updates the review checklist and modifies
-  source files.  Committing is a separate step.
+- Do not push.  Implementers commit on their worktree branches; the merge
+  phase merges those branches into the base branch.  Pushing to a remote is
+  a separate step.
 - No severity judgements in wont-fix justifications.  Just explain why the
   item should not be fixed.
 - **Respect Prior learnings.**  If a learning says "no hardcoded line
@@ -330,3 +504,22 @@ wont-fix (claim wrong, spec contradicts, or fixing causes harm).
 - **Ignoring Prior learnings.**  If a learning says "use section headings
   not line numbers" and the implementer fixes a cross-reference by updating
   the line number, that fix will be rejected on the next review pass.
+- **Running code groups serially (or plan groups in parallel).**  Code
+  groups are the reason worktrees exist — running them one-at-a-time wastes
+  the isolation.  Plan groups share the main tree and must not overlap.
+- **Sharing a worktree between groups.**  Two implementers in the same
+  worktree re-create the stampede the design eliminates.  One group, one
+  branch, one worktree.
+- **Working in the main tree for a code group.**  A code-group implementer
+  that edits the main working tree instead of its worktree produces
+  conflicts at merge time and defeats the isolation.  The worktree is the
+  working tree for that group.
+- **Forgetting the merge phase.**  If branches are left dangling after the
+  implementers finish, the fixes never land in the base branch.  Every
+  code-group branch must be merged and its worktree cleaned up.
+- **Resolving conflicts by picking one side wholesale.**  A conflicted file
+  needs the intent of BOTH sides preserved — the branch's review fixes and
+  the base's existing content.  Picking either side loses real work.
+- **Trying to worktree-isolate plan files.**  `plans/` is gitignored, so it
+  does not exist in any branch or worktree.  Plan groups always run in the
+  main working tree and are never committed.

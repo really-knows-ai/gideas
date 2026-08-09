@@ -24,6 +24,7 @@ permission:
     "proto/**": allow
     "charts/**": allow
     "tools/**": allow
+    ".worktrees/**": allow
     "/tmp/**": allow
     "/Users/jledrew/go/**": allow
   edit:
@@ -46,6 +47,7 @@ permission:
     "proto/**": allow
     "charts/**": allow
     "tools/**": allow
+    ".worktrees/**": allow
     "/tmp/**": allow
   glob:
     "*": deny
@@ -67,6 +69,7 @@ permission:
     "proto/**": allow
     "charts/**": allow
     "tools/**": allow
+    ".worktrees/**": allow
     "/tmp/**": allow
     "/Users/jledrew/go/**": allow
   grep:
@@ -89,6 +92,7 @@ permission:
     "proto/**": allow
     "charts/**": allow
     "tools/**": allow
+    ".worktrees/**": allow
     "/tmp/**": allow
     "/Users/jledrew/go/**": allow
   external_directory:
@@ -125,6 +129,16 @@ permission:
     "git diff*": allow
     "git log*": allow
     "git show*": allow
+    "git branch*": allow
+    "git checkout*": allow
+    "git switch*": allow
+    "git add*": allow
+    "git commit*": allow
+    "git merge --continue*": allow
+    "git worktree add*": allow
+    "git worktree remove*": allow
+    "git worktree list*": allow
+    "git worktree prune*": allow
     "rm charts/*": allow
     "rm nodes/*": allow
     "rm platform/*": allow
@@ -143,6 +157,8 @@ Bash is strictly permissioned with a deny-by-default policy — anything not in 
 Allowed:
 - Read-only inspection: `ls`, `find`, `rg`, `grep`, `git grep`, `cat`, `pwd`, `cd`.
 - Git read commands: `git status`, `git diff`, `git log`, `git show`.
+- Git branch/worktree commands: `git branch`, `git checkout`, `git switch`, `git worktree add`, `git worktree remove`, `git worktree list`, `git worktree prune` — used to create an isolated worktree for your task and commit your work on its branch.
+- Git staging/commit commands: `git add`, `git commit`, `git merge --continue` — used to commit your work inside the worktree and to finish a merge whose conflicts you resolved.
 - Quality targets: `make test`, `make test-*`, `make test-operator`, `make vet`, `make lint`.
 - Mutating quality targets: `make build`, `make build-*`, `make build-operator`, `make fmt`, `make lint-fix`, `make check`, `make check-fix`, `make check-fix-all`, `make proto`, `make verify`.
 - File deletion: plain `rm <path>` with no flags, restricted to the hand-written source dirs — `charts/`, `nodes/`, `platform/`, `proto/`, `sdk/`, `tools/`.
@@ -150,5 +166,6 @@ Allowed:
 Denied:
 - Bare `make` or `go`, env-prefixed commands, and anything chained or structured (`&&`, pipes, `$()`, redirection).
 - `rm` everywhere else: generated (`gen/`, `bin/`), gitignored (`_old/`, `plans/`), and repo-root files.
+- Bare `git merge`, `git push`, and any other git mutation outside the branch/worktree/commit commands above — merging branches together is the coordinator's job, not yours.
 
 Regenerate proto with `make proto` — never hand-edit `gen/**`. The canonical quality gate is `make verify` (tests → lint → build). Inspect the tree with the read/glob/grep tools; use `ls` only via permission when needed.
