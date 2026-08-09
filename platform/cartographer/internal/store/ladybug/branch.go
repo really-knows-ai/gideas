@@ -530,6 +530,17 @@ func (db *ladybugDB) RehydrateMainFromFiles(ctx context.Context, entitiesDir, ed
 	// above, so this merge also carries the pre-existing compiled defs back.
 	db.entityTypeDefs = entDefs
 	db.edgeTypeDefs = edgeDefs
+	// Re-wire every cached structural handle (stale-structural-pointer rule,
+	// LEARNINGS): db.edgePairs is consumed by ReplicateSchemaToBranch to
+	// recreate branch rel tables with the same FROM/TO endpoints main's rel
+	// tables carry. Types inferred from the directory structure (SPEC R8) have
+	// no connection rules, so nothing but the catalog can rebuild this map —
+	// without it the next BeginTransaction replicates a `_untyped`-placeholder
+	// rel table to the branch (pairs := db.edgePairs[name] is nil) and every
+	// branch edge is silently dropped against the mismatched endpoints.
+	if err := db.rebuildEdgePairsLocked(); err != nil {
+		return err
+	}
 	// Persist main's schema metadata (capturing the vector index/dimension the
 	// file-load path promoted above), so a reopen's validateMetadataAgainstCatalog
 	// does not fail closed with a catalog/metadata vector mismatch.
@@ -545,6 +556,34 @@ func (db *ladybugDB) RehydrateMainFromFiles(ctx context.Context, entitiesDir, ed
 	// while Health() reports SchemaApplied=false indefinitely (only ApplySchema
 	// and restoreMainSchemaMetadataLocked set the flag elsewhere).
 	db.schemaApplied = true
+	return nil
+}
+
+// rebuildEdgePairsLocked re-wires db.edgePairs from the rel tables' actual
+// FROM/TO endpoint pairs in the catalog. It runs on the re-hydration path
+// (RehydrateMainFromFiles), which reassigns db.edgeTypeDefs and therefore must
+// re-wire every cached structural handle that other paths read. The main load
+// paths (ApplySchema, restoreMainSchemaMetadataLocked) derive edgePairs from
+// connection rules, but types inferred from the directory structure (SPEC R8)
+// carry no rules, so the catalog is the only authoritative source. An edgeless
+// edge type's `_untyped` placeholder pair is normalized away (the key stays
+// absent) so ReplicateSchemaToBranch's createRelTableOnConn takes its
+// placeholder branch, which creates the `_untyped` NODE table the rel table's
+// endpoint clause references. Callers must hold db.mu.
+func (db *ladybugDB) rebuildEdgePairsLocked() error {
+	pairs := make(map[string][]fromToPair)
+	untyped := []fromToPair{{From: untypedTableName, To: untypedTableName}}
+	for _, name := range sortedKeys(db.edgeTypeDefs) {
+		actual, err := connectionPairsOnConn(db.conn, name)
+		if err != nil {
+			return fmt.Errorf("read relationship endpoints for %q: %w", name, err)
+		}
+		if equalFromToPairs(actual, untyped) {
+			continue
+		}
+		pairs[name] = actual
+	}
+	db.edgePairs = pairs
 	return nil
 }
 

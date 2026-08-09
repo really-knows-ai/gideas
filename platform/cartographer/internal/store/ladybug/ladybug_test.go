@@ -4246,6 +4246,111 @@ func TestRehydrateMainFromFiles_SchemaAppliedAfterBothLostRecovery(t *testing.T)
 	}
 }
 
+// TestReplicateSchemaToBranch_RealInferredPairsAfterBothLostRehydration pins the
+// stale-structural-pointer rule on the SPEC R8 both-lost recovery corner
+// (corrupt main.lbug + absent schema.json + committed git data): every edge
+// type is inferred from the directory structure, so RehydrateMainFromFiles must
+// re-wire db.edgePairs from the catalog. Without it the next BeginTransaction's
+// ReplicateSchemaToBranch reads a nil pair map and creates the branch rel table
+// with `_untyped` placeholder endpoint clauses, after which
+// HydrateBranchFromFiles' ensureEdgeLoadSchema early-returns for the already
+// registered type and every branch edge is silently dropped (insertEdgeOnConn's
+// CREATE silently no-ops against the mismatched endpoints).
+func TestReplicateSchemaToBranch_RealInferredPairsAfterBothLostRehydration(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	ctx := context.Background()
+	schema := &flowv1.Schema{EntityTypes: []*flowv1.EntityType{{
+		Name: "Component", Properties: []*flowv1.Property{{Name: "name", Type: "string"}},
+	}}}
+	if err := s.ApplySchema(ctx, schema); err != nil {
+		t.Fatalf("ApplySchema: %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	// Lose both: corrupt main.lbug and remove schema.json.
+	dbPath := filepath.Join(dir, "main.lbug")
+	if err := os.WriteFile(dbPath, []byte("not a ladybug database"), 0600); err != nil {
+		t.Fatalf("corrupt main.lbug: %v", err)
+	}
+	if err := os.Remove(filepath.Join(dir, "schema.json")); err != nil {
+		t.Fatalf("remove schema.json: %v", err)
+	}
+
+	// Open recovers a fresh empty database — the R8 both-lost corner where
+	// every edge type present in the committed git data is inferred.
+	recovered, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open after both-lost corruption: %v", err)
+	}
+	defer closeStore(t, recovered)
+
+	fromID := uuid.NewString()
+	toID := uuid.NewString()
+	edgeID := uuid.NewString()
+	root := t.TempDir()
+	entitiesDir := filepath.Join(root, "entities")
+	edgesDir := filepath.Join(root, "edges")
+	writeJSONFile(t, filepath.Join(entitiesDir, "Component", fromID+".json"), map[string]any{
+		"id": fromID, "type": "Component",
+	})
+	writeJSONFile(t, filepath.Join(entitiesDir, "Component", toID+".json"), map[string]any{
+		"id": toID, "type": "Component",
+	})
+	writeJSONFile(t, filepath.Join(edgesDir, "DependsOn", edgeID+".json"), map[string]any{
+		"id": edgeID, "type": "DependsOn", "from": fromID, "to": toID,
+		"properties": map[string]string{"strength": strengthValue},
+	})
+
+	if err := recovered.RehydrateMainFromFiles(ctx, entitiesDir, edgesDir); err != nil {
+		t.Fatalf("RehydrateMainFromFiles: %v", err)
+	}
+
+	// The re-hydrated store must have re-wired db.edgePairs so the branch rel
+	// table is created with the real inferred FROM/TO endpoint pairs.
+	db := recovered.(*ladybugDB)
+	if got := db.edgePairs["DependsOn"]; !equalFromToPairs(got, []fromToPair{{From: "Component", To: "Component"}}) {
+		t.Fatalf("main edgePairs for DependsOn = %v, want Component->Component", got)
+	}
+
+	const branch = "tx1"
+	if err := recovered.CreateBranchDB(ctx, branch); err != nil {
+		t.Fatalf("CreateBranchDB: %v", err)
+	}
+	if err := recovered.ReplicateSchemaToBranch(ctx, branch); err != nil {
+		t.Fatalf("ReplicateSchemaToBranch: %v", err)
+	}
+	br := db.branches[branch]
+	gotPairs, err := connectionPairsOnConn(br.conn, "DependsOn")
+	if err != nil {
+		t.Fatalf("read branch rel endpoints: %v", err)
+	}
+	if !equalFromToPairs(gotPairs, []fromToPair{{From: "Component", To: "Component"}}) {
+		t.Fatalf("branch rel table DependsOn endpoints = %v, want Component->Component (not the _untyped placeholder)",
+			gotPairs)
+	}
+
+	// HydrateBranchFromFiles' ensureEdgeLoadSchema early-returns for the
+	// already-registered type, so the branch rel table above is the one edges
+	// land on — the edge must survive, never silently dropped.
+	if err := recovered.HydrateBranchFromFiles(ctx, branch, entitiesDir, edgesDir); err != nil {
+		t.Fatalf("HydrateBranchFromFiles: %v", err)
+	}
+	got, err := recovered.GetEdge(ctx, edgeID, branch)
+	if err != nil {
+		t.Fatalf("branch edge silently dropped: %v", err)
+	}
+	if got.FromEntityID != fromID || got.ToEntityID != toID {
+		t.Fatalf("branch edge endpoints = %q -> %q, want %q -> %q",
+			got.FromEntityID, got.ToEntityID, fromID, toID)
+	}
+}
+
 func TestRehydrateMainFromFiles_BothMissing_NoError(t *testing.T) {
 	s, err := OpenInMemory()
 	if err != nil {
