@@ -276,12 +276,16 @@ func TestChangeLogFullCapEnforced(t *testing.T) {
 	cl3 := NewChangeLogWithCap(10)
 	for i := range 10 {
 		_ = cl3.Add(ChangeLogEntry{
-			Kind: ChangeAddEntity,
-			ID:   formatIntID(i),
-			Type: testComponentType,
+			Kind:   ChangeAddEntity,
+			ID:     formatIntID(i),
+			Type:   testComponentType,
+			Entity: &EntityEntry{ID: formatIntID(i), Type: testComponentType},
 		})
 	}
-	if err := cl3.Add(ChangeLogEntry{Kind: ChangeAddEntity, ID: "x", Type: testComponentType}); err != ErrChangeLogFull {
+	if err := cl3.Add(ChangeLogEntry{
+		Kind: ChangeAddEntity, ID: "x", Type: testComponentType,
+		Entity: &EntityEntry{ID: "x", Type: testComponentType},
+	}); err != ErrChangeLogFull {
 		t.Fatalf("Add cap: expected ErrChangeLogFull, got %v", err)
 	}
 }
@@ -489,6 +493,68 @@ func TestChangeLogAddEntryBypassesCap(t *testing.T) {
 		Entity: &EntityEntry{ID: "overflow2", Type: testComponentType},
 	}); err != ErrChangeLogFull {
 		t.Fatalf("Add after AddEntry: expected ErrChangeLogFull, got %v", err)
+	}
+}
+
+// TestChangeLogRejectsNilSnapshot pins the ChangeLog invariant that add/modify
+// kinds carry the snapshot Entries() dereferences on read-back: a nil Entity
+// snapshot for ChangeAddEntity/ChangeModEntity or a nil Edge snapshot for
+// ChangeAddEdge/ChangeModEdge must be rejected at the public boundary (both
+// Add and the cap-bypassing AddEntry share the add guard), never stored to
+// become a latent nil-pointer dereference in Entries(). Deletion kinds store
+// DeletionInfo and need no snapshot.
+func TestChangeLogRejectsNilSnapshot(t *testing.T) {
+	nilSnapshotCases := []struct {
+		kind    ChangeKind
+		missing string
+	}{
+		{ChangeAddEntity, "Entity"},
+		{ChangeModEntity, "Entity"},
+		{ChangeAddEdge, "Edge"},
+		{ChangeModEdge, "Edge"},
+	}
+	for _, tc := range nilSnapshotCases {
+		for _, method := range []string{"Add", "AddEntry"} {
+			cl := NewChangeLog()
+			entry := ChangeLogEntry{Kind: tc.kind, ID: "id-1", Type: testComponentType}
+			var err error
+			if method == "Add" {
+				err = cl.Add(entry)
+			} else {
+				err = cl.AddEntry(entry)
+			}
+			if err != ErrChangeLogNilSnapshot {
+				t.Fatalf("%s(%v) with nil %s: expected ErrChangeLogNilSnapshot, got %v", method, tc.kind, tc.missing, err)
+			}
+			if cl.Len() != 0 {
+				t.Fatalf("%s(%v) with nil %s: expected nothing stored, got Len()=%d", method, tc.kind, tc.missing, cl.Len())
+			}
+		}
+	}
+
+	// Valid add/modify entries with snapshots, and snapshot-less deletions,
+	// still succeed through both public paths.
+	cl := NewChangeLog()
+	if err := cl.Add(ChangeLogEntry{
+		Kind: ChangeAddEntity, ID: "e1", Type: testComponentType,
+		Entity: &EntityEntry{ID: "e1", Type: testComponentType},
+	}); err != nil {
+		t.Fatalf("Add valid entity: %v", err)
+	}
+	if err := cl.AddEntry(ChangeLogEntry{
+		Kind: ChangeAddEdge, ID: "edge-1", Type: "DEPENDS_ON",
+		Edge: &EdgeEntry{ID: "edge-1", Type: "DEPENDS_ON", FromEntityID: "a", ToEntityID: "b"},
+	}); err != nil {
+		t.Fatalf("AddEntry valid edge: %v", err)
+	}
+	if err := cl.Add(ChangeLogEntry{Kind: ChangeDelEntity, ID: "e2", Type: testComponentType}); err != nil {
+		t.Fatalf("Add deletion: %v", err)
+	}
+	if err := cl.AddEntry(ChangeLogEntry{Kind: ChangeDelEdge, ID: "edge-2", Type: "DEPENDS_ON"}); err != nil {
+		t.Fatalf("AddEntry deletion: %v", err)
+	}
+	if entries := cl.Entries(); len(entries) != 4 {
+		t.Fatalf("expected 4 valid entries, got %d", len(entries))
 	}
 }
 
