@@ -3633,6 +3633,175 @@ func TestSync_MissingWriteCapability(t *testing.T) {
 	}
 }
 
+// TestCommitTransaction_WithSyncWorker_AckWaitsForPush pins the service-layer
+// CommitTransaction sync-worker branch (SPEC R10 commit/WithAck contract,
+// SPEC:615-619): with a SyncWorker wired via WithSyncWorker, an acked commit
+// sets the push-needed flag and blocks until the sync cycle delivers the push
+// (the ack wait resolves only after the push completes), then returns success
+// with the flag cleared. The TestSyncWorker_WithAck_* tests drive
+// sw.WakeAndWait directly; this test pins the handler wiring
+// (SetPushNeeded → req.GetAck() → WakeAndWait) end to end.
+func TestCommitTransaction_WithSyncWorker_AckWaitsForPush(t *testing.T) {
+	gs, err := gitstore.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("gitstore.New: %v", err)
+	}
+	syncGit := &syncMockGitStore{
+		GitStore:    gs,
+		pushEntered: make(chan struct{}),
+		pushRelease: make(chan struct{}),
+	}
+	srv, fc := newSyncServer(t, syncGit)
+	t.Cleanup(syncGit.releasePush)
+	waitFor(t, func() bool { return fc.tickers() >= 1 }, "startup cycle")
+
+	ctx := testCtx()
+	applyTestSchema(ctx, t, srv.store)
+	begin, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
+	if err != nil {
+		t.Fatalf("BeginTransaction: %v", err)
+	}
+	if _, err := srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
+		EntityType: "Component", Properties: map[string]string{"name": "acked"}, TransactionId: begin.TransactionId,
+	}); err != nil {
+		t.Fatalf("CreateEntity: %v", err)
+	}
+
+	// The acked commit must block until the sync cycle delivers the push: the
+	// woken cycle parks in the push gate, and CommitTransaction stays pending.
+	commitDone := make(chan error, 1)
+	go func() {
+		_, err := srv.CommitTransaction(ctx, &flowv1.CommitTransactionRequest{
+			TransactionId: begin.TransactionId, Ack: true,
+		})
+		commitDone <- err
+	}()
+	select {
+	case <-syncGit.pushEntered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("acked commit never reached the sync worker's push")
+	}
+	select {
+	case err := <-commitDone:
+		t.Fatalf("CommitTransaction returned before the push was delivered: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	syncGit.releasePush()
+	if err := <-commitDone; err != nil {
+		t.Fatalf("CommitTransaction with ack returned error after the push was delivered: %v", err)
+	}
+
+	// The commit→push-flag contract fired and the ack cycle delivered exactly
+	// one push (SetPushNeeded was observed by the worker).
+	syncGit.mu.Lock()
+	pushCalls := syncGit.pushCalls
+	syncGit.mu.Unlock()
+	if pushCalls != 1 {
+		t.Fatalf("expected exactly 1 push for the acked commit, got %d", pushCalls)
+	}
+	if srv.syncWorker.pushNeeded.Load() {
+		t.Fatal("push flag not cleared after the acked push")
+	}
+}
+
+// TestCommitTransaction_WithSyncWorker_AckPushFailureSurfacesMappedError pins
+// the ack-error mapping branch of the CommitTransaction sync-worker wiring
+// (SPEC R10, SPEC:620-621: "If the cycle ends with the flag still set
+// (permanent failure, or retries exhausted), the call returns an error with
+// the worker's last push error"): a non-recoverable push rejection surfaces
+// through mapGitError as FAILED_PRECONDITION ("push rejected
+// (non-fast-forward)"), not a raw INTERNAL error, and the push flag stays set
+// for the next cycle.
+func TestCommitTransaction_WithSyncWorker_AckPushFailureSurfacesMappedError(t *testing.T) {
+	gs, err := gitstore.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("gitstore.New: %v", err)
+	}
+	syncGit := &syncMockGitStore{GitStore: gs, pushErr: gitstore.ErrPushRejected}
+	srv, fc := newSyncServer(t, syncGit)
+	waitFor(t, func() bool { return fc.tickers() >= 1 }, "startup cycle")
+
+	ctx := testCtx()
+	applyTestSchema(ctx, t, srv.store)
+	begin, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
+	if err != nil {
+		t.Fatalf("BeginTransaction: %v", err)
+	}
+	if _, err := srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
+		EntityType: "Component", Properties: map[string]string{"name": "rejected"}, TransactionId: begin.TransactionId,
+	}); err != nil {
+		t.Fatalf("CreateEntity: %v", err)
+	}
+
+	_, err = srv.CommitTransaction(ctx, &flowv1.CommitTransactionRequest{
+		TransactionId: begin.TransactionId, Ack: true,
+	})
+	if err == nil {
+		t.Fatal("expected the acked commit to surface the rejected push")
+	}
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("expected FailedPrecondition for a rejected push, got %v (%v)", status.Code(err), err)
+	}
+	if !srv.syncWorker.pushNeeded.Load() {
+		t.Fatal("push flag cleared despite the rejected push")
+	}
+}
+
+// TestCommitTransaction_WithSyncWorker_AckCallerDeadlineSurfacesDeadlineExceeded
+// pins the 30s-cap deadline branch of the CommitTransaction sync-worker wiring
+// (SPEC R10, SPEC:621-622: "A caller that hits the context deadline receives
+// DEADLINE_EXCEEDED and the flag stays set"): a caller deadline shorter than
+// the 30s cap expires while the acked commit waits on the sync cycle, and the
+// commit surfaces DEADLINE_EXCEEDED (mapGitError's context-error mapping, not
+// a raw INTERNAL), with the push flag left set for the next cycle.
+func TestCommitTransaction_WithSyncWorker_AckCallerDeadlineSurfacesDeadlineExceeded(t *testing.T) {
+	gs, err := gitstore.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("gitstore.New: %v", err)
+	}
+	syncGit := &syncMockGitStore{
+		GitStore:    gs,
+		pushEntered: make(chan struct{}),
+		pushRelease: make(chan struct{}),
+	}
+	srv, fc := newSyncServer(t, syncGit)
+	t.Cleanup(syncGit.releasePush)
+	waitFor(t, func() bool { return fc.tickers() >= 1 }, "startup cycle")
+
+	ctx := testCtx()
+	applyTestSchema(ctx, t, srv.store)
+	begin, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
+	if err != nil {
+		t.Fatalf("BeginTransaction: %v", err)
+	}
+	if _, err := srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
+		EntityType: "Component", Properties: map[string]string{"name": "slow"}, TransactionId: begin.TransactionId,
+	}); err != nil {
+		t.Fatalf("CreateEntity: %v", err)
+	}
+
+	// The commit's local git work is fast; the caller deadline is long enough
+	// for it to finish but expires while the acked commit is blocked in the
+	// sync-cycle wait (the push gate keeps the cycle from completing). Derived
+	// from ctx so the capability metadata set by testCtx is preserved.
+	ackCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	start := time.Now()
+	_, err = srv.CommitTransaction(ackCtx, &flowv1.CommitTransactionRequest{
+		TransactionId: begin.TransactionId, Ack: true,
+	})
+	if status.Code(err) != codes.DeadlineExceeded {
+		t.Fatalf("expected DeadlineExceeded for an expired ack wait, got %v (%v)", status.Code(err), err)
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Fatalf("acked commit took %v to surface the deadline", elapsed)
+	}
+	if !srv.syncWorker.pushNeeded.Load() {
+		t.Fatal("push flag cleared despite the timed-out ack wait")
+	}
+}
+
 func TestRollbackTransaction_PartialCommitWithoutLadybugPathIsExplicit(t *testing.T) {
 	srv, _ := newTestServer(t)
 	srv.gitstore = &mergeFailingGitStore{GitStore: srv.gitstore, failMerge: true}
