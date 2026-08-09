@@ -203,7 +203,7 @@ func main() {
 			// ponytail: a misconfigured remote (unsupported or erroneous URL
 			// scheme, parse failure, or missing host) is warn-logged but not
 			// fatal at startup. SetRemote validates the URL scheme and returns
-			// ErrUnsupportedURLScheme for non-https/ssh schemes, but the failure
+			// ErrUnsupportedURLScheme for non-https/ssh/file schemes, but the failure
 			// is only surfaced here; the scheme is never re-validated until the
 			// next runtime sync (error-table "Unsupported remote URL scheme" →
 			// INVALID_ARGUMENT). Consequence: when pullOnInit is false
@@ -543,6 +543,11 @@ func tryRemotePullOnInit(
 			if len(data["password"]) == 0 {
 				return gitstore.ErrAuthConfigMissing
 			}
+		case "file":
+			// SPEC.md:91-100 defines secret data keys only for ssh:// and
+			// https://; a file:// remote has no auth keys and proceeds
+			// anonymously (SPEC error-table row 987 lists file:// as a
+			// supported scheme). A configured secretRef must not block it.
 		default:
 			return gitstore.ErrUnsupportedURLScheme
 		}
@@ -698,6 +703,14 @@ func buildResolveAuthFn(
 				return &http.BasicAuth{Username: httpsUser, Password: password}, nil
 			}
 			return nil, gitstore.ErrAuthConfigMissing
+		case "file":
+			// SPEC.md:91-100 defines secret data keys only for ssh:// and
+			// https://; a file:// remote has no auth keys, so a configured
+			// secretRef resolves to explicit anonymous access (SPEC error-table
+			// row 987 lists file:// as a supported scheme). This mirrors
+			// gitstore's requiresAuth, which never demands credentials for
+			// file:// remotes.
+			return nil, nil
 		default:
 			return nil, gitstore.ErrUnsupportedURLScheme
 		}

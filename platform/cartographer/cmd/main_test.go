@@ -272,6 +272,28 @@ func TestTryRemotePullOnInitUnsupportedSchemeFailsClosed(t *testing.T) {
 	}
 }
 
+// TestTryRemotePullOnInitFileSchemeAnonymous verifies the file:// branch of
+// tryRemotePullOnInit's pre-flight auth resolver: file:// is a supported scheme
+// (SPEC error-table row 987) with no auth keys (SPEC.md:91-100 defines keys only
+// for ssh:// and https://), so even a configured secretRef must not block the
+// clone — the remote proceeds anonymously.
+func TestTryRemotePullOnInitFileSchemeAnonymous(t *testing.T) {
+	gs := &initPullGitStore{isEmpty: true}
+	catchUp, err := tryRemotePullOnInit(gs, "file:///tmp/repo.git", "remote-auth",
+		func(context.Context, string) (map[string]string, error) {
+			return map[string]string{"password": "unrelated"}, nil
+		}, nil, nil)
+	if err != nil {
+		t.Fatalf("file:// pre-flight error = %v, want nil (anonymous)", err)
+	}
+	if catchUp {
+		t.Fatal("file:// clone path must not flag a catch-up push")
+	}
+	if gs.cloneCalls != 1 {
+		t.Fatalf("file:// clone calls = %d, want 1", gs.cloneCalls)
+	}
+}
+
 // TestTryRemotePullOnInitHTTPSMissingPasswordFailsClosed verifies the
 // https missing/empty-password branch of tryRemotePullOnInit's pre-flight auth
 // resolver: an https remote whose Secret lacks a password fails closed with
@@ -1267,12 +1289,14 @@ func TestBuildResolveAuthFnURLParseFailure(t *testing.T) {
 }
 
 // TestBuildResolveAuthFnUnsupportedScheme verifies that a remote URL with an
-// unsupported scheme returns ErrUnsupportedURLScheme.
+// unsupported scheme returns ErrUnsupportedURLScheme, and that file:// — a
+// supported scheme (SPEC error-table row 987) with no auth keys (SPEC.md:91-100)
+// — resolves to anonymous access even when a secretRef is configured.
 func TestBuildResolveAuthFnUnsupportedScheme(t *testing.T) {
 	readSecretFn := func(ctx context.Context, name string) (map[string]string, error) {
 		return map[string]string{"username": "user", "password": "pass"}, nil
 	}
-	for _, scheme := range []string{"ftp", "git", "file"} {
+	for _, scheme := range []string{"ftp", "git"} {
 		t.Run(scheme, func(t *testing.T) {
 			fn := buildResolveAuthFn("remote-auth", readSecretFn, scheme+"://example.com/repo.git")
 			auth, err := fn()
@@ -1284,6 +1308,16 @@ func TestBuildResolveAuthFnUnsupportedScheme(t *testing.T) {
 			}
 		})
 	}
+	t.Run("file", func(t *testing.T) {
+		fn := buildResolveAuthFn("remote-auth", readSecretFn, "file:///tmp/repo.git")
+		auth, err := fn()
+		if err != nil {
+			t.Fatalf("expected nil error for file:// anonymous auth, got %v", err)
+		}
+		if auth != nil {
+			t.Fatalf("expected nil (anonymous) auth for file://, got %v", auth)
+		}
+	})
 }
 
 // ---------------------------------------------------------------------------
