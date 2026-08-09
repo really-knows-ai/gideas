@@ -649,6 +649,156 @@ func TestApplySchema_RejectsUntypedPlaceholderName(t *testing.T) {
 	}
 }
 
+// TestUntypedPlaceholder_Lifecycle pins the SPEC R1 `_untyped` reserved-name
+// contract's happy-path lifecycle at the store layer (the name-rejection path
+// is pinned by TestApplySchema_RejectsUntypedPlaceholderName): an edgeless
+// edge type (no rule declares FROM/TO endpoint pairs for it) falls back to a
+// placeholder `_untyped` NODE table in createRelTableOnConn; after a
+// file-backed reopen the placeholder is legitimately present in the catalog but
+// absent from schema metadata, so validateMetadataAgainstCatalog's skip lets
+// the reopen succeed and the metadata-derived schema cache excludes it from
+// EntityTypeNames/TableExists/ListMainEntityTypes; and WipeSchema enumerates
+// every catalog table and drops the placeholder with the rest.
+func TestUntypedPlaceholder_Lifecycle(t *testing.T) {
+	t.Run("edgeless edge type creates the placeholder node table", func(t *testing.T) {
+		s, err := OpenInMemory()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer closeStore(t, s)
+
+		// An edge type no rule references is edgeless: collectFromToPairs yields
+		// no FROM/TO endpoint pair, so createRelTableOnConn creates the
+		// placeholder `_untyped` NODE table for the rel table's endpoint clauses
+		// (SPEC R1 "Reserved internal name").
+		if err := s.ApplySchema(context.Background(), &flowv1.Schema{
+			EdgeTypes: []*flowv1.EdgeType{{Name: "REFERENCES"}},
+		}); err != nil {
+			t.Fatalf("ApplySchema: %v", err)
+		}
+		if kind := tableKindOnConn(t, s.(*ladybugDB).conn, untypedTableName); strings.ToUpper(kind) != tableTypeNode {
+			t.Fatalf("expected placeholder %s NODE table, got kind %q", untypedTableName, kind)
+		}
+		// The placeholder is internal: the metadata-derived schema cache never
+		// exposes it as an entity type.
+		if s.TableExists(untypedTableName) {
+			t.Fatalf("TableExists(%q) exposed the internal placeholder as an entity type", untypedTableName)
+		}
+	})
+
+	t.Run("excluded from entity type listings after a file-backed reopen", func(t *testing.T) {
+		dir := t.TempDir()
+		s, err := Open(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.ApplySchema(context.Background(), &flowv1.Schema{
+			EntityTypes: []*flowv1.EntityType{{
+				Name:       "Document",
+				Properties: []*flowv1.Property{{Name: "title", Type: "string"}},
+			}},
+			EdgeTypes: []*flowv1.EdgeType{{Name: "REFERENCES"}},
+		}); err != nil {
+			t.Fatalf("ApplySchema: %v", err)
+		}
+		if err := s.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+
+		// Reopen rebuilds the catalog cache from show_tables (which carries the
+		// placeholder) and then restores the cache from schema metadata;
+		// validateMetadataAgainstCatalog's skip of the placeholder is what lets
+		// this reopen succeed instead of bricking on "database entity type
+		// _untyped is absent from schema metadata".
+		reopened, err := Open(dir)
+		if err != nil {
+			t.Fatalf("reopen after edgeless edge type: %v", err)
+		}
+		defer closeStore(t, reopened)
+
+		// The placeholder table physically survives the reopen...
+		if kind := tableKindOnConn(t, reopened.(*ladybugDB).conn, untypedTableName); strings.ToUpper(kind) != tableTypeNode {
+			t.Fatalf("placeholder %s table missing after reopen, got kind %q", untypedTableName, kind)
+		}
+		// ...but the metadata-derived schema cache excludes it from every
+		// entity-type listing surface.
+		if got := reopened.EntityTypeNames(); slices.Contains(got, untypedTableName) {
+			t.Errorf("EntityTypeNames exposed placeholder %q: %v", untypedTableName, got)
+		}
+		if reopened.TableExists(untypedTableName) {
+			t.Errorf("TableExists(%q) reported the placeholder as an entity type", untypedTableName)
+		}
+		types, err := reopened.ListMainEntityTypes()
+		if err != nil {
+			t.Fatalf("ListMainEntityTypes: %v", err)
+		}
+		if slices.Contains(types, untypedTableName) {
+			t.Errorf("ListMainEntityTypes exposed placeholder %q: %v", untypedTableName, types)
+		}
+		// The user entity type and the edgeless edge type survive the reopen.
+		if !slices.Contains(reopened.EntityTypeNames(), "Document") {
+			t.Errorf("Document entity type missing after reopen: %v", reopened.EntityTypeNames())
+		}
+		if !slices.Contains(reopened.EdgeTypeNames(), "REFERENCES") {
+			t.Errorf("REFERENCES edge type missing after reopen: %v", reopened.EdgeTypeNames())
+		}
+	})
+
+	t.Run("removed by WipeSchema", func(t *testing.T) {
+		s, err := OpenInMemory()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer closeStore(t, s)
+		if err := s.ApplySchema(context.Background(), &flowv1.Schema{
+			EdgeTypes: []*flowv1.EdgeType{{Name: "REFERENCES"}},
+		}); err != nil {
+			t.Fatalf("ApplySchema: %v", err)
+		}
+		db := s.(*ladybugDB)
+		if kind := tableKindOnConn(t, db.conn, untypedTableName); strings.ToUpper(kind) != tableTypeNode {
+			t.Fatalf("expected placeholder %s NODE table before wipe, got kind %q", untypedTableName, kind)
+		}
+		if err := s.WipeSchema(context.Background()); err != nil {
+			t.Fatalf("WipeSchema: %v", err)
+		}
+		// WipeSchema enumerates every table from show_tables — the placeholder
+		// is a NODE table like any other and is dropped with the rest.
+		if kind := tableKindOnConn(t, db.conn, untypedTableName); kind != "" {
+			t.Fatalf("placeholder %s table survived WipeSchema (kind %q)", untypedTableName, kind)
+		}
+		if kind := tableKindOnConn(t, db.conn, "REFERENCES"); kind != "" {
+			t.Fatalf("edgeless edge table REFERENCES survived WipeSchema (kind %q)", kind)
+		}
+	})
+}
+
+// tableKindOnConn returns the catalog kind (NODE/REL) of the named table on
+// the given connection, or "" when the table does not exist.
+func tableKindOnConn(t *testing.T, conn *lbug.Connection, name string) string {
+	t.Helper()
+	result, err := conn.Query("CALL show_tables() RETURN *;")
+	if err != nil {
+		t.Fatalf("show_tables: %v", err)
+	}
+	defer result.Close()
+	for result.HasNext() {
+		tuple, err := result.Next()
+		if err != nil {
+			t.Fatalf("next table row: %v", err)
+		}
+		values, err := tuple.GetAsSlice()
+		tuple.Close()
+		if err != nil {
+			t.Fatalf("table row values: %v", err)
+		}
+		if len(values) >= 3 && fmt.Sprintf("%v", values[1]) == name {
+			return fmt.Sprintf("%v", values[2])
+		}
+	}
+	return ""
+}
+
 // closeStore is a test helper that closes the store and reports errors.
 func closeStore(t *testing.T, s interface{ Close() error }) {
 	t.Helper()
@@ -3937,6 +4087,131 @@ func TestRehydrateMainFromFiles_EntitiesDirOnly_ReturnsError(t *testing.T) {
 	}
 }
 
+// HydrateBranchFromFiles must apply the same partial-wipe completeness guard as
+// RehydrateMainFromFiles (branch.go:517-521): a working tree where entities/
+// exists but edges/ was removed (SPEC R2 WipeGraph mid-wipe failure →
+// INTERNAL) must fail loudly on the branch load path too — silently loading
+// entities and skipping every edge would hydrate an incomplete graph with no
+// signal.
+func TestHydrateBranchFromFiles_EntitiesDirOnly_ReturnsError(t *testing.T) {
+	s, err := OpenInMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeStore(t, s)
+	applyTestSchema(t, s)
+
+	const branch = "tx1"
+	if err := s.CreateBranchDB(context.Background(), branch); err != nil {
+		t.Fatalf("CreateBranchDB: %v", err)
+	}
+	if err := s.ReplicateSchemaToBranch(context.Background(), branch); err != nil {
+		t.Fatalf("ReplicateSchemaToBranch: %v", err)
+	}
+
+	entitiesDir := t.TempDir()
+	compDir := filepath.Join(entitiesDir, "Component")
+	if err := os.MkdirAll(compDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	data := `{"id":"00000000-0000-4000-a000-000000000001","type":"Component","properties":{"name":"test"}}`
+	if err := os.WriteFile(filepath.Join(compDir, "comp1.json"), []byte(data), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// edgesDir is a non-existent path — must error because entities dir exists.
+	edgesDir := filepath.Join(t.TempDir(), "nonexistent")
+
+	err = s.HydrateBranchFromFiles(context.Background(), branch, entitiesDir, edgesDir)
+	if err == nil {
+		t.Fatal("expected error when entitiesDir exists but edgesDir does not")
+	}
+	if !errors.Is(err, store.ErrInvalidEdgeDir) {
+		t.Errorf("expected ErrInvalidEdgeDir, got %v", err)
+	}
+}
+
+// SPEC R8 both-lost recovery corner: main.lbug corrupted AND schema.json
+// absent while the git repo has commits. Open recovers a fresh empty database
+// and re-hydration serves the full graph with inferred types, but schemaApplied
+// must be set so Health() reports the schema as applied — it used to stay false
+// indefinitely because only ApplySchema and restoreMainSchemaMetadataLocked
+// (neither of which runs in this corner) set the flag.
+func TestRehydrateMainFromFiles_SchemaAppliedAfterBothLostRecovery(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	ctx := context.Background()
+	schema := &flowv1.Schema{EntityTypes: []*flowv1.EntityType{{
+		Name: "Component", Properties: []*flowv1.Property{{Name: "name", Type: "string"}},
+	}}}
+	if err := s.ApplySchema(ctx, schema); err != nil {
+		t.Fatalf("ApplySchema: %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	// Lose both: corrupt main.lbug and remove schema.json.
+	dbPath := filepath.Join(dir, "main.lbug")
+	if err := os.WriteFile(dbPath, []byte("not a ladybug database"), 0600); err != nil {
+		t.Fatalf("corrupt main.lbug: %v", err)
+	}
+	if err := os.Remove(filepath.Join(dir, "schema.json")); err != nil {
+		t.Fatalf("remove schema.json: %v", err)
+	}
+
+	// Open recovers (fresh empty DB) and finds no schema metadata — the R8
+	// both-lost corner.
+	recovered, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open after both-lost corruption: %v", err)
+	}
+	defer closeStore(t, recovered)
+
+	health, err := recovered.Health(ctx)
+	if err != nil {
+		t.Fatalf("Health: %v", err)
+	}
+	if health.SchemaApplied {
+		t.Fatal("fixture: expected SchemaApplied=false after both-lost open (no metadata to restore)")
+	}
+
+	// The git repo has commits: the entities dir carries committed files.
+	id := uuid.NewString()
+	root := t.TempDir()
+	entitiesDir := filepath.Join(root, "entities")
+	edgesDir := filepath.Join(root, "edges")
+	writeJSONFile(t, filepath.Join(entitiesDir, "Component", id+".json"), map[string]any{
+		"id": id, "type": "Component", "properties": map[string]string{"name": "recovered"},
+	})
+	if err := os.MkdirAll(edgesDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := recovered.RehydrateMainFromFiles(ctx, entitiesDir, edgesDir); err != nil {
+		t.Fatalf("RehydrateMainFromFiles: %v", err)
+	}
+
+	ent, err := recovered.GetEntity(ctx, id, "")
+	if err != nil {
+		t.Fatalf("re-hydrated entity not served: %v", err)
+	}
+	if ent.Properties["name"] != "recovered" {
+		t.Fatalf("re-hydrated entity property = %q, want %q", ent.Properties["name"], "recovered")
+	}
+
+	health, err = recovered.Health(ctx)
+	if err != nil {
+		t.Fatalf("Health after re-hydration: %v", err)
+	}
+	if !health.SchemaApplied {
+		t.Fatal("expected SchemaApplied=true after successful re-hydration of the recovered graph")
+	}
+}
+
 func TestRehydrateMainFromFiles_BothMissing_NoError(t *testing.T) {
 	s, err := OpenInMemory()
 	if err != nil {
@@ -6931,6 +7206,73 @@ func TestRehydrateFiles_UnparseableJSONFailsLoudly(t *testing.T) {
 			}
 			if !errors.Is(loadErr, tc.want) {
 				t.Fatalf("expected %v, got %v", tc.want, loadErr)
+			}
+		})
+	}
+}
+
+// CreateEntity's data-integrity probe (crud.go) enforces global (cross-type) ID
+// uniqueness on the runtime write path; insertEntityOnConn must enforce the
+// same invariant on the re-hydration load path. Two element files carrying the
+// same ID under different type directories are corrupt/hand-edited git state —
+// the id column is PRIMARY KEY only within each node table, so both would
+// otherwise insert silently, after which findEntityByID resolves the ID
+// nondeterministically (map iteration order). The load must fail loudly with
+// ErrEntityAlreadyExists on every load path that inserts entities (main and
+// branch).
+func TestRehydrateFiles_CrossTypeDuplicateIDFailsLoudly(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		branch bool
+	}{
+		{"main", false},
+		{"branch", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, err := OpenInMemory()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer closeStore(t, s)
+			applyTestSchema(t, s)
+			ctx := context.Background()
+
+			const branch = "tx1"
+			if tc.branch {
+				if err := s.CreateBranchDB(ctx, branch); err != nil {
+					t.Fatalf("CreateBranchDB: %v", err)
+				}
+				if err := s.ReplicateSchemaToBranch(ctx, branch); err != nil {
+					t.Fatalf("ReplicateSchemaToBranch: %v", err)
+				}
+			}
+
+			dupID := uuid.NewString()
+			root := t.TempDir()
+			entitiesDir := filepath.Join(root, "entities")
+			edgesDir := filepath.Join(root, "edges")
+			if err := os.MkdirAll(edgesDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			// Same ID under two different type directories.
+			writeJSONFile(t, filepath.Join(entitiesDir, "Component", "a.json"), map[string]any{
+				"id": dupID, "type": "Component",
+			})
+			writeJSONFile(t, filepath.Join(entitiesDir, "Document", "b.json"), map[string]any{
+				"id": dupID, "type": "Document",
+			})
+
+			var loadErr error
+			if tc.branch {
+				loadErr = s.HydrateBranchFromFiles(ctx, branch, entitiesDir, edgesDir)
+			} else {
+				loadErr = s.RehydrateMainFromFiles(ctx, entitiesDir, edgesDir)
+			}
+			if loadErr == nil {
+				t.Fatal("expected loud failure for a cross-type duplicate entity ID")
+			}
+			if !errors.Is(loadErr, store.ErrEntityAlreadyExists) {
+				t.Fatalf("expected ErrEntityAlreadyExists, got %v", loadErr)
 			}
 		})
 	}

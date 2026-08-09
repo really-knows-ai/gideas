@@ -4351,6 +4351,116 @@ func TestFetchAndMerge_Diverged(t *testing.T) {
 	}
 }
 
+// TestFetchAndMerge_DivergencePersistsAcrossCycles pins the persistent-
+// divergence contract of FetchAndMerge: after the first divergent cycle
+// advances the tracking ref to the remote tip while local main is left
+// behind (ErrPullDiverged, local ref unchanged), the next fetch is a no-op
+// (git.NoErrAlreadyUpToDate) but the local branch is STILL diverged. The
+// up-to-date branch must re-run the ancestry classification and continue to
+// surface ErrPullDiverged — never silently report the divergence as
+// up-to-date — so the sync worker and Sync() keep delivering the SPEC R10
+// "Sync diverged" failure (FAILED_PRECONDITION, SPEC error-table row 977)
+// and its telemetry on every cycle, and BeginTransaction's implicit sync
+// never sees a clean cycle over stale local state (GIT_PLAN.md:138).
+func TestFetchAndMerge_DivergencePersistsAcrossCycles(t *testing.T) {
+	tmpDir := t.TempDir()
+	bareDir := filepath.Join(tmpDir, "remote.git")
+
+	setupBareRemote(t, tmpDir, bareDir)
+
+	// Clone the bare remote to create a "writer" that will push to remote.
+	writerDir := filepath.Join(tmpDir, "writer")
+	writer, err := git.PlainClone(writerDir, false, &git.CloneOptions{
+		URL: "file://" + bareDir,
+	})
+	if err != nil {
+		t.Fatalf("clone writer: %v", err)
+	}
+	writerWT, err := writer.Worktree()
+	if err != nil {
+		t.Fatalf("writer worktree: %v", err)
+	}
+
+	gs := cloneFromBare(t, tmpDir, bareDir)
+
+	// Make a local commit (diverging from remote).
+	localFile, err := gs.wt.Filesystem.Create("local.txt")
+	if err != nil {
+		t.Fatalf("create local file: %v", err)
+	}
+	_, _ = localFile.Write([]byte("local content"))
+	_ = localFile.Close()
+	if _, err := gs.wt.Add("local.txt"); err != nil {
+		t.Fatalf("add local: %v", err)
+	}
+	localCommitHash, err := gs.wt.Commit("local commit", &git.CommitOptions{
+		Author: &object.Signature{Name: "test", Email: "test@test"},
+	})
+	if err != nil {
+		t.Fatalf("local commit: %v", err)
+	}
+
+	// Make a different commit on the remote (push from writer).
+	remoteFile, err := writerWT.Filesystem.Create("remote.txt")
+	if err != nil {
+		t.Fatalf("create remote file: %v", err)
+	}
+	_, _ = remoteFile.Write([]byte("remote content"))
+	_ = remoteFile.Close()
+	if _, err := writerWT.Add("remote.txt"); err != nil {
+		t.Fatalf("add remote: %v", err)
+	}
+	if _, err := writerWT.Commit("remote commit", &git.CommitOptions{
+		Author: &object.Signature{Name: "test", Email: "test@test"},
+	}); err != nil {
+		t.Fatalf("remote commit: %v", err)
+	}
+	if err := writer.Push(&git.PushOptions{}); err != nil {
+		t.Fatalf("push remote: %v", err)
+	}
+
+	err = gs.WithGitLock(func() error {
+		gs.remoteURL = "file://" + bareDir
+		gs.authFn = func() (transport.AuthMethod, error) {
+			return noopAuth{}, nil
+		}
+
+		// Cycle 1: the fetch advances the tracking ref to the remote tip and
+		// the ancestry classification surfaces the divergence.
+		_, err = gs.FetchAndMerge(ctx(), "origin", "main")
+		if !errors.Is(err, ErrPullDiverged) {
+			if err == nil {
+				return fmt.Errorf("cycle 1: expected ErrPullDiverged, got nil")
+			}
+			return fmt.Errorf("cycle 1: expected ErrPullDiverged, got %v", err)
+		}
+
+		// Cycle 2: the fetch is a no-op (tracking ref already at the remote
+		// tip → git.NoErrAlreadyUpToDate) but local main is STILL diverged.
+		// The up-to-date branch must re-classify, not silently succeed.
+		_, err = gs.FetchAndMerge(ctx(), "origin", "main")
+		if !errors.Is(err, ErrPullDiverged) {
+			if err == nil {
+				return fmt.Errorf("cycle 2: expected ErrPullDiverged, got nil")
+			}
+			return fmt.Errorf("cycle 2: expected ErrPullDiverged, got %v", err)
+		}
+
+		// Local main must remain unchanged across both divergent cycles.
+		localRef, refErr := gs.repo.Reference(plumbing.ReferenceName("refs/heads/main"), true)
+		if refErr != nil {
+			return fmt.Errorf("resolve local ref: %w", refErr)
+		}
+		if localRef.Hash() != localCommitHash {
+			return fmt.Errorf("local main ref changed on divergence: got %s, want %s", localRef.Hash(), localCommitHash)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("TestFetchAndMerge_DivergencePersistsAcrossCycles: %v", err)
+	}
+}
+
 // TestFetchAndMerge_LocalAhead pins the local-ahead (remote strictly behind)
 // classification of FetchAndMerge: local main has advanced past the remote
 // (e.g. a fire-and-forget push that failed transiently — SPEC:788), so there

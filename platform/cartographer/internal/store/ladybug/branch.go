@@ -3,6 +3,7 @@ package ladybug
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"os"
@@ -450,7 +451,7 @@ func (db *ladybugDB) RehydrateFromBranch(ctx context.Context, txID string) error
 					return fmt.Errorf("promote embedding schema to main for %q: %w", name, err)
 				}
 			}
-			if err := insertEntityOnConn(db.conn, name, entity); err != nil {
+			if err := insertEntityOnConn(db.conn, name, entity, entDefs); err != nil {
 				result.Close()
 				return fmt.Errorf("insert entity into main: %w", err)
 			}
@@ -535,6 +536,15 @@ func (db *ladybugDB) RehydrateMainFromFiles(ctx context.Context, entitiesDir, ed
 	if err := db.persistMainVectorMetadataLocked(); err != nil {
 		return err
 	}
+	// A successful re-hydration leaves main serving a complete schema (applied
+	// or inferred from the directory structure, SPEC R8). In the both-lost
+	// recovery corner — corrupt main.lbug AND absent schema.json while the git
+	// repo has commits — Open recovers a fresh database and
+	// restoreMainSchemaMetadataLocked finds no metadata to restore, leaving
+	// schemaApplied false; without this the store serves the recovered graph
+	// while Health() reports SchemaApplied=false indefinitely (only ApplySchema
+	// and restoreMainSchemaMetadataLocked set the flag elsewhere).
+	db.schemaApplied = true
 	return nil
 }
 
@@ -556,6 +566,16 @@ func (db *ladybugDB) HydrateBranchFromFiles(ctx context.Context, txID, entitiesD
 	// Load from files into branch.
 	if err := db.loadEntitiesFromDirOnConn(br.conn, entitiesDir, br.entityTypeDefs); err != nil {
 		return err
+	}
+	// Fail if entities dir exists but edges dir does not (partial wipe) —
+	// mirrors RehydrateMainFromFiles' completeness guard. On a working tree
+	// where entities/ survived but edges/ was removed (SPEC R2 WipeGraph
+	// mid-wipe failure → INTERNAL), silently loading entities and skipping
+	// every edge would hydrate an incomplete graph with no signal.
+	if _, entErr := os.Stat(entitiesDir); entErr == nil {
+		if _, edgeErr := os.Stat(edgesDir); os.IsNotExist(edgeErr) {
+			return fmt.Errorf("%w: edges directory does not exist but entities directory exists", store.ErrInvalidEdgeDir)
+		}
 	}
 	if err := db.loadEdgesFromDirOnConn(br.conn, edgesDir, br.edgeTypeDefs); err != nil {
 		return err
@@ -716,7 +736,24 @@ func createRelTableOnConn(conn *lbug.Connection, name string,
 // Internal helpers — insert/lookup on an arbitrary connection
 // --------------------------------------------------------------------------
 
-func insertEntityOnConn(conn *lbug.Connection, entityType string, entity *store.Entity) error {
+func insertEntityOnConn(
+	conn *lbug.Connection, entityType string, entity *store.Entity,
+	typeDefs map[string]*store.EntityTypeDef,
+) error {
+	// Cross-type ID-uniqueness probe, mirroring CreateEntity's data-integrity
+	// check (crud.go): the id column is PRIMARY KEY only within each node
+	// table, so an entity whose ID already exists under a different type's
+	// table would otherwise insert silently on the re-hydration read path —
+	// reachable from corrupt/hand-edited git state — after which findEntityByID
+	// resolves the ID nondeterministically (map iteration order). Fail loudly
+	// instead (never silently produce a wrong result on a read path). The
+	// O(#entity_types) scan shares findEntityByID's ponytail ceiling (upgrade
+	// path: a global ID→type index).
+	if _, perr := findEntityByID(conn, typeDefs, entity.Id); perr == nil {
+		return fmt.Errorf("%w: entity with id %q already exists", store.ErrEntityAlreadyExists, entity.Id)
+	} else if !errors.Is(perr, store.ErrEntityNotFound) {
+		return perr
+	}
 	var assigns []string
 	params := map[string]any{"id": entity.Id}
 	assigns = append(assigns, "id: $id")
@@ -1143,7 +1180,7 @@ func (db *ladybugDB) loadEntitiesFromDir(dir string, entDefs map[string]*store.E
 				Embedding: je.Embedding,
 				CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
 			}
-			if err := insertEntityOnConn(db.conn, typeName, entity); err != nil {
+			if err := insertEntityOnConn(db.conn, typeName, entity, entDefs); err != nil {
 				return fmt.Errorf("insert entity %q: %w", je.ID, err)
 			}
 		}
@@ -1311,7 +1348,7 @@ func (db *ladybugDB) loadEntitiesFromDirOnConn(conn *lbug.Connection, dir string
 				Embedding: je.Embedding,
 				CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
 			}
-			if err := insertEntityOnConn(conn, typeName, entity); err != nil {
+			if err := insertEntityOnConn(conn, typeName, entity, entDefs); err != nil {
 				return fmt.Errorf("insert entity %q on branch: %w", je.ID, err)
 			}
 		}

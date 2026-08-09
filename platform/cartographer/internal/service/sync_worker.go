@@ -13,6 +13,8 @@ import (
 	"github.com/foundry/flow/cartographer/internal/store"
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
 	"github.com/google/uuid"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -30,6 +32,14 @@ const (
 // from this constant, so the wiring default and the worker default cannot
 // silently diverge.
 const DefaultSyncInterval = time.Minute
+
+// DefaultGitOperationTimeout is the per-operation deadline for git operations
+// in the sync worker cycle (SPEC R10: "a configurable deadline the worker
+// derives per operation (default: 5 minutes)" — a hung remote aborts the
+// operation with DEADLINE_EXCEEDED, SPEC:978, instead of wedging the worker
+// permanently). Single source of truth for the default, mirroring
+// DefaultSyncInterval.
+const DefaultGitOperationTimeout = 5 * time.Minute
 
 // SyncWorker manages background remote synchronisation.
 type SyncWorker struct {
@@ -82,6 +92,12 @@ type SyncWorker struct {
 	// minute (configurable)"). Defaults to DefaultSyncInterval; overridable via
 	// SyncWorkerWithSyncInterval.
 	syncInterval time.Duration
+
+	// gitOpTimeout bounds each git operation in the sync cycle (SPEC R10,
+	// SPEC:978: "a configurable deadline the worker derives per operation
+	// (default: 5 minutes)"). Defaults to DefaultGitOperationTimeout;
+	// overridable via SyncWorkerWithGitOperationTimeout.
+	gitOpTimeout time.Duration
 }
 
 // SyncWorkerOption configures a SyncWorker.
@@ -114,6 +130,18 @@ func SyncWorkerWithSyncInterval(d time.Duration) SyncWorkerOption {
 	return func(w *SyncWorker) { w.syncInterval = d }
 }
 
+// SyncWorkerWithGitOperationTimeout sets the per-operation deadline for git
+// operations in the sync cycle (SPEC R10 / SPEC:978: "A git operation in the
+// sync worker cycle (FetchAndMerge, PushRemote) exceeded its configurable
+// deadline (default: 5 minutes)"). The default is DefaultGitOperationTimeout
+// (five minutes). The duration must be positive — a non-positive value makes
+// every operation abort immediately with DEADLINE_EXCEEDED — so any
+// operator-facing wiring that derives the value (mirroring SYNC_INTERVAL in
+// cmd/main.go) must validate it at startup.
+func SyncWorkerWithGitOperationTimeout(d time.Duration) SyncWorkerOption {
+	return func(w *SyncWorker) { w.gitOpTimeout = d }
+}
+
 // NewSyncWorker creates a new SyncWorker.
 func NewSyncWorker(
 	remoteURL string,
@@ -132,6 +160,7 @@ func NewSyncWorker(
 		clock:        clock,
 		backoffFn:    syncBackoff,
 		syncInterval: DefaultSyncInterval,
+		gitOpTimeout: DefaultGitOperationTimeout,
 	}
 	for _, o := range opts {
 		o(w)
@@ -281,35 +310,51 @@ func (w *SyncWorker) doSyncCycle() cycleResult {
 		return res
 	}
 
-	// 2. If push needed, push to remote.
+	// 2. If push needed, push to remote. Each attempt runs under the
+	// configurable per-operation deadline (gitOp — SPEC R10 / SPEC:978), so a
+	// hung remote aborts with DEADLINE_EXCEEDED instead of wedging the worker.
 	if !w.pushNeeded.Load() {
 		return cycleResult{}
 	}
 
 	pushErr := w.gitstore.WithGitLock(func() error {
-		return w.gitstore.PushRemote(context.Background())
+		return w.gitOp(func(ctx context.Context) error {
+			return w.gitstore.PushRemote(ctx)
+		})
 	})
 	if pushErr != nil {
-		class := classifySyncError(pushErr)
-		if class == syncNonRecoverable {
+		if class := classifySyncError(pushErr); class == syncNonRecoverable {
 			slog.Warn("sync: non-recoverable push error", "error", pushErr)
 			w.publishFailure("push", pushErr)
 			return cycleResult{err: pushErr, classification: syncNonRecoverable}
 		}
-		// Recoverable — retry with backoff.
+		// Recoverable — retry with backoff. Every attempt is re-classified
+		// (SPEC R10: a retry that surfaces a non-recoverable error — e.g. auth
+		// revoked — must stop the cycle: "No retry this cycle"), and the
+		// retries-exhausted return classifies the final error rather than
+		// assuming a class, so a non-recoverable final error propagates to Sync
+		// callers (SPEC:628: "If the cycle encounters a non-recoverable error,
+		// returns the worker's last error").
 		for attempt := 1; attempt < 3; attempt++ {
 			time.Sleep(w.backoffFn(attempt))
 			pushErr = w.gitstore.WithGitLock(func() error {
-				return w.gitstore.PushRemote(context.Background())
+				return w.gitOp(func(ctx context.Context) error {
+					return w.gitstore.PushRemote(ctx)
+				})
 			})
 			if pushErr == nil {
 				break
+			}
+			if class := classifySyncError(pushErr); class == syncNonRecoverable {
+				slog.Warn("sync: non-recoverable push error on retry", "error", pushErr)
+				w.publishFailure("push", pushErr)
+				return cycleResult{err: pushErr, classification: syncNonRecoverable}
 			}
 		}
 		if pushErr != nil {
 			slog.Error("sync: push failed after retries", "error", pushErr)
 			w.publishFailure("push", pushErr)
-			return cycleResult{err: pushErr, classification: syncRecoverable}
+			return cycleResult{err: pushErr, classification: classifySyncError(pushErr)}
 		}
 	}
 
@@ -331,12 +376,14 @@ func (e *hydrateError) Unwrap() error { return e.err }
 // re-hydrates main.lbug from the updated working tree. Recoverable fetch
 // errors are retried up to 3 attempts with backoff; non-recoverable and
 // retries-exhausted failures return with the error classified and an
-// operator-visible telemetry event emitted (SPEC R10 error table).
+// operator-visible telemetry event emitted (SPEC R10 error table). Each
+// attempt's git operations run under the configurable per-operation deadline
+// (gitOp, SPEC R10 / SPEC:978), so a hung remote aborts with
+// DEADLINE_EXCEEDED instead of wedging the worker.
 func (w *SyncWorker) fetchAndRehydrate() cycleResult {
-	ctx := context.Background()
 	attempt := 0
 	for {
-		res := w.fetchAttempt(ctx)
+		res := w.fetchAttempt()
 		if res.err == nil {
 			return cycleResult{}
 		}
@@ -366,54 +413,59 @@ func (w *SyncWorker) fetchAndRehydrate() cycleResult {
 
 // fetchAttempt performs one git-locked fetch attempt followed by the
 // re-hydration of main.lbug when the fetch advanced main or the previous
-// cycle's re-hydration failed (GIT_PLAN.md:139 retry contract).
-func (w *SyncWorker) fetchAttempt(ctx context.Context) cycleResult {
+// cycle's re-hydration failed (GIT_PLAN.md:139 retry contract). The whole
+// locked sequence runs under the configurable per-operation deadline (gitOp,
+// SPEC R10 / SPEC:978), so a hung FetchAndMerge aborts with DEADLINE_EXCEEDED
+// instead of wedging the worker.
+func (w *SyncWorker) fetchAttempt() cycleResult {
 	var hydrateErr error
 	lockErr := w.gitstore.WithGitLock(func() error {
-		preHead, headErr := w.gitstore.BranchHEAD(ctx, "main")
-		if headErr != nil && !errors.Is(headErr, gitstore.ErrBranchNotFound) {
-			return headErr
-		}
-		newHead, err := w.gitstore.FetchAndMerge(ctx, "origin", "main")
-		if err != nil {
-			return err
-		}
-		// Re-hydrate when the remote had new data, or when the previous
-		// cycle's re-hydration failed and main.lbug is still inconsistent
-		// (SPEC R10: "if new data was pulled re-hydrates"; GIT_PLAN.md:30,84).
-		// FetchAndMerge returns the unchanged local hash when the remote is
-		// up-to-date or strictly behind, so the HEAD comparison is the
-		// new-data signal. A failed re-hydration is retried by the next cycle
-		// (GIT_PLAN.md:139) — the git files are already merged, so re-hydration
-		// is a pure read from the working tree.
-		if newHead.IsZero() || (newHead.String() == preHead && !w.hydrateFailed) {
+		return w.gitOp(func(ctx context.Context) error {
+			preHead, headErr := w.gitstore.BranchHEAD(ctx, "main")
+			if headErr != nil && !errors.Is(headErr, gitstore.ErrBranchNotFound) {
+				return headErr
+			}
+			newHead, err := w.gitstore.FetchAndMerge(ctx, "origin", "main")
+			if err != nil {
+				return err
+			}
+			// Re-hydrate when the remote had new data, or when the previous
+			// cycle's re-hydration failed and main.lbug is still inconsistent
+			// (SPEC R10: "if new data was pulled re-hydrates"; GIT_PLAN.md:30,84).
+			// FetchAndMerge returns the unchanged local hash when the remote is
+			// up-to-date or strictly behind, so the HEAD comparison is the
+			// new-data signal. A failed re-hydration is retried by the next cycle
+			// (GIT_PLAN.md:139) — the git files are already merged, so re-hydration
+			// is a pure read from the working tree.
+			if newHead.IsZero() || (newHead.String() == preHead && !w.hydrateFailed) {
+				return nil
+			}
+			// The working tree must be on main before files are read: with a
+			// transaction open it is checked out on the transaction branch, and
+			// re-hydrating from it would publish uncommitted transaction data into
+			// main.lbug. RestoreMain + CleanUntracked make the tree exactly main;
+			// both are no-ops when the tree already is main.
+			if err := w.gitstore.RestoreMain(ctx); err != nil {
+				w.hydrateFailed = true
+				hydrateErr = &hydrateError{err: fmt.Errorf("restore main before re-hydration: %w", err)}
+				return nil
+			}
+			if err := w.gitstore.CleanUntracked(ctx); err != nil {
+				w.hydrateFailed = true
+				hydrateErr = &hydrateError{err: fmt.Errorf("clean working tree before re-hydration: %w", err)}
+				return nil
+			}
+			entitiesDir, edgesDir := w.gitstore.HydrationDirs()
+			// RehydrateMainFromFiles holds the LadybugDB write lock (db.mu) for its
+			// entire wipe-and-load cycle.
+			if err := w.store.RehydrateMainFromFiles(ctx, entitiesDir, edgesDir); err != nil {
+				w.hydrateFailed = true
+				hydrateErr = &hydrateError{err: fmt.Errorf("sync re-hydration failed: %w", err)}
+			} else {
+				w.hydrateFailed = false
+			}
 			return nil
-		}
-		// The working tree must be on main before files are read: with a
-		// transaction open it is checked out on the transaction branch, and
-		// re-hydrating from it would publish uncommitted transaction data into
-		// main.lbug. RestoreMain + CleanUntracked make the tree exactly main;
-		// both are no-ops when the tree already is main.
-		if err := w.gitstore.RestoreMain(ctx); err != nil {
-			w.hydrateFailed = true
-			hydrateErr = &hydrateError{err: fmt.Errorf("restore main before re-hydration: %w", err)}
-			return nil
-		}
-		if err := w.gitstore.CleanUntracked(ctx); err != nil {
-			w.hydrateFailed = true
-			hydrateErr = &hydrateError{err: fmt.Errorf("clean working tree before re-hydration: %w", err)}
-			return nil
-		}
-		entitiesDir, edgesDir := w.gitstore.HydrationDirs()
-		// RehydrateMainFromFiles holds the LadybugDB write lock (db.mu) for its
-		// entire wipe-and-load cycle.
-		if err := w.store.RehydrateMainFromFiles(ctx, entitiesDir, edgesDir); err != nil {
-			w.hydrateFailed = true
-			hydrateErr = &hydrateError{err: fmt.Errorf("sync re-hydration failed: %w", err)}
-		} else {
-			w.hydrateFailed = false
-		}
-		return nil
+		})
 	})
 	if lockErr != nil {
 		return cycleResult{err: lockErr, classification: classifySyncError(lockErr)}
@@ -422,6 +474,29 @@ func (w *SyncWorker) fetchAttempt(ctx context.Context) cycleResult {
 		return cycleResult{err: hydrateErr, classification: syncNonRecoverable}
 	}
 	return cycleResult{}
+}
+
+// gitOp runs a git operation under the worker's configurable per-operation
+// deadline (SPEC R10 / SPEC:978: default DefaultGitOperationTimeout, five
+// minutes). A hung remote aborts the operation when the deadline fires: the
+// operation's context expires, go-git's FetchContext/PushContext return the
+// context error, and the worker continues instead of wedging permanently. The
+// deadline outcome is wrapped in a gRPC DeadlineExceeded status — which
+// mapGitError passes through unchanged (errors.go) — so callers that surface
+// the worker's last error (WithAck, SPEC:617-618: "the call returns an error
+// with the worker's last push error") report the SPEC:978 code rather than
+// INTERNAL. classifySyncError classes the wrapped error as recoverable (a hung
+// remote is a network timeout — SPEC:610 recoverable), so the cycle retries
+// within its budget and the push flag stays set for the next cycle.
+func (w *SyncWorker) gitOp(fn func(ctx context.Context) error) error {
+	ctx, cancel := context.WithTimeout(context.Background(), w.gitOpTimeout)
+	defer cancel()
+	err := fn(ctx)
+	if err != nil && ctx.Err() == context.DeadlineExceeded {
+		return status.Error(codes.DeadlineExceeded,
+			fmt.Sprintf("git operation deadline exceeded (configured %s): %v", w.gitOpTimeout, err))
+	}
+	return err
 }
 
 // publishFailure emits an operator-visible Event Bus telemetry event for a
@@ -465,9 +540,16 @@ func classifySyncError(err error) syncClassification {
 	if err == nil {
 		return syncRecoverable // shouldn't happen, but safe
 	}
-	// Non-recoverable: auth failures, divergence, push rejection
+	// Non-recoverable: auth failures, divergence, push rejection, and the
+	// pre-flight config errors where "the git operation cannot be attempted at
+	// all" (SPEC:123) — missing auth config and an unsupported remote URL
+	// scheme (SPEC error-table row "Unsupported remote URL scheme" →
+	// INVALID_ARGUMENT). A scheme that is not https:// or ssh:// is permanent,
+	// so retrying it within the cycle can never succeed; it must fail the
+	// cycle immediately so Sync() surfaces INVALID_ARGUMENT via mapGitError.
 	if errors.Is(err, gitstore.ErrAuthFailed) ||
 		errors.Is(err, gitstore.ErrAuthConfigMissing) ||
+		errors.Is(err, gitstore.ErrUnsupportedURLScheme) ||
 		errors.Is(err, gitstore.ErrPullDiverged) ||
 		errors.Is(err, gitstore.ErrPushRejected) {
 		return syncNonRecoverable

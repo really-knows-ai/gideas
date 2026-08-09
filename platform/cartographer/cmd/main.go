@@ -133,14 +133,18 @@ func main() {
 	// main.lbug by deleting and re-opening it fresh, main holds schema metadata
 	// but no graph data. When the git repository has commits, re-hydrate main
 	// from the file-per-element representation so the service does not serve a
-	// vacuous empty graph while committed data exists. With the
-	// transaction-only write model, re-hydration from git is always complete
-	// and safe (there are no non-transactional writes to main.lbug that git
-	// does not already contain), so any non-empty repo is re-hydrated
-	// unconditionally; a fresh install is a no-op (an empty git repo has no
-	// committed state to recover). A failure here is fatal: serving an empty
-	// graph after a corrupt-reopen silently drops all committed data, so fail
-	// loudly instead.
+	// vacuous empty graph while committed data exists. The working tree is
+	// switched back to main (RestoreMain + CleanUntracked) before files are
+	// read: after a crash (SIGKILL/eviction) the tree can be stranded on a
+	// transaction branch whose snapshot predates main's current commits, and
+	// re-hydrating a healthy main.lbug from that stale snapshot would silently
+	// roll back committed data. With the transaction-only write model there
+	// are no non-transactional writes to main.lbug that git does not already
+	// contain, so re-hydration from git is always complete and safe: any
+	// non-empty repo is re-hydrated unconditionally; a fresh install is a
+	// no-op (an empty git repo has no committed state to recover). A failure
+	// here is fatal: serving an empty graph after a corrupt-reopen silently
+	// drops all committed data, so fail loudly instead.
 	if err := rehydrateMainAfterRecovery(context.Background(), dbStore, gs); err != nil {
 		slog.Error("Failed to re-hydrate main from git after open (SPEC R8 recovery)",
 			"error", err,
@@ -247,8 +251,15 @@ func main() {
 	// -----------------------------------------------------------------------
 	// 7. Optional remote pull on init
 	// -----------------------------------------------------------------------
+	// initCatchUpPush records whether R10 Init found locally-committed-but-
+	// unpushed data that the sync worker's first cycle must push (SPEC R10 Init
+	// "The sync worker pushes any locally-committed-but-unpushed data on its
+	// first cycle (startup catch-up push)"; GIT_PLAN.md:33). The worker is
+	// constructed after this init path, so tryRemotePullOnInit reports the
+	// decision and main wires it into the worker before the first cycle runs.
+	var initCatchUpPush bool
 	if remotePullOnInit && remoteURL != "" {
-		if err := tryRemotePullOnInit(gs, remoteURL, remoteAuthSecretRef, readSecretFn, auditPub,
+		catchUpPush, err := tryRemotePullOnInit(gs, remoteURL, remoteAuthSecretRef, readSecretFn, auditPub,
 			// SPEC R10 Init: after clone-on-init seeds the git working tree,
 			// re-hydrate main from the cloned file-per-element representation so
 			// the graph is not empty.
@@ -272,10 +283,12 @@ func main() {
 				edgesDir := filepath.Join(ladybugDBPath, "graph-repo/edges")
 				return dbStore.RehydrateMainFromFiles(context.Background(), entitiesDir, edgesDir)
 			},
-		); err != nil {
+		)
+		if err != nil {
 			slog.Error("Pre-flight auth config failure", "error", err)
 			os.Exit(1)
 		}
+		initCatchUpPush = catchUpPush
 	}
 
 	// -----------------------------------------------------------------------
@@ -303,6 +316,18 @@ func main() {
 		syncOpts = append(syncOpts, service.SyncWorkerWithSyncInterval(syncInterval))
 		syncW = service.NewSyncWorker(remoteURL, gs, dbStore, service.RealClock{}, syncOpts...)
 		opts = append(opts, service.WithSyncWorker(syncW))
+		// SPEC R10 Init / GIT_PLAN.md:33: when init found committed-but-
+		// unpushed data (non-empty repo booting with pullOnInit), flag the
+		// push before the worker's first cycle runs so the startup catch-up
+		// push goes through the worker's error-table contract — recoverable
+		// failures retried within the cycle with backoff (up to 3 attempts)
+		// and the push flag left set for the next cycle; non-recoverable
+		// failures logged immediately + telemetry, flag left set — instead of
+		// a one-shot synchronous push that was logged + telemetry only and
+		// never retried until the next Commit() or a restart.
+		if initCatchUpPush {
+			syncW.SetPushNeeded()
+		}
 		go syncW.Run()
 		slog.Info("Background sync worker started")
 	}
@@ -402,9 +427,14 @@ func main() {
 // git repository has commits (SPEC R8 corruption recovery, SPEC.md:509-519).
 // ladybug.Open performs the destructive half of R8 recovery — deleting a
 // corrupted main.lbug and re-opening a fresh, empty database — but does not
-// restore the committed graph; that is this function's job. With the
-// transaction-only write model there are no non-transactional writes to
-// main.lbug that git does not already contain, so re-hydration from git is
+// restore the committed graph; that is this function's job. The working tree
+// is switched back to main (RestoreMain + CleanUntracked) before any files
+// are read: after a crash (SIGKILL/eviction) the tree can be stranded on a
+// transaction branch whose snapshot predates main's current commits, and
+// re-hydrating a healthy main.lbug from that stale snapshot would silently
+// roll back committed data that landed on main after the transaction began.
+// With the transaction-only write model there are no non-transactional writes
+// to main.lbug that git does not already contain, so re-hydration from git is
 // always complete and safe: whenever the repo is not empty, main is re-hydrated
 // unconditionally. A fresh install is a no-op (an empty git repo has no
 // committed state to recover). Any error is propagated so the caller can fail
@@ -417,9 +447,26 @@ func rehydrateMainAfterRecovery(ctx context.Context, dbStore store.Store, gs git
 	if err := gs.WithGitLock(func() error {
 		var err error
 		empty, err = gs.IsEmpty(ctx)
-		return err
+		if err != nil {
+			return err
+		}
+		if empty {
+			return nil
+		}
+		// The working tree may be checked out on a stranded transaction branch
+		// after a crash: restore main and clean the tree before files are
+		// read, so a healthy main.lbug is never rebuilt from a stale branch
+		// snapshot (SPEC R8 re-hydration reads main's committed state; the
+		// sync worker applies the same restore-main-before-read discipline).
+		if err := gs.RestoreMain(ctx); err != nil {
+			return fmt.Errorf("restore main before re-hydration: %w", err)
+		}
+		if err := gs.CleanUntracked(ctx); err != nil {
+			return fmt.Errorf("clean working tree before re-hydration: %w", err)
+		}
+		return nil
 	}); err != nil {
-		return fmt.Errorf("check git repo state for recovery: %w", err)
+		return fmt.Errorf("prepare git working tree for recovery: %w", err)
 	}
 	if empty {
 		return nil
@@ -432,6 +479,13 @@ func rehydrateMainAfterRecovery(ctx context.Context, dbStore store.Store, gs git
 	return nil
 }
 
+// tryRemotePullOnInit performs the SPEC R10 Init pre-flight auth check and the
+// clone-vs-catch-up decision. It returns catchUpPush=true when the local repo
+// already has commits (non-empty) and the sync worker's first cycle must push
+// any locally-committed-but-unpushed data (SPEC R10 Init / GIT_PLAN.md:33);
+// the caller (main) sets the worker's push flag from this before the first
+// cycle runs. The push itself is deliberately NOT performed here: routing it
+// through the worker's cycle keeps the R10 error-table retry contract.
 func tryRemotePullOnInit(
 	gs gitstore.GitStore,
 	remoteURL string,
@@ -439,7 +493,7 @@ func tryRemotePullOnInit(
 	readSecretFn func(ctx context.Context, name string) (map[string]string, error),
 	auditPub *eventbus.AsyncPublisher,
 	rehydrate func() error,
-) error {
+) (catchUpPush bool, err error) {
 	// SPEC fail-startup clause (R1 Secret data keys, SPEC.md:122): an empty
 	// Secret or one missing the expected key causes the Cartographer to fail
 	// startup when pullOnInit is true — "the git operation cannot be attempted
@@ -482,7 +536,7 @@ func tryRemotePullOnInit(
 		return nil
 	}
 	if authErr := authFn(); authErr != nil {
-		return authErr
+		return false, authErr
 	}
 
 	// IsEmpty must be called with the git lock held (GitStore interface
@@ -496,7 +550,7 @@ func tryRemotePullOnInit(
 	}); err != nil {
 		// SPEC R10 Init: repository-state check failures are logged, not fatal.
 		slog.Warn("Failed to check git repo state on init (non-blocking)", "error", err)
-		return nil
+		return false, nil
 	}
 	if empty {
 		slog.Info("Pulling from remote on init", "url", remoteURL)
@@ -551,48 +605,26 @@ func tryRemotePullOnInit(
 				}
 			}
 		}
-	} else {
-		// SPEC R10 Init: when the local repo already has commits, catch-up push
-		// so a local head ahead of the remote is propagated. A missing or
-		// invalid Secret has already failed startup via the pre-flight check
-		// above (SPEC fail-startup clause, R1 Secret data keys); runtime push
-		// failures (auth rejected by the remote, network) are logged and
-		// deferred — they do not block startup; the next commit's
-		// pull-before-push (or a later startup) will retry.
-		slog.Info("Remote configured, performing catch-up push on init", "url", remoteURL)
-		// ponytail: Catch-up push fires unconditionally whenever the local repo is
-		// non-empty, with no ahead/behind resolution against the remote. Failure
-		// modes: (1) a remote head ahead of ours makes go-git reject with a
-		// non-fast-forward error — the push logs a warning and startup proceeds, so
-		// the next commit's pull-before-push clears it; (2) heads are equal, the
-		// push is a go-git no-op, so it is harmless in the absence of
-		// server-side force-push policy; (3) a peer push in the gap between IsEmpty() and
-		// the push in an HA/multi-replica deployment — that push fails
-		// non-fast-forward and the warning path retries on the next startup or
-		// commit. Cost: an extra network round-trip to the remote every boot, and
-		// every start revalidates auth against a possibly-read-only or congested
-		// remote. Upgrade path: compute ahead/behind (git ls-remote vs local ref)
-		// and push only when actually ahead of the remote.
-		if err := gs.WithGitLock(func() error {
-			return gs.PushRemote(context.Background())
-		}); err != nil {
-			slog.Warn("Catch-up push failed on init (non-blocking)", "error", err)
-			if auditPub != nil {
-				auditPub.Submit(&flowv1.PublishRequest{
-					Channel: "telemetry",
-					Event: &flowv1.FlowEvent{
-						EventId:    fmt.Sprintf("cartographer-catchup-%d", time.Now().UnixNano()),
-						EventType:  "cartographer.push_failed",
-						NodeId:     "cartographer",
-						Attributes: map[string]string{"error": err.Error(), "url": remoteURL},
-					},
-				})
-			}
-		} else {
-			slog.Info("Catch-up push succeeded")
-		}
+		// A fresh clone seeded main from the remote: there is no
+		// locally-committed-but-unpushed data to catch up, so no push flag.
+		return false, nil
 	}
-	return nil
+	// SPEC R10 Init / GIT_PLAN.md:33: when the local repo already has commits,
+	// the sync worker's first cycle pushes any locally-committed-but-unpushed
+	// data (startup catch-up push), including unsent commits from a prior pod
+	// lifetime. The push is NOT attempted here: the sync worker is constructed
+	// after this init path, so this function only reports that a catch-up push
+	// is needed and main.go flags the worker (SetPushNeeded) before its first
+	// cycle runs. Routing the push through the worker keeps the R10 error-table
+	// contract — recoverable failures are retried within the cycle with backoff
+	// (up to 3 attempts) and the push flag is left set so the next cycle
+	// retries; non-recoverable failures log immediately + telemetry and leave
+	// the flag set — instead of a one-shot synchronous push that was logged +
+	// telemetry only and never retried until the next Commit() or a restart. A
+	// missing or invalid Secret has already failed startup via the pre-flight
+	// check above (SPEC fail-startup clause, R1 Secret data keys).
+	slog.Info("Remote configured, queueing catch-up push for the sync worker's first cycle", "url", remoteURL)
+	return true, nil
 }
 
 func buildResolveAuthFn(

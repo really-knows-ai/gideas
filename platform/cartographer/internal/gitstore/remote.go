@@ -199,14 +199,18 @@ func (g *gitStore) FetchAndMerge(ctx context.Context, remoteName, branch string)
 		Force:      false,
 		RefSpecs:   []config.RefSpec{config.RefSpec("+refs/heads/" + branch + ":refs/remotes/" + remoteName + "/" + branch)},
 	})
-	if err != nil {
-		if errors.Is(err, git.NoErrAlreadyUpToDate) {
-			ref, refErr := g.repo.Reference(plumbing.ReferenceName("refs/heads/"+branch), true)
-			if refErr != nil {
-				return plumbing.ZeroHash, fmt.Errorf("resolve local ref: %w", refErr)
-			}
-			return ref.Hash(), nil
-		}
+	// NoErrAlreadyUpToDate means the tracking ref already matches the remote
+	// tip, so the fetch was a no-op. This alone is not sufficient to report
+	// success: after a divergent cycle the tracking ref advanced to the remote
+	// tip while local main was left behind (ErrPullDiverged leaves the local
+	// ref unchanged), so the next fetch is NoErrAlreadyUpToDate but the local
+	// branch is still diverged. Returning the local hash here would silently
+	// report the persistent divergence as up-to-date, hiding the SPEC-mandated
+	// ErrPullDiverged ("Sync diverged", FAILED_PRECONDITION — SPEC R10,
+	// error-table row "Sync diverged"). Fall through to the ancestry
+	// classification below, which re-detects the divergence (and handles the
+	// true up-to-date, fast-forward, and local-ahead cases identically).
+	if err != nil && !errors.Is(err, git.NoErrAlreadyUpToDate) {
 		return plumbing.ZeroHash, mapFetchError(err)
 	}
 

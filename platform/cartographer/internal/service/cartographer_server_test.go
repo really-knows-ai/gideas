@@ -1117,6 +1117,18 @@ func TestApplySchema_ValidationErrorPaths(t *testing.T) {
 			}},
 		},
 		{
+			name: "name is the reserved internal placeholder",
+			schema: &flowv1.Schema{EntityTypes: []*flowv1.EntityType{
+				{Name: "_untyped", Properties: []*flowv1.Property{{Name: "name", Type: "string"}}},
+			}},
+		},
+		{
+			name: "edge type name is the reserved internal placeholder",
+			schema: &flowv1.Schema{EdgeTypes: []*flowv1.EdgeType{
+				{Name: "_untyped", Properties: []*flowv1.Property{{Name: "weight", Type: "string"}}},
+			}},
+		},
+		{
 			name: "name violates cypher identifier regex",
 			schema: &flowv1.Schema{EntityTypes: []*flowv1.EntityType{
 				{Name: "1bad-name", Properties: []*flowv1.Property{{Name: "name", Type: "string"}}},
@@ -1126,6 +1138,30 @@ func TestApplySchema_ValidationErrorPaths(t *testing.T) {
 			name: "property name collides with implicit column",
 			schema: &flowv1.Schema{EntityTypes: []*flowv1.EntityType{
 				{Name: "Component", Properties: []*flowv1.Property{{Name: "id", Type: "string"}}},
+			}},
+		},
+		{
+			name: "property name collides with embedding column on vector-indexed type",
+			schema: &flowv1.Schema{EntityTypes: []*flowv1.EntityType{
+				{Name: "Component", EnableVectorIndex: true, Properties: []*flowv1.Property{{Name: "embedding", Type: "string"}}},
+			}},
+		},
+		{
+			name: "edge property collides with implicit column: from",
+			schema: &flowv1.Schema{EdgeTypes: []*flowv1.EdgeType{
+				{Name: "DEPENDS_ON", Properties: []*flowv1.Property{{Name: "from", Type: "string"}}},
+			}},
+		},
+		{
+			name: "edge property collides with implicit column: to",
+			schema: &flowv1.Schema{EdgeTypes: []*flowv1.EdgeType{
+				{Name: "DEPENDS_ON", Properties: []*flowv1.Property{{Name: "to", Type: "string"}}},
+			}},
+		},
+		{
+			name: "edge property collides with implicit column: type",
+			schema: &flowv1.Schema{EdgeTypes: []*flowv1.EdgeType{
+				{Name: "DEPENDS_ON", Properties: []*flowv1.Property{{Name: "type", Type: "string"}}},
 			}},
 		},
 		{
@@ -3317,6 +3353,8 @@ func TestBeginTransaction_ImplicitSyncFailsProceeds(t *testing.T) {
 // TestSync_WakesWorkerAndBlocks verifies the Sync RPC contract: it wakes the
 // worker and blocks until the cycle completes, and propagates the cycle's
 // non-recoverable errors to the caller.
+//
+//nolint:gocyclo // One subtest per SPEC Sync error-table row; each is a t.Run branch.
 func TestSync_WakesWorkerAndBlocks(t *testing.T) {
 	t.Run("blocks until cycle completes", func(t *testing.T) {
 		gs, err := gitstore.New(t.TempDir())
@@ -3416,6 +3454,52 @@ func TestSync_WakesWorkerAndBlocks(t *testing.T) {
 		}
 		if status.Code(err) != codes.FailedPrecondition {
 			t.Fatalf("expected FailedPrecondition for missing remote auth config, got %v (%v)", status.Code(err), err)
+		}
+	})
+
+	t.Run("propagates unsupported-URL-scheme as InvalidArgument", func(t *testing.T) {
+		// SPEC error-table row "Unsupported remote URL scheme" (SPEC:984): a
+		// scheme that is not https:// or ssh:// is a permanent pre-flight
+		// config error — "the git operation cannot be attempted at all" — so
+		// it is classified non-recoverable and surfaces INVALID_ARGUMENT
+		// through Sync() (classifySyncError → mapGitError, errors.go:170).
+		gs, err := gitstore.New(t.TempDir())
+		if err != nil {
+			t.Fatalf("gitstore.New: %v", err)
+		}
+		syncGit := &syncMockGitStore{GitStore: gs, fetchErr: gitstore.ErrUnsupportedURLScheme}
+		srv, fc := newSyncServer(t, syncGit)
+		waitFor(t, func() bool { return fc.tickers() >= 1 }, "startup cycle")
+
+		_, err = srv.Sync(testCtx(), &flowv1.SyncRequest{})
+		if err == nil {
+			t.Fatal("expected Sync to propagate the unsupported-URL-scheme error")
+		}
+		if status.Code(err) != codes.InvalidArgument {
+			t.Fatalf("expected InvalidArgument for unsupported remote URL scheme, got %v (%v)", status.Code(err), err)
+		}
+	})
+
+	t.Run("propagates push rejection as FailedPrecondition", func(t *testing.T) {
+		// SPEC R10 error classification ("non-fast-forward push rejection" is
+		// non-recoverable, SPEC:610): a rejected push is classified
+		// non-recoverable by the worker and surfaces FAILED_PRECONDITION
+		// through Sync() (classifySyncError → mapGitError, errors.go:174).
+		gs, err := gitstore.New(t.TempDir())
+		if err != nil {
+			t.Fatalf("gitstore.New: %v", err)
+		}
+		syncGit := &syncMockGitStore{GitStore: gs, pushErr: gitstore.ErrPushRejected}
+		srv, fc := newSyncServer(t, syncGit)
+		waitFor(t, func() bool { return fc.tickers() >= 1 }, "startup cycle")
+		srv.syncWorker.SetPushNeeded()
+
+		_, err = srv.Sync(testCtx(), &flowv1.SyncRequest{})
+		if err == nil {
+			t.Fatal("expected Sync to propagate the push-rejection error")
+		}
+		if status.Code(err) != codes.FailedPrecondition {
+			t.Fatalf("expected FailedPrecondition for push rejection, got %v (%v)", status.Code(err), err)
 		}
 	})
 

@@ -207,8 +207,12 @@ func TestNewHealthServerServing(t *testing.T) {
 
 func TestTryRemotePullOnInitAnonymous(t *testing.T) {
 	gs := &initPullGitStore{isEmpty: true}
-	if err := tryRemotePullOnInit(gs, "https://public.example/repo.git", "", nil, nil, nil); err != nil {
+	catchUp, err := tryRemotePullOnInit(gs, "https://public.example/repo.git", "", nil, nil, nil)
+	if err != nil {
 		t.Fatalf("tryRemotePullOnInit: %v", err)
+	}
+	if catchUp {
+		t.Fatal("anonymous clone path must not flag a catch-up push")
 	}
 	if gs.cloneCalls != 1 {
 		t.Fatalf("anonymous clone calls = %d, want 1", gs.cloneCalls)
@@ -218,7 +222,7 @@ func TestTryRemotePullOnInitAnonymous(t *testing.T) {
 func TestTryRemotePullOnInitConfiguredSecretFailure(t *testing.T) {
 	gs := &initPullGitStore{isEmpty: true}
 	secretErr := errors.New("secret unavailable")
-	err := tryRemotePullOnInit(gs, "https://private.example/repo.git", "remote-auth",
+	_, err := tryRemotePullOnInit(gs, "https://private.example/repo.git", "remote-auth",
 		func(context.Context, string) (map[string]string, error) { return nil, secretErr }, nil, nil)
 	if !errors.Is(err, secretErr) {
 		t.Fatalf("tryRemotePullOnInit error = %v, want wrapped secret error", err)
@@ -234,7 +238,7 @@ func TestTryRemotePullOnInitConfiguredSecretFailure(t *testing.T) {
 // gitstore.ErrAuthConfigMissing before any git operation is attempted.
 func TestTryRemotePullOnInitSSHEmptyKeyFailsClosed(t *testing.T) {
 	gs := &initPullGitStore{isEmpty: true}
-	err := tryRemotePullOnInit(gs, "ssh://git@github.com/org/repo.git", "remote-auth",
+	_, err := tryRemotePullOnInit(gs, "ssh://git@github.com/org/repo.git", "remote-auth",
 		func(context.Context, string) (map[string]string, error) {
 			return map[string]string{"ssh-privatekey": ""}, nil
 		}, nil, nil)
@@ -252,7 +256,7 @@ func TestTryRemotePullOnInitSSHEmptyKeyFailsClosed(t *testing.T) {
 // support returns gitstore.ErrUnsupportedURLScheme before any git operation.
 func TestTryRemotePullOnInitUnsupportedSchemeFailsClosed(t *testing.T) {
 	gs := &initPullGitStore{isEmpty: true}
-	err := tryRemotePullOnInit(gs, "ftp://example.com/repo.git", "remote-auth",
+	_, err := tryRemotePullOnInit(gs, "ftp://example.com/repo.git", "remote-auth",
 		func(context.Context, string) (map[string]string, error) {
 			return map[string]string{"username": "user", "password": "pass"}, nil
 		}, nil, nil)
@@ -270,7 +274,7 @@ func TestTryRemotePullOnInitUnsupportedSchemeFailsClosed(t *testing.T) {
 // gitstore.ErrAuthConfigMissing before any git operation is attempted.
 func TestTryRemotePullOnInitHTTPSMissingPasswordFailsClosed(t *testing.T) {
 	gs := &initPullGitStore{isEmpty: true}
-	err := tryRemotePullOnInit(gs, "https://private.example/repo.git", "remote-auth",
+	_, err := tryRemotePullOnInit(gs, "https://private.example/repo.git", "remote-auth",
 		func(context.Context, string) (map[string]string, error) {
 			return map[string]string{"username": "user"}, nil
 		}, nil, nil)
@@ -300,7 +304,7 @@ func TestTryRemotePullOnInitParseURLFailureFailsClosed(t *testing.T) {
 	if _, err := url.Parse(malformedURL); err == nil {
 		t.Fatalf("test fixture %q unexpectedly parses; pick a URL url.Parse rejects", malformedURL)
 	}
-	err := tryRemotePullOnInit(gs, malformedURL, "remote-auth",
+	_, err := tryRemotePullOnInit(gs, malformedURL, "remote-auth",
 		func(context.Context, string) (map[string]string, error) {
 			return map[string]string{"password": "pass"}, nil
 		}, nil, nil)
@@ -322,7 +326,7 @@ func TestTryRemotePullOnInitParseURLFailureFailsClosed(t *testing.T) {
 // fails closed with gitstore.ErrAuthConfigMissing before any git operation.
 func TestTryRemotePullOnInitNilReadSecretFailsClosed(t *testing.T) {
 	gs := &initPullGitStore{isEmpty: true}
-	err := tryRemotePullOnInit(gs, "https://private.example/repo.git", "remote-auth", nil, nil, nil)
+	_, err := tryRemotePullOnInit(gs, "https://private.example/repo.git", "remote-auth", nil, nil, nil)
 	if !errors.Is(err, gitstore.ErrAuthConfigMissing) {
 		t.Fatalf("nil-readSecretFn pre-flight error = %v, want ErrAuthConfigMissing", err)
 	}
@@ -333,12 +337,15 @@ func TestTryRemotePullOnInitNilReadSecretFailsClosed(t *testing.T) {
 
 func TestTryRemotePullOnInitPrivateRemoteAuthFailureIsNonBlocking(t *testing.T) {
 	gs := &initPullGitStore{isEmpty: true, cloneErr: gitstore.ErrAuthFailed}
-	err := tryRemotePullOnInit(gs, "https://private.example/repo.git", "remote-auth",
+	catchUp, err := tryRemotePullOnInit(gs, "https://private.example/repo.git", "remote-auth",
 		func(context.Context, string) (map[string]string, error) {
 			return map[string]string{"password": "expired"}, nil
 		}, nil, nil)
 	if err != nil {
 		t.Fatalf("runtime clone failure blocked startup: %v", err)
+	}
+	if catchUp {
+		t.Fatal("failed clone path must not flag a catch-up push")
 	}
 	if gs.cloneCalls != 1 {
 		t.Fatalf("private clone calls = %d, want 1", gs.cloneCalls)
@@ -350,10 +357,13 @@ func TestTryRemotePullOnInitPrivateRemoteAuthFailureIsNonBlocking(t *testing.T) 
 func TestTryRemotePullOnInitCloneRehydrates(t *testing.T) {
 	gs := &scenarioGitStore{initPullGitStore: initPullGitStore{isEmpty: true}}
 	rehydrated := false
-	err := tryRemotePullOnInit(gs, "https://public.example/repo.git", "", nil, nil,
+	catchUp, err := tryRemotePullOnInit(gs, "https://public.example/repo.git", "", nil, nil,
 		func() error { rehydrated = true; return nil })
 	if err != nil {
 		t.Fatalf("tryRemotePullOnInit: %v", err)
+	}
+	if catchUp {
+		t.Fatal("clone path must not flag a catch-up push (nothing local to push)")
 	}
 	if gs.cloneCalls != 1 {
 		t.Fatalf("clone calls = %d, want 1", gs.cloneCalls)
@@ -367,40 +377,38 @@ func TestTryRemotePullOnInitCloneRehydrates(t *testing.T) {
 // re-hydration after a successful clone logs and continues (does not block startup).
 func TestTryRemotePullOnInitRehydrateFailureIsNonBlocking(t *testing.T) {
 	gs := &initPullGitStore{isEmpty: true}
-	err := tryRemotePullOnInit(gs, "https://public.example/repo.git", "", nil, nil,
+	catchUp, err := tryRemotePullOnInit(gs, "https://public.example/repo.git", "", nil, nil,
 		func() error { return errors.New("rehydrate boom") })
 	if err != nil {
 		t.Fatalf("rehydrate failure blocked startup: %v", err)
 	}
+	if catchUp {
+		t.Fatal("clone path must not flag a catch-up push after re-hydration failure")
+	}
 }
 
 // TestTryRemotePullOnInitCatchUpPush verifies SPEC R10 Init: when the local
-// repo already has commits (not empty), a catch-up push is performed.
+// repo already has commits (not empty), tryRemotePullOnInit reports that the
+// sync worker's first cycle must perform the catch-up push; the push itself is
+// NOT performed here (the worker is constructed after this init path and
+// applies the R10 error-table retry contract to the push).
 func TestTryRemotePullOnInitCatchUpPush(t *testing.T) {
 	gs := &scenarioGitStore{initPullGitStore: initPullGitStore{isEmpty: false}}
-	if err := tryRemotePullOnInit(gs, "https://public.example/repo.git", "", nil, nil, nil); err != nil {
+	catchUp, err := tryRemotePullOnInit(gs, "https://public.example/repo.git", "", nil, nil, nil)
+	if err != nil {
 		t.Fatalf("tryRemotePullOnInit: %v", err)
 	}
-	if gs.pushCalls != 1 {
-		t.Fatalf("catch-up push calls = %d, want 1", gs.pushCalls)
+	if !catchUp {
+		t.Fatal("expected catch-up push flag on a non-empty repo, got false")
+	}
+	if gs.pushCalls != 0 {
+		t.Fatalf("direct push calls = %d, want 0 (push is deferred to the sync worker's first cycle)", gs.pushCalls)
 	}
 	if gs.cloneCalls != 0 {
 		t.Fatalf("clone calls on non-empty repo = %d, want 0", gs.cloneCalls)
 	}
-	if len(gs.ops) != 1 || gs.ops[0] != "push" {
-		t.Fatalf("expected only a push on init, got ops=%v", gs.ops)
-	}
-}
-
-// TestTryRemotePullOnInitCatchUpPushFailureNonBlocking verifies a failed
-// catch-up push is logged and deferred, not fatal to startup.
-func TestTryRemotePullOnInitCatchUpPushFailureNonBlocking(t *testing.T) {
-	gs := &initPullGitStore{isEmpty: false, pushErr: errors.New("push failed")}
-	if err := tryRemotePullOnInit(gs, "https://public.example/repo.git", "", nil, nil, nil); err != nil {
-		t.Fatalf("catch-up push failure blocked startup: %v", err)
-	}
-	if gs.pushCalls != 1 {
-		t.Fatalf("push calls = %d, want 1", gs.pushCalls)
+	if len(gs.ops) != 0 {
+		t.Fatalf("expected no remote operations on init (push deferred to worker), got ops=%v", gs.ops)
 	}
 }
 
@@ -410,14 +418,17 @@ func TestTryRemotePullOnInitCatchUpPushFailureNonBlocking(t *testing.T) {
 // catch-up-push path (non-empty local repo) as well as the clone path. The
 // pre-flight auth check is not scoped to the clone path, so a non-empty repo
 // booting with pullOnInit: true and a failing readSecretFn returns the
-// pre-flight error and never attempts the push.
+// pre-flight error and never flags a catch-up push.
 func TestTryRemotePullOnInitCatchUpPushSecretFailureFailsStartup(t *testing.T) {
 	gs := &initPullGitStore{isEmpty: false}
 	secretErr := errors.New("secret unavailable")
-	err := tryRemotePullOnInit(gs, "https://private.example/repo.git", "remote-auth",
+	catchUp, err := tryRemotePullOnInit(gs, "https://private.example/repo.git", "remote-auth",
 		func(context.Context, string) (map[string]string, error) { return nil, secretErr }, nil, nil)
 	if !errors.Is(err, secretErr) {
 		t.Fatalf("tryRemotePullOnInit error = %v, want wrapped secret error (fail startup)", err)
+	}
+	if catchUp {
+		t.Fatal("catch-up push flagged after secret failure, want none (startup fails closed)")
 	}
 	if gs.pushCalls != 0 {
 		t.Fatalf("push calls after secret failure on catch-up path = %d, want 0", gs.pushCalls)
@@ -430,18 +441,21 @@ func TestTryRemotePullOnInitCatchUpPushSecretFailureFailsStartup(t *testing.T) {
 // TestTryRemotePullOnInitCatchUpPushValidSecretPushes verifies the pre-flight
 // auth check passes for a valid Secret on the catch-up-push path, so a
 // non-empty repo booting with pullOnInit: true and a well-formed Secret still
-// performs the catch-up push.
+// reports the catch-up push for the sync worker's first cycle.
 func TestTryRemotePullOnInitCatchUpPushValidSecretPushes(t *testing.T) {
 	gs := &initPullGitStore{isEmpty: false}
-	err := tryRemotePullOnInit(gs, "https://private.example/repo.git", "remote-auth",
+	catchUp, err := tryRemotePullOnInit(gs, "https://private.example/repo.git", "remote-auth",
 		func(context.Context, string) (map[string]string, error) {
 			return map[string]string{"password": "valid-pass"}, nil
 		}, nil, nil)
 	if err != nil {
 		t.Fatalf("tryRemotePullOnInit with valid Secret: %v", err)
 	}
-	if gs.pushCalls != 1 {
-		t.Fatalf("catch-up push calls = %d, want 1 (pre-flight passed)", gs.pushCalls)
+	if !catchUp {
+		t.Fatal("expected catch-up push flag with a valid Secret on a non-empty repo, got false")
+	}
+	if gs.pushCalls != 0 {
+		t.Fatalf("direct push calls = %d, want 0 (push is deferred to the sync worker's first cycle)", gs.pushCalls)
 	}
 	if gs.cloneCalls != 0 {
 		t.Fatalf("clone calls on non-empty repo = %d, want 0", gs.cloneCalls)
@@ -450,11 +464,16 @@ func TestTryRemotePullOnInitCatchUpPushValidSecretPushes(t *testing.T) {
 
 // TestTryRemotePullOnInitStateCheckFailureNonBlocking verifies SPEC R10 Init:
 // a repository-state (IsEmpty) check failure on init is logged and non-fatal —
-// no clone is attempted, no error blocks startup, and it does not call os.Exit.
+// no clone is attempted, no catch-up push is flagged, no error blocks startup,
+// and it does not call os.Exit.
 func TestTryRemotePullOnInitStateCheckFailureNonBlocking(t *testing.T) {
 	gs := &initPullGitStore{isEmpty: true, initStateErr: errors.New("state check boom")}
-	if err := tryRemotePullOnInit(gs, "https://public.example/repo.git", "", nil, nil, nil); err != nil {
+	catchUp, err := tryRemotePullOnInit(gs, "https://public.example/repo.git", "", nil, nil, nil)
+	if err != nil {
 		t.Fatalf("IsEmpty() failure blocked startup: %v", err)
+	}
+	if catchUp {
+		t.Fatal("catch-up push flagged after state-check failure, want none (repo state unknown)")
 	}
 	if gs.cloneCalls != 0 {
 		t.Fatalf("clone calls after state-check failure = %d, want 0", gs.cloneCalls)
@@ -469,17 +488,32 @@ func TestTryRemotePullOnInitStateCheckFailureNonBlocking(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // recoveryGitStore is a gitstore stub for rehydrateMainAfterRecovery that
-// reports the repository's commit state and hydration directories.
+// reports the repository's commit state and hydration directories, and tracks
+// the restore-main/clean-untracked steps the recovery path runs before
+// re-hydration (a crash can leave the working tree stranded on a transaction
+// branch, so the tree must be switched back to main before files are read).
 type recoveryGitStore struct {
 	gitstore.GitStore
-	isEmpty  bool
-	stateErr error
-	dirs     [2]string
+	isEmpty      bool
+	stateErr     error
+	dirs         [2]string
+	restoreErr   error
+	cleanErr     error
+	restoreCalls int
+	cleanCalls   int
 }
 
 func (g *recoveryGitStore) IsEmpty(context.Context) (bool, error) { return g.isEmpty, g.stateErr }
 func (g *recoveryGitStore) HydrationDirs() (string, string)       { return g.dirs[0], g.dirs[1] }
 func (g *recoveryGitStore) WithGitLock(fn func() error) error     { return fn() }
+func (g *recoveryGitStore) RestoreMain(context.Context) error {
+	g.restoreCalls++
+	return g.restoreErr
+}
+func (g *recoveryGitStore) CleanUntracked(context.Context) error {
+	g.cleanCalls++
+	return g.cleanErr
+}
 
 // recoveryStore is a store.Store stub that counts RehydrateMainFromFiles
 // invocations. The transaction-only write model removed the main-graph-data
@@ -500,7 +534,9 @@ func (s *recoveryStore) RehydrateMainFromFiles(context.Context, string, string) 
 // the transaction-only write model there are no local-only writes to protect,
 // so whenever the git repository has commits (not empty) main is re-hydrated
 // from git unconditionally, and any failure must be surfaced (fail loudly)
-// rather than silently serving a vacuous graph.
+// rather than silently serving a vacuous graph. The working tree is switched
+// back to main (RestoreMain + CleanUntracked) before files are read, so a
+// healthy main.lbug is never rebuilt from a stale transaction-branch snapshot.
 func TestRehydrateMainAfterRecovery(t *testing.T) {
 	ctx := context.Background()
 
@@ -513,6 +549,10 @@ func TestRehydrateMainAfterRecovery(t *testing.T) {
 		if st.rehydrateCalls != 0 {
 			t.Fatalf("re-hydration ran for an empty git repo: %d calls", st.rehydrateCalls)
 		}
+		if gs.restoreCalls != 0 || gs.cleanCalls != 0 {
+			t.Fatalf("restore/clean ran for an empty git repo: restore=%d clean=%d",
+				gs.restoreCalls, gs.cleanCalls)
+		}
 	})
 
 	t.Run("committed git re-hydrates unconditionally", func(t *testing.T) {
@@ -523,6 +563,40 @@ func TestRehydrateMainAfterRecovery(t *testing.T) {
 		}
 		if st.rehydrateCalls != 1 {
 			t.Fatalf("re-hydration calls = %d, want 1", st.rehydrateCalls)
+		}
+		if gs.restoreCalls != 1 || gs.cleanCalls != 1 {
+			t.Fatalf("restore/clean before re-hydration: restore=%d clean=%d, want 1 each",
+				gs.restoreCalls, gs.cleanCalls)
+		}
+	})
+
+	t.Run("restore-main failure is surfaced (fail loudly)", func(t *testing.T) {
+		gs := &recoveryGitStore{isEmpty: false, restoreErr: errors.New("restore boom")}
+		st := &recoveryStore{}
+		err := rehydrateMainAfterRecovery(ctx, st, gs)
+		if err == nil {
+			t.Fatal("expected restore-main failure to be surfaced, got nil")
+		}
+		if !strings.Contains(err.Error(), "restore boom") {
+			t.Fatalf("error does not carry the restore-main failure: %v", err)
+		}
+		if st.rehydrateCalls != 0 {
+			t.Fatalf("re-hydration ran after restore-main failure: %d calls", st.rehydrateCalls)
+		}
+	})
+
+	t.Run("clean-untracked failure is surfaced (fail loudly)", func(t *testing.T) {
+		gs := &recoveryGitStore{isEmpty: false, cleanErr: errors.New("clean boom")}
+		st := &recoveryStore{}
+		err := rehydrateMainAfterRecovery(ctx, st, gs)
+		if err == nil {
+			t.Fatal("expected clean-untracked failure to be surfaced, got nil")
+		}
+		if !strings.Contains(err.Error(), "clean boom") {
+			t.Fatalf("error does not carry the clean-untracked failure: %v", err)
+		}
+		if st.rehydrateCalls != 0 {
+			t.Fatalf("re-hydration ran after clean-untracked failure: %d calls", st.rehydrateCalls)
 		}
 	})
 
@@ -536,6 +610,10 @@ func TestRehydrateMainAfterRecovery(t *testing.T) {
 		if !strings.Contains(err.Error(), "rehydrate boom") {
 			t.Fatalf("error does not carry the re-hydration failure: %v", err)
 		}
+		if gs.restoreCalls != 1 || gs.cleanCalls != 1 {
+			t.Fatalf("restore/clean must run before the re-hydration attempt: restore=%d clean=%d",
+				gs.restoreCalls, gs.cleanCalls)
+		}
 	})
 
 	t.Run("git state check failure is surfaced", func(t *testing.T) {
@@ -547,6 +625,10 @@ func TestRehydrateMainAfterRecovery(t *testing.T) {
 		}
 		if st.rehydrateCalls != 0 {
 			t.Fatalf("re-hydration ran after git state-check failure: %d calls", st.rehydrateCalls)
+		}
+		if gs.restoreCalls != 0 || gs.cleanCalls != 0 {
+			t.Fatalf("restore/clean ran after git state-check failure: restore=%d clean=%d",
+				gs.restoreCalls, gs.cleanCalls)
 		}
 	})
 }
@@ -602,6 +684,118 @@ func TestRehydrateMainAfterRecoveryRestoresCommittedGraph(t *testing.T) {
 	}
 	if ent.Type != "Component" {
 		t.Fatalf("restored entity type = %q, want %q", ent.Type, "Component")
+	}
+}
+
+// TestRehydrateMainAfterRecoveryRestoresCurrentMainNotStaleBranch pins SPEC R8
+// with real components in the crash scenario that motivates the
+// restore-main-before-re-hydration step: a pod killed mid-transaction leaves
+// the working tree checked out on the transaction branch (BeginTransaction's
+// HardResetToBranch), while main has advanced via a concurrent commit. The
+// recovery path must switch the tree back to main before re-hydrating, so
+// main.lbug is rebuilt from main's current files — not the stale
+// transaction-branch snapshot — and committed data that landed on main after
+// the transaction began survives.
+func TestRehydrateMainAfterRecoveryRestoresCurrentMainNotStaleBranch(t *testing.T) {
+	root := t.TempDir()
+	ctx := context.Background()
+
+	gs, err := gitstore.New(root)
+	if err != nil {
+		t.Fatalf("gitstore.New: %v", err)
+	}
+
+	now := time.Now().UTC().Round(time.Millisecond)
+	commitEntity := func(id string) error {
+		return gs.WithGitLock(func() error {
+			if err := gs.WriteEntityFiles(ctx, "Component", []gitstore.Entity{
+				{ID: id, Type: "Component", CreatedAt: now, UpdatedAt: now},
+			}); err != nil {
+				return err
+			}
+			if err := gs.AddAll(ctx, "."); err != nil {
+				return err
+			}
+			return gs.Commit(ctx, "transaction:recovery-"+id)
+		})
+	}
+
+	// 1. Commit entity A to main — the graph state when the transaction began.
+	entityA := uuid.NewString()
+	if err := commitEntity(entityA); err != nil {
+		t.Fatalf("commit entity A to main: %v", err)
+	}
+
+	// 2. A transaction begins: branch tx1 is created from main and the working
+	// tree is hard-reset onto it (BeginTransaction's HardResetToBranch), so the
+	// tree now shows only entity A.
+	txID := uuid.NewString()
+	if err := gs.WithGitLock(func() error {
+		if err := gs.CreateBranch(ctx, txID); err != nil {
+			return err
+		}
+		return gs.HardResetToBranch(ctx, txID)
+	}); err != nil {
+		t.Fatalf("begin transaction (create branch + hard reset): %v", err)
+	}
+
+	// 3. main advances via a concurrent commit of entity B: restore main, write
+	// B, commit — then hard-reset the tree back onto tx1, simulating the crash
+	// state where the tree sits on the stale transaction-branch snapshot while
+	// main's ref points at a commit containing both A and B.
+	entityB := uuid.NewString()
+	if err := gs.WithGitLock(func() error {
+		if err := gs.RestoreMain(ctx); err != nil {
+			return err
+		}
+		if err := gs.WriteEntityFiles(ctx, "Component", []gitstore.Entity{
+			{ID: entityB, Type: "Component", CreatedAt: now, UpdatedAt: now},
+		}); err != nil {
+			return err
+		}
+		if err := gs.AddAll(ctx, "."); err != nil {
+			return err
+		}
+		if err := gs.Commit(ctx, "transaction:recovery-"+entityB); err != nil {
+			return err
+		}
+		return gs.HardResetToBranch(ctx, txID)
+	}); err != nil {
+		t.Fatalf("advance main then strand tree on tx1: %v", err)
+	}
+
+	// Guard: the working tree must still be on the stale snapshot (only A
+	// visible) while main's ref has advanced, or this test is not exercising
+	// the restore-before-read scenario it claims to.
+	var treeFiles []gitstore.EntityFile
+	if err := gs.WithGitLock(func() error {
+		var err error
+		treeFiles, err = gs.ReadAllEntityFiles(ctx, "Component")
+		return err
+	}); err != nil {
+		t.Fatalf("read tree entities for fixture guard: %v", err)
+	}
+	if len(treeFiles) != 1 || treeFiles[0].ID != entityA {
+		t.Fatalf("fixture: expected the tree to show only entity A (stale snapshot), got %+v", treeFiles)
+	}
+
+	dbStore, err := ladybug.Open(root)
+	if err != nil {
+		t.Fatalf("ladybug.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = dbStore.Close() })
+
+	if err := rehydrateMainAfterRecovery(ctx, dbStore, gs); err != nil {
+		t.Fatalf("rehydrateMainAfterRecovery: %v", err)
+	}
+
+	// Both entities must be present: B survives because the tree was restored
+	// to main before files were read; without that step main.lbug would be
+	// rebuilt from the stale tx1 snapshot and B would be silently lost.
+	for _, id := range []string{entityA, entityB} {
+		if _, err := dbStore.GetEntity(ctx, id, ""); err != nil {
+			t.Fatalf("entity %s missing after recovery (main.lbug rebuilt from stale branch snapshot?): %v", id, err)
+		}
 	}
 }
 
@@ -668,12 +862,15 @@ func waitForTelemetry(t *testing.T, spy *telemetrySpy, eventType string) *flowv1
 func TestTryRemotePullOnInitCloneFailurePublishesTelemetry(t *testing.T) {
 	gs := &initPullGitStore{isEmpty: true, cloneErr: errors.New("clone boom")}
 	spy, pub := newTestAuditPub(t)
-	err := tryRemotePullOnInit(gs, "https://private.example/repo.git", "remote-auth",
+	catchUp, err := tryRemotePullOnInit(gs, "https://private.example/repo.git", "remote-auth",
 		func(context.Context, string) (map[string]string, error) {
 			return map[string]string{"password": "expired"}, nil
 		}, pub, nil)
 	if err != nil {
 		t.Fatalf("clone failure blocked startup: %v", err)
+	}
+	if catchUp {
+		t.Fatal("failed clone path must not flag a catch-up push")
 	}
 	if gs.cloneCalls != 1 {
 		t.Fatalf("clone calls = %d, want 1", gs.cloneCalls)
@@ -690,28 +887,30 @@ func TestTryRemotePullOnInitCloneFailurePublishesTelemetry(t *testing.T) {
 	}
 }
 
-// TestTryRemotePullOnInitPushFailurePublishesTelemetry verifies SPEC R10: a
-// failed catch-up push on init publishes a "cartographer.push_failed"
-// telemetry event while startup stays non-blocking.
-func TestTryRemotePullOnInitPushFailurePublishesTelemetry(t *testing.T) {
-	gs := &initPullGitStore{isEmpty: false, pushErr: errors.New("push boom")}
+// TestTryRemotePullOnInitCatchUpPushEmitsNoTelemetry verifies the init path
+// publishes no "cartographer.push_failed" telemetry on the catch-up path: the
+// catch-up push is deferred to the sync worker's first cycle (SPEC R10 Init /
+// GIT_PLAN.md:33), which is the sole push-failure emitter, so a startup must
+// not report the same push through two emitters.
+func TestTryRemotePullOnInitCatchUpPushEmitsNoTelemetry(t *testing.T) {
+	gs := &initPullGitStore{isEmpty: false}
 	spy, pub := newTestAuditPub(t)
-	err := tryRemotePullOnInit(gs, "https://public.example/repo.git", "", nil, pub, nil)
+	catchUp, err := tryRemotePullOnInit(gs, "https://public.example/repo.git", "", nil, pub, nil)
 	if err != nil {
-		t.Fatalf("catch-up push failure blocked startup: %v", err)
+		t.Fatalf("tryRemotePullOnInit: %v", err)
 	}
-	if gs.pushCalls != 1 {
-		t.Fatalf("push calls = %d, want 1", gs.pushCalls)
+	if !catchUp {
+		t.Fatal("expected catch-up push flag on a non-empty repo, got false")
 	}
-	req := waitForTelemetry(t, spy, "cartographer.push_failed")
-	if req.GetChannel() != "telemetry" {
-		t.Fatalf("telemetry channel = %q, want %q", req.GetChannel(), "telemetry")
+	if gs.pushCalls != 0 {
+		t.Fatalf("direct push calls = %d, want 0 (push is deferred to the sync worker's first cycle)", gs.pushCalls)
 	}
-	if got := req.GetEvent().GetAttributes()["url"]; got != "https://public.example/repo.git" {
-		t.Fatalf("telemetry url attribute = %q, want the remote URL", got)
-	}
-	if got := req.GetEvent().GetAttributes()["error"]; got != "push boom" {
-		t.Fatalf("telemetry error attribute = %q, want %q", got, "push boom")
+	// The async publisher gets a beat to drain; the init path must never
+	// submit a push-failure event (that telemetry belongs to the worker).
+	time.Sleep(50 * time.Millisecond)
+	if calls := spy.getCalls(); len(calls) != 0 {
+		t.Fatalf("tryRemotePullOnInit published %d telemetry events on the catch-up path, want 0: %+v",
+			len(calls), calls)
 	}
 }
 
