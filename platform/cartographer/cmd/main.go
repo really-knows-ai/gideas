@@ -61,6 +61,16 @@ func main() {
 		slog.Error("invalid TRANSACTION_TIMEOUT", "error", err)
 		os.Exit(1)
 	}
+	// SPEC R5 fail-fast guard: a non-positive TRANSACTION_TIMEOUT parses
+	// cleanly but makes every BeginTransaction fail at runtime with
+	// INVALID_ARGUMENT ("requestedTimeout must be positive",
+	// transaction_manager.go:170-172), so it must fail startup just like an
+	// unparseable value. Mirrors the SYNC_INTERVAL positivity guard below.
+	if transactionTimeout <= 0 {
+		slog.Error("invalid TRANSACTION_TIMEOUT", "value", transactionTimeout.String(),
+			"error", "must be a positive duration")
+		os.Exit(1)
+	}
 
 	stalenessWindow, err := parseDurationEnv("CAPABILITY_STALENESS_WINDOW", "30s")
 	if err != nil {
@@ -275,7 +285,7 @@ func main() {
 			},
 		)
 		if err != nil {
-			slog.Error("Pre-flight auth config failure", "error", err)
+			slog.Error("Remote init failed; aborting startup", "error", err)
 			os.Exit(1)
 		}
 		initCatchUpPush = catchUpPush
@@ -290,7 +300,9 @@ func main() {
 	}
 	opts = append(opts, service.WithLadybugPath(ladybugDBPath))
 
-	// Create and start the background sync worker if a remote URL is configured.
+	// Create the background sync worker if a remote URL is configured. Its
+	// goroutine is started only after server construction and transaction
+	// recovery (see the SPEC R10 / GIT_PLAN Phase 2 item 8 note below).
 	var syncW *service.SyncWorker
 	if remoteURL != "" {
 		// Permanent sync failures emit an operator-visible Event Bus telemetry
@@ -318,8 +330,6 @@ func main() {
 		if initCatchUpPush {
 			syncW.SetPushNeeded()
 		}
-		go syncW.Run()
-		slog.Info("Background sync worker started")
 	}
 
 	// The per-transaction change-log admission cap (100K entries, SPEC change-log
@@ -349,6 +359,21 @@ func main() {
 		os.Exit(1)
 	}
 	slog.Info("Open transactions recovered")
+
+	// SPEC R10 / GIT_PLAN Phase 2 item 8 ("after the Cartographer server is
+	// constructed, create and start the syncWorker"): the worker goroutine is
+	// started only after server construction AND transaction recovery. Run()
+	// executes an immediate first cycle (fetch → restore-main → clean →
+	// re-hydrate), which must not run concurrently with the recovery path:
+	// recovery's main-file reads (buildMainFileLookups, cartographer_server.go)
+	// happen outside the git lock after ListBranches, so a concurrent first
+	// cycle could snapshot or re-hydrate a stale or mid-recovery working tree
+	// in the crash-strand scenario. SetPushNeeded (above) is still applied
+	// before the first cycle runs.
+	if syncW != nil {
+		go syncW.Run()
+		slog.Info("Background sync worker started")
+	}
 
 	// -----------------------------------------------------------------------
 	// 11. Mark dbReady
@@ -560,36 +585,17 @@ func tryRemotePullOnInit(
 		} else {
 			slog.Info("Initial clone from remote succeeded")
 			// SPEC R10 Init: the cloned git working tree seeded main.lbug's
-			// file-per-element source, so re-hydrate main from those files.
-			// If re-hydration fails, startup continues (headers a valid empty
-			// graph); R8's recovery path will re-hydrate on the next start.
+			// file-per-element source, so re-hydrate main from those files. A
+			// re-hydration failure is fatal: the identical condition (empty
+			// main.lbug + committed git) is fatal in the R8 recovery path
+			// (rehydrateMainAfterRecovery), and serving a vacuous empty graph
+			// while graph-repo/ holds the cloned history hides committed data
+			// behind a correctly-provisioned-but-empty service (SPEC R8
+			// self-healing guarantee: re-hydration recovers the full graph
+			// state). The error propagates to the caller, which exits startup.
 			if rehydrate != nil {
 				if rehydrateErr := rehydrate(); rehydrateErr != nil {
-					// ponytail: after clone-on-init seeds graph-repo/, a failure to
-					// re-hydrate main.lbug from those files is logged and swallowed
-					// (non-blocking), and startup proceeds. Consequence: mainDB is
-					// served as an *empty* graph even though graph-repo/ holds the
-					// cloned history, so the service is up but returns nothing until
-					// the next start re-runs R8's re-hydration from the same files
-					// (which, having a durable graph present, recovers the full
-					// state). A caller that queries before that restart sees a
-					// correctly-provisioned-but-vacuous graph with no error to
-					// distinguish it from a genuinely empty flow. This partially
-					// violates the SPEC R8 self-healing guarantee within a single
-					// boot. Upgrade path: fail closed on a JOF (JS-mount-style)
-					// here, or retry the re-hydration in a bounded loop before
-					// serving; the swallow is kept because the common failure
-					// (transient FS error during first boot) resolves on restart
-					// and blocking would convert a soft miss into a hard outage.
-					// Residual risk: a *persistent* re-hydration failure (disk
-					// full, or corrupt source files that survive restart) re-arms
-					// the vacuous-graph state on every boot and never surfaces a
-					// firm signal -- the R8 self-heal ceiling must climb into the
-					// multi-boot window, and an operator must correlate the
-					// per-boot warning to distinguish an empty flow from a
-					// provisioned-but-lost graph. That diagnosis is the deploy
-					// path this comment is designed to make visible.
-					slog.Warn("Initial clone re-hydration failed (non-blocking)", "error", rehydrateErr)
+					return false, fmt.Errorf("re-hydrate main from cloned remote tree: %w", rehydrateErr)
 				}
 			}
 		}

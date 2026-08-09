@@ -373,17 +373,27 @@ func TestTryRemotePullOnInitCloneRehydrates(t *testing.T) {
 	}
 }
 
-// TestTryRemotePullOnInitRehydrateFailureIsNonBlocking verifies that a failed
-// re-hydration after a successful clone logs and continues (does not block startup).
-func TestTryRemotePullOnInitRehydrateFailureIsNonBlocking(t *testing.T) {
+// TestTryRemotePullOnInitRehydrateFailureFailsStartup verifies that a failed
+// re-hydration after a successful clone-on-init is fatal: the identical
+// condition (empty main.lbug + committed git) is fatal in the SPEC R8 recovery
+// path (rehydrateMainAfterRecovery), and serving a vacuous empty graph while
+// graph-repo/ holds the cloned history would hide committed data. The error is
+// propagated to main, which aborts startup (mirroring the recovery path).
+func TestTryRemotePullOnInitRehydrateFailureFailsStartup(t *testing.T) {
 	gs := &initPullGitStore{isEmpty: true}
-	catchUp, err := tryRemotePullOnInit(gs, "https://public.example/repo.git", "", nil, nil,
+	_, err := tryRemotePullOnInit(gs, "https://public.example/repo.git", "", nil, nil,
 		func() error { return errors.New("rehydrate boom") })
-	if err != nil {
-		t.Fatalf("rehydrate failure blocked startup: %v", err)
+	if err == nil {
+		t.Fatal("expected re-hydration failure to be surfaced (fatal at startup), got nil")
 	}
-	if catchUp {
-		t.Fatal("clone path must not flag a catch-up push after re-hydration failure")
+	if !strings.Contains(err.Error(), "rehydrate boom") {
+		t.Fatalf("error does not carry the re-hydration failure: %v", err)
+	}
+	if !strings.Contains(err.Error(), "cloned remote tree") {
+		t.Fatalf("error does not identify the clone-on-init re-hydration path: %v", err)
+	}
+	if gs.cloneCalls != 1 {
+		t.Fatalf("clone calls = %d, want 1 (clone ran before re-hydration)", gs.cloneCalls)
 	}
 }
 
