@@ -3495,6 +3495,30 @@ func TestEmptyEdgeWriteAndRead(t *testing.T) {
 	}
 }
 
+// TestReadAllEdgeFilesEmptyTypeDir tests reading an existing-but-empty type
+// directory returns an empty slice (not an error), mirroring the entity-side
+// TestReadAllEntityFilesEmptyTypeDir for the edge load path.
+func TestReadAllEdgeFilesEmptyTypeDir(t *testing.T) {
+	gs := setupTestStore(t)
+	err := gs.WithGitLock(func() error {
+		// Create an empty type directory (no JSON files)
+		if err := gs.fs.MkdirAll("edges/EmptyType", 0755); err != nil {
+			return err
+		}
+		files, err := gs.ReadAllEdgeFiles(ctx(), "EmptyType")
+		if err != nil {
+			return err
+		}
+		if len(files) != 0 {
+			return fmt.Errorf("expected 0 files for empty type dir")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("TestReadAllEdgeFilesEmptyTypeDir: %v", err)
+	}
+}
+
 // TestWriteEntityInvalidUUID verifies ErrInvalidUUID is returned.
 func TestWriteEntityInvalidUUID(t *testing.T) {
 	gs := setupTestStore(t)
