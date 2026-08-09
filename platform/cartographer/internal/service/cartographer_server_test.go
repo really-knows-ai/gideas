@@ -38,6 +38,11 @@ var testSidecarPriv ed25519.PrivateKey
 
 const testMutationEntityID = "11111111-1111-4111-8111-111111111111"
 
+// capabilityStaleMsg is the message carried by errStaleCapability (SPEC error
+// table "Stale capability signature (anti-replay)"), asserted by the
+// stale/missing/malformed signed-at tests.
+const capabilityStaleMsg = "stale capability (anti-replay)"
+
 // =========================================================================
 // Test utilities
 // =========================================================================
@@ -1014,7 +1019,7 @@ func TestCapability_StaleCapability_UnaryInterceptorRejectsBeforeHandler(t *test
 	if handlerInvoked {
 		t.Fatal("unary handler ran for stale capability")
 	}
-	if status.Code(err) != codes.PermissionDenied || status.Convert(err).Message() != "stale capability (anti-replay)" {
+	if status.Code(err) != codes.PermissionDenied || status.Convert(err).Message() != capabilityStaleMsg {
 		t.Fatalf("expected stale-capability PermissionDenied, got %v", err)
 	}
 }
@@ -1031,7 +1036,7 @@ func TestCapability_StaleCapability_StreamInterceptorRejectsBeforeHandler(t *tes
 	if handlerInvoked {
 		t.Fatal("stream handler ran for stale capability")
 	}
-	if status.Code(err) != codes.PermissionDenied || status.Convert(err).Message() != "stale capability (anti-replay)" {
+	if status.Code(err) != codes.PermissionDenied || status.Convert(err).Message() != capabilityStaleMsg {
 		t.Fatalf("expected stale-capability PermissionDenied, got %v", err)
 	}
 }
@@ -9273,8 +9278,8 @@ func TestCapability_MissingSignedAt(t *testing.T) {
 		t.Fatal("expected error for missing signed-at, got nil")
 	}
 	if status.Code(err) != codes.PermissionDenied ||
-		status.Convert(err).Message() != "invalid capability signature" {
-		t.Fatalf("expected PermissionDenied invalid-signature, got %v", err)
+		status.Convert(err).Message() != capabilityStaleMsg {
+		t.Fatalf("expected PermissionDenied stale-capability, got %v", err)
 	}
 }
 
@@ -9330,8 +9335,8 @@ func TestCapability_MalformedSignedAt(t *testing.T) {
 		t.Fatal("expected error for malformed signed-at, got nil")
 	}
 	if status.Code(err) != codes.PermissionDenied ||
-		status.Convert(err).Message() != "invalid capability signature" {
-		t.Fatalf("expected PermissionDenied invalid-signature, got %v", err)
+		status.Convert(err).Message() != capabilityStaleMsg {
+		t.Fatalf("expected PermissionDenied stale-capability, got %v", err)
 	}
 }
 
