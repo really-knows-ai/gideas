@@ -151,18 +151,24 @@ func (db *ladybugDB) WipeSchema(ctx context.Context) error {
 		// DROP TABLE succeeds — leaving an index pointing at a vanished table
 		// that would collide with a later ApplySchema of the same-named type.
 		if vectorIndexExists(db.conn, name) {
-			if _, err := db.conn.Query(fmt.Sprintf("CALL DROP_VECTOR_INDEX('%s', '%s_vec');", name, name)); err != nil {
+			r, err := db.conn.Query(fmt.Sprintf("CALL DROP_VECTOR_INDEX('%s', '%s_vec');", name, name))
+			if err != nil {
 				return fmt.Errorf("drop vector index for %q: %w", name, err)
 			}
+			r.Close()
 		}
 		if ftsIndexExists(db.conn, name) {
-			if _, err := db.conn.Query(fmt.Sprintf("CALL DROP_FTS_INDEX('%s', '%s_fts');", name, name)); err != nil {
+			r, err := db.conn.Query(fmt.Sprintf("CALL DROP_FTS_INDEX('%s', '%s_fts');", name, name))
+			if err != nil {
 				return fmt.Errorf("drop FTS index for %q: %w", name, err)
 			}
+			r.Close()
 		}
-		if _, err := db.conn.Query(fmt.Sprintf("DROP TABLE %s;", quoteID(name))); err != nil {
+		r, err := db.conn.Query(fmt.Sprintf("DROP TABLE %s;", quoteID(name)))
+		if err != nil {
 			return fmt.Errorf("drop table %q: %w", name, err)
 		}
+		r.Close()
 		return nil
 	}
 	for _, name := range relTables {

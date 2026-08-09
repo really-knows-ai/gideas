@@ -7255,9 +7255,11 @@ func TestApplySchema_MidMultiTableDDLFailureFailsClosedOnReopen(t *testing.T) {
 	// schema.json metadata still describes only "First".
 	db := s.(*ladybugDB)
 	orphanDDL := "CREATE NODE TABLE IF NOT EXISTS `Second` (id STRING PRIMARY KEY, name STRING);"
-	if _, err := db.conn.Query(orphanDDL); err != nil {
+	r, err := db.conn.Query(orphanDDL)
+	if err != nil {
 		t.Fatalf("create orphaned Second table: %v", err)
 	}
+	r.Close()
 	if db.edgeTypeDefs["Second"] != nil || db.entityTypeDefs["Second"] != nil {
 		t.Fatal("orphaned table must not be in the schema cache")
 	}

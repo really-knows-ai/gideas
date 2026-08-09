@@ -481,9 +481,11 @@ func (db *ladybugDB) alterNodeTable(et *flowv1.EntityType, existing *store.Entit
 			continue
 		}
 		ddl := fmt.Sprintf("ALTER TABLE %s ADD %s %s;", quoteID(et.Name), quoteID(p.Name), ladybugType(p.Type))
-		if _, err := db.conn.Query(ddl); err != nil {
+		r, err := db.conn.Query(ddl)
+		if err != nil {
 			return fmt.Errorf("add column %q: %w", p.Name, err)
 		}
+		r.Close()
 		if ladybugType(p.Type) == colTypeString {
 			newStringProps = append(newStringProps, p.Name)
 		}
@@ -510,13 +512,17 @@ func (db *ladybugDB) alterNodeTable(et *flowv1.EntityType, existing *store.Entit
 		// index-less types). Intentionally NOT error-text matched; the
 		// existence check is the discriminator.
 		if ftsIndexExists(db.conn, et.Name) {
-			if _, err := db.conn.Query(fmt.Sprintf("CALL DROP_FTS_INDEX('%s', '%s_fts');", et.Name, et.Name)); err != nil {
+			r, err := db.conn.Query(fmt.Sprintf("CALL DROP_FTS_INDEX('%s', '%s_fts');", et.Name, et.Name))
+			if err != nil {
 				return fmt.Errorf("drop existing FTS index for %q: %w", et.Name, err)
 			}
+			r.Close()
 		}
-		if _, err := db.conn.Query(ftsDDL); err != nil {
+		r, err := db.conn.Query(ftsDDL)
+		if err != nil {
 			return fmt.Errorf("rebuild FTS index for %q: %w", et.Name, err)
 		}
+		r.Close()
 	}
 	return nil
 }
@@ -541,9 +547,11 @@ func (db *ladybugDB) alterRelTable(et *flowv1.EdgeType, existing *store.EdgeType
 			continue
 		}
 		ddl := fmt.Sprintf("ALTER TABLE %s ADD %s %s;", quoteID(et.Name), quoteID(p.Name), ladybugType(p.Type))
-		if _, err := db.conn.Query(ddl); err != nil {
+		r, err := db.conn.Query(ddl)
+		if err != nil {
 			return fmt.Errorf("add column %q: %w", p.Name, err)
 		}
+		r.Close()
 	}
 	return nil
 }
@@ -798,8 +806,11 @@ func (db *ladybugDB) Health(_ context.Context) (*store.HealthResult, error) {
 	// is alive and usable, not just that the in-memory flags say so.
 	ladybugOK := !db.closed && !db.failed
 	if ladybugOK && db.conn != nil {
-		if _, err := db.conn.Query("RETURN 1;"); err != nil {
+		r, err := db.conn.Query("RETURN 1;")
+		if err != nil {
 			ladybugOK = false
+		} else {
+			r.Close()
 		}
 	}
 

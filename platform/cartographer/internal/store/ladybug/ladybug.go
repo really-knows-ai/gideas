@@ -247,10 +247,15 @@ func (db *ladybugDB) loadExtensions() error {
 	for _, ext := range []string{"vector", "fts"} {
 		// Try INSTALL first; on some configurations the extension may already
 		// be installed, so we ignore INSTALL errors and attempt LOAD directly.
-		_, _ = db.conn.Query("INSTALL " + ext + ";")
-		if _, err := db.conn.Query("LOAD " + ext + ";"); err != nil {
+		r, _ := db.conn.Query("INSTALL " + ext + ";")
+		if r != nil {
+			r.Close()
+		}
+		r, err := db.conn.Query("LOAD " + ext + ";")
+		if err != nil {
 			return fmt.Errorf("load extension %q: %w", ext, err)
 		}
+		r.Close()
 	}
 	return nil
 }

@@ -195,10 +195,15 @@ func loadBranchExtensions(conn *lbug.Connection) error {
 		// main's loadExtensions). On some configurations the extension may
 		// already be installed, so we ignore INSTALL errors and attempt LOAD
 		// directly; the LOAD result is checked below.
-		_, _ = conn.Query("INSTALL " + ext + ";")
-		if _, err := conn.Query("LOAD " + ext + ";"); err != nil {
+		r, _ := conn.Query("INSTALL " + ext + ";")
+		if r != nil {
+			r.Close()
+		}
+		r, err := conn.Query("LOAD " + ext + ";")
+		if err != nil {
 			return fmt.Errorf("load extension %q on branch: %w", ext, err)
 		}
+		r.Close()
 	}
 	return nil
 }
@@ -354,9 +359,11 @@ func (db *ladybugDB) ReplicateSchemaToBranch(_ context.Context, txID string) err
 		}
 		if dimension > 0 {
 			alterDDL := fmt.Sprintf("ALTER TABLE %s ADD embedding FLOAT[%d];", quoteID(name), dimension)
-			if _, err := br.conn.Query(alterDDL); err != nil {
+			r, err := br.conn.Query(alterDDL)
+			if err != nil {
 				return fmt.Errorf("replicate embedding column %q: %w", name, err)
 			}
+			r.Close()
 			if err := db.createVectorIndex(br.conn, name); err != nil {
 				br.failed = true
 				return fmt.Errorf("replicate vector index %q: %w", name, err)
@@ -735,9 +742,11 @@ func createNodeTableOnConn(conn *lbug.Connection, name string,
 	// on first CreateEntity with an embedding; no FLOAT[n] column or index
 	// is created at table creation time.
 	ddl := fmt.Sprintf("CREATE NODE TABLE IF NOT EXISTS %s (%s);", quoteID(name), strings.Join(cols, ", "))
-	if _, err := conn.Query(ddl); err != nil {
+	r, err := conn.Query(ddl)
+	if err != nil {
 		return err
 	}
+	r.Close()
 	// Create FTS index on all string properties.
 	if len(stringProps) > 0 {
 		// Whether the table was freshly created or already existed (this builder
@@ -751,9 +760,11 @@ func createNodeTableOnConn(conn *lbug.Connection, name string,
 			propsList := "'" + strings.Join(stringProps, "', '") + "'"
 			ftsDDL := fmt.Sprintf("CALL CREATE_FTS_INDEX('%s', '%s_fts', [%s], stemmer := 'porter');",
 				name, name, propsList)
-			if _, err := conn.Query(ftsDDL); err != nil {
+			r, err := conn.Query(ftsDDL)
+			if err != nil {
 				return fmt.Errorf("create FTS index for %q: %w", name, err)
 			}
+			r.Close()
 		}
 	}
 	return nil
@@ -772,9 +783,11 @@ func createRelTableOnConn(conn *lbug.Connection, name string,
 		// failure here would otherwise surface only second-hand (and unreliably)
 		// when the rel-table DDL references the missing table. Propagate it now.
 		stmt := "CREATE NODE TABLE IF NOT EXISTS " + untypedTableName + " (id STRING PRIMARY KEY);"
-		if _, err := conn.Query(stmt); err != nil {
+		r, err := conn.Query(stmt)
+		if err != nil {
 			return fmt.Errorf("create placeholder %s node table: %w", untypedTableName, err)
 		}
+		r.Close()
 		clauses = append(clauses, "FROM "+untypedTableName+" TO "+untypedTableName)
 	}
 
@@ -785,8 +798,12 @@ func createRelTableOnConn(conn *lbug.Connection, name string,
 		cols = append(cols, quoteID(p.Name)+" "+ladybugType(p.Type))
 	}
 	ddl := fmt.Sprintf("CREATE REL TABLE IF NOT EXISTS %s (%s);", quoteID(name), strings.Join(cols, ", "))
-	_, err := conn.Query(ddl)
-	return err
+	r, err := conn.Query(ddl)
+	if err != nil {
+		return err
+	}
+	r.Close()
+	return nil
 }
 
 // --------------------------------------------------------------------------
@@ -832,9 +849,13 @@ func insertEntityOnConn(
 	if pErr != nil {
 		return pErr
 	}
-	_, eErr := conn.Execute(stmt, params)
+	r, eErr := conn.Execute(stmt, params)
 	stmt.Close()
-	return eErr
+	if eErr != nil {
+		return eErr
+	}
+	r.Close()
+	return nil
 }
 
 func insertEdgeOnConn(conn *lbug.Connection, edgeType string, edge *store.Edge) error {
@@ -883,9 +904,13 @@ func insertEdgeOnConn(conn *lbug.Connection, edgeType string, edge *store.Edge) 
 	if pErr != nil {
 		return pErr
 	}
-	_, eErr := conn.Execute(stmt, params)
+	r, eErr := conn.Execute(stmt, params)
 	stmt.Close()
-	return eErr
+	if eErr != nil {
+		return eErr
+	}
+	r.Close()
+	return nil
 }
 
 func listEdgesOnConn(conn *lbug.Connection, edgeType string) ([]store.Edge, error) {
@@ -1138,9 +1163,11 @@ func (db *ladybugDB) ensureEmbeddingLoadSchema(
 		return nil
 	}
 	altDDL := fmt.Sprintf("ALTER TABLE %s ADD embedding FLOAT[%d];", quoteID(typeName), len(embedding))
-	if _, err := conn.Query(altDDL); err != nil {
+	r, err := conn.Query(altDDL)
+	if err != nil {
 		return fmt.Errorf("ensure embedding column %q: %w", typeName, err)
 	}
+	r.Close()
 	if err := db.createVectorIndex(conn, typeName); err != nil {
 		return fmt.Errorf("ensure vector index %q: %w", typeName, err)
 	}

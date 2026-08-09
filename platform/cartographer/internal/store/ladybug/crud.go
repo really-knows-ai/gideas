@@ -128,9 +128,11 @@ func (db *ladybugDB) CreateEntity(
 			// No embedding column yet — bootstrap it.
 			dim = len(embedding)
 			altDDL := fmt.Sprintf("ALTER TABLE %s ADD embedding FLOAT[%d];", quoteID(entityType), dim)
-			if _, err := conn.Query(altDDL); err != nil {
+			r, err := conn.Query(altDDL)
+			if err != nil {
 				return nil, fmt.Errorf("bootstrap embedding column: %w", err)
 			}
+			r.Close()
 			if err := db.createVectorIndex(conn, entityType); err != nil {
 				typeDefs.markFailed()
 				return nil, fmt.Errorf("bootstrap vector index: %w", err)
@@ -177,11 +179,12 @@ func (db *ladybugDB) CreateEntity(
 	if pErr != nil {
 		return nil, pErr
 	}
-	_, eErr := conn.Execute(stmt, params)
+	r, eErr := conn.Execute(stmt, params)
 	stmt.Close()
 	if eErr != nil {
 		return nil, eErr
 	}
+	r.Close()
 
 	now := time.Now().UTC()
 	props := make(map[string]string, len(properties))
@@ -255,9 +258,11 @@ func (db *ladybugDB) UpdateEntity(
 			// No embedding column yet — bootstrap it (same as CreateEntity).
 			dim = len(embedding)
 			altDDL := fmt.Sprintf("ALTER TABLE %s ADD embedding FLOAT[%d];", quoteID(entity.Type), dim)
-			if _, err := conn.Query(altDDL); err != nil {
+			r, err := conn.Query(altDDL)
+			if err != nil {
 				return nil, fmt.Errorf("bootstrap embedding column: %w", err)
 			}
+			r.Close()
 			if err := db.createVectorIndex(conn, entity.Type); err != nil {
 				typeDefs.markFailed()
 				return nil, fmt.Errorf("bootstrap vector index: %w", err)
@@ -317,11 +322,12 @@ func (db *ladybugDB) UpdateEntity(
 	if pErr != nil {
 		return nil, pErr
 	}
-	_, eErr := conn.Execute(stmt, params)
+	r, eErr := conn.Execute(stmt, params)
 	stmt.Close()
 	if eErr != nil {
 		return nil, eErr
 	}
+	r.Close()
 
 	// Merge properties and return. An embedding is never set here: changing it
 	// is rejected above by ErrEmbeddingUpdateUnsupported.
@@ -354,11 +360,12 @@ func (db *ladybugDB) DeleteEntity(
 	if pErr != nil {
 		return nil, pErr
 	}
-	_, eErr := conn.Execute(stmt, map[string]any{"id": id})
+	r, eErr := conn.Execute(stmt, map[string]any{"id": id})
 	stmt.Close()
 	if eErr != nil {
 		return nil, eErr
 	}
+	r.Close()
 	return entity, nil
 }
 
@@ -463,11 +470,12 @@ func (db *ladybugDB) CreateEdge(
 	if pErr != nil {
 		return nil, pErr
 	}
-	_, eErr := conn.Execute(stmt, params)
+	r, eErr := conn.Execute(stmt, params)
 	stmt.Close()
 	if eErr != nil {
 		return nil, eErr
 	}
+	r.Close()
 
 	now := time.Now().UTC()
 	props := make(map[string]string, len(properties))
@@ -503,11 +511,12 @@ func (db *ladybugDB) DeleteEdge(
 	if pErr != nil {
 		return nil, pErr
 	}
-	_, eErr := conn.Execute(stmt, map[string]any{"id": id})
+	r, eErr := conn.Execute(stmt, map[string]any{"id": id})
 	stmt.Close()
 	if eErr != nil {
 		return nil, eErr
 	}
+	r.Close()
 	return edge, nil
 }
 
@@ -661,8 +670,12 @@ type branchDBCache struct {
 func createVectorIndexOnConn(conn *lbug.Connection, entityType string) error {
 	ddl := fmt.Sprintf("CALL CREATE_VECTOR_INDEX('%s', '%s_vec', 'embedding', metric := 'cosine');",
 		entityType, entityType)
-	_, err := conn.Query(ddl)
-	return err
+	r, err := conn.Query(ddl)
+	if err != nil {
+		return err
+	}
+	r.Close()
+	return nil
 }
 
 // findEntityByID probes each entity type table looking for the given ID.

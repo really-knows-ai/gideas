@@ -383,17 +383,21 @@ func (db *ladybugDB) restoreMainSchemaMetadataLocked() error {
 				return fmt.Errorf("restore node table %q from metadata: %w", name, err)
 			}
 			if dimension := metadata.VectorDimensions[name]; dimension > 0 {
-				if _, err := db.conn.Query(fmt.Sprintf(
+				r, err := db.conn.Query(fmt.Sprintf(
 					"ALTER TABLE %s ADD embedding FLOAT[%d];", quoteID(name), dimension,
-				)); err != nil {
+				))
+				if err != nil {
 					return fmt.Errorf("restore embedding column %q from metadata: %w", name, err)
 				}
+				r.Close()
 				if metadata.VectorIndexes[name] {
-					if _, err := db.conn.Query(fmt.Sprintf(
+					r, err := db.conn.Query(fmt.Sprintf(
 						"CALL CREATE_VECTOR_INDEX('%s', '%s_vec', 'embedding', metric := 'cosine');", name, name,
-					)); err != nil {
+					))
+					if err != nil {
 						return fmt.Errorf("restore vector index %q from metadata: %w", name, err)
 					}
+					r.Close()
 				}
 			}
 		}
