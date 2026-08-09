@@ -627,8 +627,16 @@ func buildResolveAuthFn(
 	remoteURL string,
 ) func() (transport.AuthMethod, error) {
 	return func() (transport.AuthMethod, error) {
-		if remoteAuthSecretRef == "" || readSecretFn == nil {
+		if remoteAuthSecretRef == "" {
 			return nil, nil
+		}
+		// Mirror tryRemotePullOnInit's pre-flight: a configured Secret ref with
+		// no way to read it must fail closed (ErrAuthConfigMissing) rather than
+		// widen to anonymous access — the git operation cannot be attempted
+		// (SPEC error-table row "Remote auth config missing (Sync)" →
+		// FAILED_PRECONDITION).
+		if readSecretFn == nil {
+			return nil, gitstore.ErrAuthConfigMissing
 		}
 		data, err := readSecretFn(context.Background(), remoteAuthSecretRef)
 		if err != nil {

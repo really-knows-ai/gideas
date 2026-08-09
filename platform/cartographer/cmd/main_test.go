@@ -1006,6 +1006,23 @@ func TestBuildResolveAuthFnAnonymous(t *testing.T) {
 	}
 }
 
+// TestBuildResolveAuthFnNilReadSecretFailsClosed verifies the
+// non-empty-secretRef-with-nil-readSecretFn branch of buildResolveAuthFn: a
+// configured Secret ref with no way to read it fails closed with
+// gitstore.ErrAuthConfigMissing instead of widening to anonymous access,
+// mirroring tryRemotePullOnInit's pre-flight (SPEC error-table row "Remote
+// auth config missing (Sync)" → FAILED_PRECONDITION).
+func TestBuildResolveAuthFnNilReadSecretFailsClosed(t *testing.T) {
+	fn := buildResolveAuthFn("remote-auth", nil, "https://private.example/repo.git")
+	auth, err := fn()
+	if auth != nil {
+		t.Fatalf("expected nil auth, got %v", auth)
+	}
+	if !errors.Is(err, gitstore.ErrAuthConfigMissing) {
+		t.Fatalf("nil-readSecretFn resolver error = %v, want ErrAuthConfigMissing", err)
+	}
+}
+
 // TestBuildResolveAuthFnSSHSigner verifies SPEC R1: an ssh:// URL with a valid
 // ssh-privatekey produces a public-key SSH signer (with insecure host-key
 // verification when no known_hosts is supplied).
