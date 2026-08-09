@@ -153,7 +153,7 @@ func (db *ladybugDB) getTableProperties(tableName, tableType string, vectorIndex
 		}
 
 		// columns: property id, name, type, default expression, primary key
-		if len(vals) < 2 {
+		if len(vals) < 3 {
 			continue
 		}
 		colName := fmt.Sprintf("%v", vals[1])
