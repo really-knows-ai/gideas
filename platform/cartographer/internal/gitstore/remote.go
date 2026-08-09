@@ -17,7 +17,7 @@ import (
 )
 
 // SetRemote configures the remote URL and auth provider for push/pull/fetch/clone.
-// Validates the URL scheme (must be https:// or ssh://) and returns
+// Validates the URL scheme (must be https://, ssh://, or file://) and returns
 // ErrUnsupportedURLScheme otherwise. authFn is called on each remote operation
 // so credentials can be refreshed on every call. A configured authFn returning
 // nil credentials explicitly selects anonymous access for clone, pull, and
@@ -35,15 +35,25 @@ func (g *gitStore) SetRemote(ctx context.Context, rawURL string, authFn func() (
 	return nil
 }
 
-// validateRemoteURL rejects URLs that are not https:// or ssh:// and any
-// clearly malformed URL with no host component (e.g. "https://").
+// validateRemoteURL rejects URLs that are not https://, ssh://, or file:// and
+// any clearly malformed URL with no location component (e.g. "https://" or
+// "file://"). file:// URLs carry the repository location in the path rather
+// than the host, so the no-location check is scheme-aware.
 func validateRemoteURL(rawURL string) error {
-	if !strings.HasPrefix(rawURL, "https://") && !strings.HasPrefix(rawURL, "ssh://") {
+	if !strings.HasPrefix(rawURL, "https://") &&
+		!strings.HasPrefix(rawURL, "ssh://") &&
+		!strings.HasPrefix(rawURL, "file://") {
 		return ErrUnsupportedURLScheme
 	}
 	parsed, err := url.Parse(rawURL)
 	if err != nil {
 		return fmt.Errorf("parse remote URL: %w", err)
+	}
+	if parsed.Scheme == "file" {
+		if parsed.Path == "" {
+			return fmt.Errorf("%w: %q", ErrRemoteURLNoHost, rawURL)
+		}
+		return nil
 	}
 	if parsed.Host == "" {
 		return fmt.Errorf("%w: %q", ErrRemoteURLNoHost, rawURL)
@@ -346,6 +356,16 @@ func (g *gitStore) PushRemote(ctx context.Context) error {
 // existing repository. The rawURL parameter is passed explicitly (not from
 // g.remoteURL). After fetching, the local main ref is set to the fetched
 // commit and the working tree is checked out to main.
+//
+// Caller-state dependency: an already-existing "origin" remote is tolerated
+// (CreateRemote's ErrRemoteExists) and the fetch then goes through the
+// pre-existing origin, whose configured URL — not rawURL — determines where
+// data is fetched from. A stale origin URL therefore silently wins over
+// rawURL. Callers must ensure origin is configured to match rawURL before
+// calling (e.g. via SetRemote, which runs ensureRemoteExists). Production
+// wiring (cmd/main.go: SetRemote before tryRemotePullOnInit) does this, so
+// the stale-origin path is unreachable today; the dependency is documented
+// rather than left to silently produce a wrong result.
 func (g *gitStore) CloneSingleBranch(ctx context.Context, rawURL, branch string) error {
 	if err := validateRemoteURL(rawURL); err != nil {
 		return err

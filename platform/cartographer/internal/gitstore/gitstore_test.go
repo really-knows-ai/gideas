@@ -6,13 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/http/cgi"
-	"net/http/httptest"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -22,14 +18,10 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/plumbing/transport"
-	"github.com/go-git/go-git/v5/plumbing/transport/client"
-	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
 	"github.com/go-git/go-git/v5/storage"
 	"github.com/go-git/go-git/v5/storage/memory"
 	"github.com/google/uuid"
 )
-
-var protocolMu sync.Mutex
 
 // bg is the shared background context for all test operations.
 var bg = context.Background()
@@ -2832,8 +2824,9 @@ func TestPushRemoteAnonymous(t *testing.T) {
 				gs.remoteURL = "file://" + bareDir
 				gs.authFn = tc.authFn
 
-				// Create the "origin" remote directly on the go-git repo
-				// (file:// is not a valid SetRemote scheme).
+				// Create the "origin" remote directly on the go-git repo so the
+				// subtest drives remote state by hand (SetRemote's
+				// ensureRemoteExists wiring is exercised elsewhere).
 				_, err := gs.repo.CreateRemote(&config.RemoteConfig{
 					Name: "origin",
 					URLs: []string{gs.remoteURL},
@@ -2883,9 +2876,6 @@ func TestPushRemoteAnonymous(t *testing.T) {
 }
 
 func TestCloneSingleBranchNoAuth(t *testing.T) {
-	protocolMu.Lock()
-	t.Cleanup(protocolMu.Unlock)
-
 	tmpDir := t.TempDir()
 	sourceDir := filepath.Join(tmpDir, "source")
 	source, err := git.PlainInitWithOptions(sourceDir, &git.PlainInitOptions{
@@ -2923,36 +2913,11 @@ func TestCloneSingleBranchNoAuth(t *testing.T) {
 	if _, err := git.PlainClone(remoteDir, true, &git.CloneOptions{URL: "file://" + sourceDir}); err != nil {
 		t.Fatalf("create bare remote: %v", err)
 	}
-	gitPath, err := exec.LookPath("git")
-	if err != nil {
-		t.Fatalf("git executable required for smart HTTP test server: %v", err)
-	}
-	// ponytail: this test depends on the external git binary (smart HTTP backend)
-	// to serve an https:// URL, which conflicts with SPEC R5's "pure Go, no external
-	// git binary" policy. It cannot be converted to file:// because CloneSingleBranch's
-	// URL validation (remote.go validateRemoteURL) only accepts https:// and ssh://.
-	// The upgrade path is to relax CloneSingleBranch to accept file:// in tests (a
-	// SPEC/URL-validation change), then drive this test over file:// without git.
-	server := httptest.NewTLSServer(&cgi.Handler{
-		Path: gitPath,
-		Args: []string{"http-backend"},
-		Env: []string{
-			"GIT_PROJECT_ROOT=" + tmpDir,
-			"GIT_HTTP_EXPORT_ALL=1",
-		},
-	})
-	t.Cleanup(server.Close)
-
-	originalHTTPS, hadHTTPS := client.Protocols["https"]
-	client.InstallProtocol("https", githttp.NewClient(server.Client()))
-	t.Cleanup(func() {
-		if hadHTTPS {
-			client.InstallProtocol("https", originalHTTPS)
-		} else {
-			delete(client.Protocols, "https")
-		}
-	})
-
+	// Serve the remote over go-git's native file:// transport — no external
+	// git binary, honoring SPEC R5's "pure Go, no external git binary" policy.
+	// CloneSingleBranch's URL validation accepts file:// remotes, and file://
+	// demands no credentials (requiresAuth false), so the nil-authFn clone
+	// path is exercised end-to-end without the network.
 	store, err := New(filepath.Join(tmpDir, "local"))
 	if err != nil {
 		t.Fatalf("new local store: %v", err)
@@ -2963,7 +2928,7 @@ func TestCloneSingleBranchNoAuth(t *testing.T) {
 		t.Fatal("expected nil auth provider")
 	}
 	err = store.WithGitLock(func() error {
-		return gs.CloneSingleBranch(ctx(), server.URL+"/remote.git", "main")
+		return gs.CloneSingleBranch(ctx(), "file://"+remoteDir, "main")
 	})
 	if err != nil {
 		t.Fatalf("CloneSingleBranchNoAuth: %v", err)
@@ -3004,7 +2969,7 @@ func TestCloneSingleBranchNoAuth(t *testing.T) {
 	}
 
 	// A configured resolver returning nil explicitly selects anonymous access.
-	configureAnonymousRemote(t, gs, server.URL+"/remote.git")
+	configureAnonymousRemote(t, gs, "file://"+remoteDir)
 
 	const updatedGraphContent = `{"graph":"updated"}`
 	updatedHash := pushGraphUpdate(t, tmpDir, remoteDir, updatedGraphContent)
@@ -3031,7 +2996,7 @@ func TestCloneSingleBranchNoAuth(t *testing.T) {
 func TestCloneSingleBranchInvalidScheme(t *testing.T) {
 	gs := setupTestStore(t)
 	err := gs.WithGitLock(func() error {
-		err := gs.CloneSingleBranch(ctx(), "file:///tmp/repo.git", "main")
+		err := gs.CloneSingleBranch(ctx(), "ftp://example.com/repo.git", "main")
 		if !errors.Is(err, ErrUnsupportedURLScheme) {
 			return fmt.Errorf("expected ErrUnsupportedURLScheme, got %v", err)
 		}
@@ -3684,9 +3649,9 @@ func TestRemotePushPull(t *testing.T) {
 	}
 }
 
-// TestCloneCurrentFromRemote clones a remote via internal operations
-// (the same flow as CloneSingleBranch, exercised without URL scheme validation
-// since file:// URLs are not valid remote schemes per SPEC).
+// TestCloneSingleBranchFromRemote clones a remote via internal operations
+// (the same flow CloneSingleBranch composes), driven by hand so the reopen
+// and backend re-wiring steps can be asserted individually.
 func TestCloneSingleBranchFromRemote(t *testing.T) {
 	tmpDir := t.TempDir()
 
@@ -3748,9 +3713,9 @@ func TestCloneSingleBranchFromRemote(t *testing.T) {
 			return fmt.Errorf("resolve auth: %w", err)
 		}
 
-		// Configure remote directly (bypassing CloneSingleBranch which
-		// rejects file:// URLs — this test exercises the internal operations:
-		// fetch, ref setup, checkout, and reopen).
+		// Configure remote directly (bypassing CloneSingleBranch — this test
+		// drives the internal operations by hand: fetch, ref setup, checkout,
+		// and reopen, asserting the backend re-wiring step in isolation).
 		_, err = gs.repo.CreateRemote(&config.RemoteConfig{
 			Name: "origin",
 			URLs: []string{"file://" + bareDir},
