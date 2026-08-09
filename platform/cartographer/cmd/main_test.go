@@ -1049,6 +1049,26 @@ func TestBuildResolveAuthFnNilReadSecretFailsClosed(t *testing.T) {
 	}
 }
 
+// TestBuildResolveAuthFnReadSecretErrorPropagates verifies the readSecretFn
+// error branch of buildResolveAuthFn (main.go:646-649): a Secret read failure
+// surfaces the reader's error verbatim (never a sentinel, never anonymous
+// access) so the sync worker's per-operation auth resolution fails closed on
+// the same error the startup pre-flight check surfaces.
+func TestBuildResolveAuthFnReadSecretErrorPropagates(t *testing.T) {
+	secretErr := errors.New("secret unavailable")
+	readSecretFn := func(ctx context.Context, name string) (map[string]string, error) {
+		return nil, secretErr
+	}
+	fn := buildResolveAuthFn("remote-auth", readSecretFn, "https://private.example/repo.git")
+	auth, err := fn()
+	if auth != nil {
+		t.Fatalf("expected nil auth on secret read failure, got %v", auth)
+	}
+	if !errors.Is(err, secretErr) {
+		t.Fatalf("resolver error = %v, want the readSecretFn error verbatim", err)
+	}
+}
+
 // TestBuildResolveAuthFnSSHSigner verifies SPEC R1: an ssh:// URL with a valid
 // ssh-privatekey produces a public-key SSH signer (with insecure host-key
 // verification when no known_hosts is supplied).
@@ -1079,6 +1099,26 @@ func TestBuildResolveAuthFnSSHSigner(t *testing.T) {
 	}
 	if err := signer.HostKeyCallback("unknown-host", &net.TCPAddr{}, nil); err != nil {
 		t.Fatalf("expected InsecureIgnoreHostKey callback to accept unknown host, got: %v", err)
+	}
+}
+
+// TestBuildResolveAuthFnSSHMalformedPEMFails verifies the signer-construction
+// error branch of buildResolveAuthFn (main.go:662-665): an ssh-privatekey that
+// is present and non-empty but not valid PEM makes gogitssh.NewPublicKeys fail
+// (ssh.ParsePrivateKey cannot find a key in it), and that error must propagate
+// — a malformed key must never degrade to anonymous access or a fail-open
+// signer.
+func TestBuildResolveAuthFnSSHMalformedPEMFails(t *testing.T) {
+	readSecretFn := func(ctx context.Context, name string) (map[string]string, error) {
+		return map[string]string{"ssh-privatekey": "not-a-valid-pem-key"}, nil
+	}
+	fn := buildResolveAuthFn("remote-auth", readSecretFn, "ssh://git@example.com/org/repo.git")
+	auth, err := fn()
+	if auth != nil {
+		t.Fatalf("expected nil auth on malformed PEM, got %v", auth)
+	}
+	if err == nil {
+		t.Fatal("expected a signer-construction error for malformed PEM, got nil")
 	}
 }
 
@@ -1154,6 +1194,34 @@ func TestBuildResolveAuthFnSSHKnownHostsEmptyFailsClosed(t *testing.T) {
 	// the callback must reject an unknown host.
 	if err := signer.HostKeyCallback("unknown-host", &net.TCPAddr{}, sshPub); err == nil {
 		t.Fatal("expected unknown-host rejection from fail-closed HostKeyCallback for empty known_hosts, got nil")
+	}
+}
+
+// TestBuildResolveAuthFnSSHKnownHostsParseFailure verifies the known_hosts
+// parse-error branch of buildResolveAuthFn (main.go:685-689): a known_hosts
+// value that is not a valid known_hosts line makes knownhosts.New fail, and
+// that error must propagate — an unparseable known_hosts file must never
+// degrade to InsecureIgnoreHostKey. The fixture is a single word, which the
+// parser rejects ("knownhosts: missing host pattern": every line needs at
+// least "hostname keytype key"); the resolver writes and removes its own temp
+// file, so the fixture needs no cleanup.
+func TestBuildResolveAuthFnSSHKnownHostsParseFailure(t *testing.T) {
+	keyPEM := ed25519PEM(t)
+	readSecretFn := func(ctx context.Context, name string) (map[string]string, error) {
+		return map[string]string{"ssh-privatekey": keyPEM, "known_hosts": "not-a-valid-known-hosts-entry"}, nil
+	}
+	fn := buildResolveAuthFn("remote-auth", readSecretFn, "ssh://git@example.com/org/repo.git")
+	auth, err := fn()
+	if auth != nil {
+		t.Fatalf("expected nil auth on known_hosts parse failure, got %v", auth)
+	}
+	if err == nil {
+		t.Fatal("expected a known_hosts parse error, got nil")
+	}
+	// Pin the branch: the signer constructed fine (valid PEM above), so the
+	// surfaced error must be the known_hosts file parse failure.
+	if !strings.Contains(err.Error(), "knownhosts:") {
+		t.Fatalf("expected a knownhosts.New parse error, got %v", err)
 	}
 }
 
