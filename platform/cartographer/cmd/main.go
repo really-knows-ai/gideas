@@ -892,7 +892,14 @@ func parseVerificationKey(envVar string) (ed25519.PublicKey, error) {
 	return ed25519.PublicKey([]byte(keyBytes)), nil
 }
 
-func newReadSecretFn(clientset *kubernetes.Clientset, namespace string) func(
+// newReadSecretFn builds the SPEC R1 (SPEC.md:103) Secret reader: the Cartographer
+// reads the referenced Secret via its pod's ServiceAccount on each remote
+// operation, so rotation takes effect without restart. The returned function
+// fetches the Secret by name in the pod namespace and decodes every Data byte
+// slice into a string, propagating the clientset's error unchanged on a failed
+// fetch. The clientset is an interface so tests can drive the real k8s wrapper
+// with the in-memory fake clientset.
+func newReadSecretFn(clientset kubernetes.Interface, namespace string) func(
 	ctx context.Context, name string,
 ) (map[string]string, error) {
 	return func(ctx context.Context, name string) (map[string]string, error) {
