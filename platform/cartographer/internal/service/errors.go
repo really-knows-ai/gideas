@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"fmt"
 
@@ -177,6 +178,16 @@ func mapGitError(err error) error {
 		return status.Error(codes.FailedPrecondition, "remote pull would diverge")
 	case errors.Is(err, gitstore.ErrMergeDiverged):
 		return status.Error(codes.Internal, "commit merge failed (post-re-hydration)")
+	// A caller context deadline/cancel surfaced through the sync worker's
+	// WakeAndWait (SPEC R10 WithAck: "A caller that hits the context deadline
+	// receives DEADLINE_EXCEEDED and the flag stays set", SPEC:621-622) must
+	// keep its gRPC code instead of collapsing into INTERNAL. context errors
+	// do not implement GRPCStatus, so status.FromError's passthrough does not
+	// catch them.
+	case errors.Is(err, context.DeadlineExceeded):
+		return status.Error(codes.DeadlineExceeded, err.Error())
+	case errors.Is(err, context.Canceled):
+		return status.Error(codes.Canceled, err.Error())
 	default:
 		return status.Error(codes.Internal, err.Error())
 	}
