@@ -20,6 +20,19 @@ func (g *gitStore) CreateBranch(ctx context.Context, txID string) error {
 		return ErrInvalidUUID
 	}
 
+	// A branch can exist as a ref without a config entry (SetBranchRef writes
+	// only the ref — the state DeleteBranch explicitly tolerates), so the config
+	// check below alone would miss a ref-only branch and silently overwrite its
+	// ref to point at main, discarding the branch's commits. Check both
+	// existence markers: the ref here, the config entry via git.ErrBranchExists.
+	exists, err := g.BranchExists(ctx, txID)
+	if err != nil {
+		return err
+	}
+	if exists {
+		return ErrBranchAlreadyExists
+	}
+
 	err = g.repo.CreateBranch(&config.Branch{Name: txID})
 	if err != nil {
 		if err == git.ErrBranchExists {
