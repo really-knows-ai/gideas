@@ -78,6 +78,18 @@ func TestSyncWorkerInterval(t *testing.T) {
 	}
 }
 
+// TestSyncWorkerDefaultGitOperationTimeout pins the SPEC R10 per-operation git
+// deadline default: SPEC R10 and the "Git operation deadline exceeded" error
+// row define the default as five minutes ("a configurable deadline the worker
+// derives per operation (default: 5 minutes)"). The override path is exercised
+// by TestSyncWorkerGitOpDeadline_HungPushAbortsWithDeadlineExceeded; this test
+// pins the default constant itself.
+func TestSyncWorkerDefaultGitOperationTimeout(t *testing.T) {
+	if DefaultGitOperationTimeout != 5*time.Minute {
+		t.Fatalf("DefaultGitOperationTimeout = %v, want 5 * time.Minute (SPEC R10)", DefaultGitOperationTimeout)
+	}
+}
+
 // sequencedPushGitStore drives the SyncWorker deterministically for the
 // push-retry classification test: FetchAndMerge always reports up-to-date, and
 // PushRemote returns a scripted error per attempt (the last entry repeats).
