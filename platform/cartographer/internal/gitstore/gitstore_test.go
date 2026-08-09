@@ -85,10 +85,9 @@ func configureAnonymousRemote(t *testing.T, gs *gitStore, remoteURL string) {
 
 // setupTestStore creates a gitStore with in-memory storage and memfs,
 // initialised with a main branch and entities/ + edges/ directories.
-// ponytail: these tests use in-memory storage and memfs, so filesystem-level
-// error paths (disk full, permission denied, I/O failures) mandated by SPEC R8
-// corruption recovery are not exercised here. Disk-backed error-path coverage is
-// a SPEC-coverage gap, not tested by this helper.
+// The SPEC R8 filesystem-error paths (disk full, permission denied, I/O
+// failures) are covered by the disk-backed ladybug store tests
+// (ladybug_test.go TestRehydrateFiles_IOErrorFailsLoudly).
 func setupTestStore(t *testing.T) *gitStore {
 	t.Helper()
 	fs := memfs.New()
