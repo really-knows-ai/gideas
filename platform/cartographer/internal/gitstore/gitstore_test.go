@@ -3298,6 +3298,51 @@ func TestEnsureRemoteExists(t *testing.T) {
 	}
 }
 
+// TestEnsureRemoteExistsURLChange verifies the URL-change branch of
+// ensureRemoteExists: when the origin remote already exists but its URL
+// differs from the configured remote URL (REMOTE_URL changed across pod
+// restarts on the same PVC), the remote must be deleted and recreated with
+// the new URL. This destructive delete+recreate transition is pinned
+// directly — a regression that skipped the branch would leave origin
+// pointing at the stale URL.
+func TestEnsureRemoteExistsURLChange(t *testing.T) {
+	gs := setupTestStore(t)
+	err := gs.WithGitLock(func() error {
+		// Configure the remote with the original URL (create-on-missing).
+		if err := gs.SetRemote(ctx(), "https://example.com/original.git", func() (transport.AuthMethod, error) {
+			return nil, nil
+		}); err != nil {
+			return err
+		}
+		remote, err := gs.repo.Remote("origin")
+		if err != nil {
+			return fmt.Errorf("get remote: %w", err)
+		}
+		if got := remote.Config().URLs; len(got) != 1 || got[0] != "https://example.com/original.git" {
+			return fmt.Errorf("initial remote URLs = %v, want [https://example.com/original.git]", got)
+		}
+
+		// Reconfigure with a different URL — origin exists but differs, so
+		// ensureRemoteExists must delete and recreate it with the new URL.
+		if err := gs.SetRemote(ctx(), "https://example.com/changed.git", func() (transport.AuthMethod, error) {
+			return nil, nil
+		}); err != nil {
+			return err
+		}
+		remote, err = gs.repo.Remote("origin")
+		if err != nil {
+			return fmt.Errorf("get recreated remote: %w", err)
+		}
+		if got := remote.Config().URLs; len(got) != 1 || got[0] != "https://example.com/changed.git" {
+			return fmt.Errorf("recreated remote URLs = %v, want [https://example.com/changed.git]", got)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("TestEnsureRemoteExistsURLChange: %v", err)
+	}
+}
+
 // TestFastForwardMergeBranchNotFound tests the ErrBranchNotFound paths
 // in FastForwardMerge.
 func TestFastForwardMergeBranchNotFound(t *testing.T) {
