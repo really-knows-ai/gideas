@@ -4391,44 +4391,56 @@ func TestFetchAndMerge_AlreadyUpToDate(t *testing.T) {
 }
 
 // TestFetchAndMerge_FastForward tests that FetchAndMerge advances the local
-// HEAD when the remote has new commits (fast-forward).
+// HEAD when the remote has new commits (fast-forward). The local repo is
+// cloned before the remote is advanced, so at fetch time local main trails
+// the remote tip and FetchAndMerge must take the isAncestor ->
+// setLocalRefAndCheckout fast-forward path rather than the early
+// up-to-date return.
 func TestFetchAndMerge_FastForward(t *testing.T) {
 	tmpDir := t.TempDir()
 	bareDir := filepath.Join(tmpDir, "remote.git")
 
 	setupBareRemote(t, tmpDir, bareDir)
 
-	// Clone the bare remote, make a commit, and push back
-	cloneDir := filepath.Join(tmpDir, "clone")
-	cloned, err := git.PlainClone(cloneDir, false, &git.CloneOptions{
+	// Clone the local repo first, before the remote is advanced, so local
+	// main matches the pre-advance remote tip.
+	gs := cloneFromBare(t, tmpDir, bareDir)
+	originalHash := remoteHEAD(t, bareDir)
+
+	// Advance the remote by one commit pushed from a separate "writer" clone.
+	writerDir := filepath.Join(tmpDir, "writer")
+	writer, err := git.PlainClone(writerDir, false, &git.CloneOptions{
 		URL: "file://" + bareDir,
 	})
 	if err != nil {
-		t.Fatalf("clone: %v", err)
+		t.Fatalf("clone writer: %v", err)
 	}
-	clonedWT, err := cloned.Worktree()
+	writerWT, err := writer.Worktree()
 	if err != nil {
-		t.Fatalf("cloned worktree: %v", err)
+		t.Fatalf("writer worktree: %v", err)
 	}
-	cloneFile, cloneErr := clonedWT.Filesystem.Create("initial.txt")
-	if cloneErr != nil {
-		t.Fatalf("create file: %v", cloneErr)
+	remoteFile, err := writerWT.Filesystem.Create("remote-data.txt")
+	if err != nil {
+		t.Fatalf("create file: %v", err)
 	}
-	_ = cloneFile.Close()
-	if _, err := clonedWT.Add("initial.txt"); err != nil {
+	_, _ = remoteFile.Write([]byte("remote content"))
+	_ = remoteFile.Close()
+	if _, err := writerWT.Add("remote-data.txt"); err != nil {
 		t.Fatalf("add: %v", err)
 	}
-	if _, err := clonedWT.Commit("initial commit", &git.CommitOptions{
+	if _, err := writerWT.Commit("remote data commit", &git.CommitOptions{
 		Author: &object.Signature{Name: "test", Email: "test@test"},
 	}); err != nil {
 		t.Fatalf("commit: %v", err)
 	}
-	if err := cloned.Push(&git.PushOptions{}); err != nil {
+	if err := writer.Push(&git.PushOptions{}); err != nil {
 		t.Fatalf("push: %v", err)
 	}
 
-	gs := cloneFromBare(t, tmpDir, bareDir)
 	remoteHash := remoteHEAD(t, bareDir)
+	if remoteHash == originalHash {
+		t.Fatalf("expected remote to advance past %s", originalHash)
+	}
 
 	err = gs.WithGitLock(func() error {
 		gs.remoteURL = "file://" + bareDir
@@ -4443,6 +4455,22 @@ func TestFetchAndMerge_FastForward(t *testing.T) {
 		if newHash != remoteHash {
 			return fmt.Errorf("expected hash %s, got %s", remoteHash, newHash)
 		}
+
+		// The local main ref must have moved off the pre-advance head.
+		mainRef, refErr := gs.repo.Reference(plumbing.NewBranchReferenceName("main"), true)
+		if refErr != nil {
+			return fmt.Errorf("main ref: %w", refErr)
+		}
+		if mainRef.Hash() != remoteHash {
+			return fmt.Errorf("main ref = %s, want %s", mainRef.Hash(), remoteHash)
+		}
+
+		// Remote data must be visible in the working tree after the
+		// fast-forward checkout.
+		if _, statErr := gs.fs.Stat("remote-data.txt"); statErr != nil {
+			return fmt.Errorf("remote data file missing after fast-forward: %w", statErr)
+		}
+
 		return nil
 	})
 	if err != nil {
