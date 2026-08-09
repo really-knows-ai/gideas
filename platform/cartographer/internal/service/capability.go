@@ -51,9 +51,12 @@ func NewCapabilityVerifier(
 // VerifyInterceptor is a grpc.UnaryServerInterceptor that verifies the
 // Ed25519 capability signature on every RPC at ingress. If the metadata is
 // absent (system-to-system Operator call), the interceptor passes the request
-// through — the handler then skips capability checks. If present but
-// unverifiable (bad signature, stale timestamp, unknown signer), the
-// interceptor returns PERMISSION_DENIED before the handler runs.
+// through unmodified — capability-requiring handlers then deny it with
+// PERMISSION_DENIED (errCapabilityDenied) because no capabilities were
+// extracted, while RPCs that perform no capability checks (ApplySchema,
+// WipeGraph, HealthCheck) proceed. If present but unverifiable (bad signature,
+// stale timestamp, unknown signer), the interceptor returns PERMISSION_DENIED
+// before the handler runs.
 func (v *CapabilityVerifier) VerifyInterceptor(
 	ctx context.Context, req any,
 	info *grpc.UnaryServerInfo, handler grpc.UnaryHandler,
@@ -120,7 +123,10 @@ func (v *CapabilityVerifier) verify(ctx context.Context) (context.Context, error
 
 	signedAtList := md.Get(MetadataKeyCapabilitiesSignedAt)
 	if len(signedAtList) == 0 || signedAtList[0] == "" {
-		return nil, errInvalidCapabilitySignature()
+		// Missing/empty signed-at is the stale-capability trigger (SPEC error
+		// table "Stale capability signature (anti-replay)": missing, malformed,
+		// or expired).
+		return nil, errStaleCapability()
 	}
 	signedAtStr := signedAtList[0]
 
@@ -151,7 +157,9 @@ func (v *CapabilityVerifier) verify(ctx context.Context) (context.Context, error
 	if v.stalenessWindow >= 0 {
 		signedAt, err := strconv.ParseInt(signedAtStr, 10, 64)
 		if err != nil {
-			return nil, errInvalidCapabilitySignature()
+			// Malformed (unparseable) signed-at is the stale-capability trigger
+			// (SPEC error table "Stale capability signature (anti-replay)").
+			return nil, errStaleCapability()
 		}
 		elapsed := time.Since(time.Unix(signedAt, 0))
 		if elapsed > v.stalenessWindow {
