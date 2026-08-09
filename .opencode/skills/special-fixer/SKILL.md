@@ -31,7 +31,7 @@ Review items use three prefixes to signal what kind of resolution is needed:
 | Tag | Meaning | Implementation |
 |-----|---------|---------------|
 | `[FIX]` | Plan text is wrong — must be corrected, not just annotated. The instructions as written would mislead or produce broken code. | Edit the plan document to correct the error. |
-| `[PONYTAIL]` | Deliberate simplification with a known ceiling. The plan is correct in intent but trades off completeness for simplicity. | Add a `ponytail:` comment documenting the known ceiling and upgrade path per AGENTS.md convention. |
+| `[PONYTAIL]` | Deliberate simplification with a known ceiling. The plan is correct in intent but trades off completeness for simplicity. | Add a `ponytail:` comment documenting the known ceiling and upgrade path per AGENTS.md convention. If the implementer determines the ceiling is actually a SPEC divergence (the criteria mandates the behaviour, the code does not implement it), the item was misclassified — treat it as `[FIX]` and either update the SPEC or update the code, or mark `[~]` wont-fix citing the SPEC mismatch. |
 | `[IMPL-NOTE]` | Plan is correct but incomplete — the implementer needs additional context at coding time that the plan doesn't provide. | Add a note, annotation, or cross-reference to the plan document for the implementer's benefit. |
 
 **`[IMPL-NOTE]` scope:** This tag applies when reviewing **phased plans and specification documents** — it does NOT apply when reviewing actual implementation source code against a spec or plan. In source-code reviews, a divergence is either `[FIX]` (the code doesn't match the spec) or not a finding — there is no "the code is correct but the implementer needs context" category.
@@ -118,11 +118,16 @@ Handle them in the order listed below.
     items.
 2. For each item, verify the claim first — do not take the reviewer's word
     at face value.
-3. **Classify the fix type based on the item's tag prefix:**
-    - `[FIX]` (or unclassified): The plan text is wrong.  Correct it.
-    - `[PONYTAIL]`: The plan is intentionally simplified.  Add a `ponytail:`
-      comment documenting the known ceiling and upgrade path per AGENTS.md.
-    - `[IMPL-NOTE]`: The plan is correct but incomplete.  Add clarifying
+ 3. **Classify the fix type based on the item's tag prefix:**
+     - `[FIX]` (or unclassified): The plan text is wrong.  Correct it.
+     - `[PONYTAIL]`: The plan is intentionally simplified.  Add a `ponytail:`
+       comment documenting the known ceiling and upgrade path per AGENTS.md.
+       **But first check:** if the ceiling the item describes is actually a
+       SPEC divergence (the criteria mandates the behaviour and the code does
+       not implement it), the item was misclassified — treat it as `[FIX]`
+       and either update the SPEC or update the code, or mark `[~]` wont-fix
+       citing the SPEC mismatch.  A `ponytail:` annotation alone is never a
+       valid fix for a behaviour the SPEC requires.
       prose, a cross-reference, or an annotation for the implementer.
       Only applies to plan/spec documents — for code files, treat as `[FIX]`
       (add missing documentation) or wont-fix (if the code is self-documenting).
@@ -226,6 +231,15 @@ An implementer marks an item `[~]` when:
 - **The claim is a style preference mislabeled as a divergence.**  A
   reviewer flags a named return, but explicit returns are equally valid.
   Both compile; neither contradicts the criteria.
+- **The item is tagged `[PONYTAIL]` but is actually a SPEC divergence.**
+  A `ponytail:` is for ceilings the SPEC does not address (e.g., "this
+  global lock could become a bottleneck at >10K concurrent transactions"),
+  not for ceilings the SPEC already forbids (e.g., "git operations don't
+  have deadlines" when the SPEC mandates deadlines).  If the reviewer
+  misclassified a SPEC divergence as `[PONYTAIL]`, the implementer marks
+  it `[~]` and explains the mismatch — the fix is either to update the SPEC
+  or to update the code.  A `ponytail:` annotation alone is not a valid fix
+  for a behavior the SPEC requires.
 - **The reviewer re-opened with `[!]` but the implementer still disagrees.**
   The implementer reads the re-opening reason, re-evaluates, and either
   concedes (fix it → `[x]`) or holds the line (`[~]` with updated
