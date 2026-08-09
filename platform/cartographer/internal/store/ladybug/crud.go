@@ -136,7 +136,12 @@ func (db *ladybugDB) CreateEntity(
 				return nil, fmt.Errorf("bootstrap vector index: %w", err)
 			}
 			if db.path != "" {
-				metadata := metadataFromDefinitions(typeDefs.entityTypeDefs, typeDefs.edgeTypeDefs)
+				pairs, perr := connectionEdgePairs(conn, typeDefs.edgeTypeDefs)
+				if perr != nil {
+					typeDefs.markFailed()
+					return nil, fmt.Errorf("capture relationship endpoints: %w", perr)
+				}
+				metadata := metadataFromDefinitions(typeDefs.entityTypeDefs, typeDefs.edgeTypeDefs, pairs)
 				metadata, err = captureVectorState(conn, metadata)
 				if err != nil {
 					typeDefs.markFailed()
@@ -258,7 +263,12 @@ func (db *ladybugDB) UpdateEntity(
 				return nil, fmt.Errorf("bootstrap vector index: %w", err)
 			}
 			if db.path != "" {
-				metadata := metadataFromDefinitions(typeDefs.entityTypeDefs, typeDefs.edgeTypeDefs)
+				pairs, perr := connectionEdgePairs(conn, typeDefs.edgeTypeDefs)
+				if perr != nil {
+					typeDefs.markFailed()
+					return nil, fmt.Errorf("capture relationship endpoints: %w", perr)
+				}
+				metadata := metadataFromDefinitions(typeDefs.entityTypeDefs, typeDefs.edgeTypeDefs, pairs)
 				metadata, err = captureVectorState(conn, metadata)
 				if err != nil {
 					typeDefs.markFailed()

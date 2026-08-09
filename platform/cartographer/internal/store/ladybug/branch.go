@@ -371,7 +371,12 @@ func (db *ladybugDB) ReplicateSchemaToBranch(_ context.Context, txID string) err
 		}
 	}
 	if db.path != "" {
-		metadata := metadataFromDefinitions(br.entityTypeDefs, br.edgeTypeDefs)
+		// Persist the branch metadata with main's FROM/TO endpoint pairs: the
+		// branch rel tables above are created from db.edgePairs, and a reopened
+		// branch (branchLocked → restoreBranchSchemaMetadata) validates the
+		// persisted pairs against the branch catalog — a lossy write would fail
+		// that comparison for rule-less inferred edge types (SPEC R8).
+		metadata := metadataFromDefinitions(br.entityTypeDefs, br.edgeTypeDefs, db.edgePairs)
 		metadata, err = captureVectorState(br.conn, metadata)
 		if err != nil {
 			br.failed = true
@@ -571,20 +576,33 @@ func (db *ladybugDB) RehydrateMainFromFiles(ctx context.Context, entitiesDir, ed
 // placeholder branch, which creates the `_untyped` NODE table the rel table's
 // endpoint clause references. Callers must hold db.mu.
 func (db *ladybugDB) rebuildEdgePairsLocked() error {
+	pairs, err := connectionEdgePairs(db.conn, db.edgeTypeDefs)
+	if err != nil {
+		return err
+	}
+	db.edgePairs = pairs
+	return nil
+}
+
+// connectionEdgePairs reads every edge type's FROM/TO endpoint pairs from its
+// rel table in the catalog on an arbitrary connection. An edgeless edge type's
+// `_untyped` placeholder pair is normalized away (the key stays absent) so the
+// schema-metadata round-trip stays consistent with applySchemaMetadata's rule
+// derivation and validateMetadataAgainstCatalog's `_untyped` fallback.
+func connectionEdgePairs(conn *lbug.Connection, edges map[string]*store.EdgeTypeDef) (map[string][]fromToPair, error) {
 	pairs := make(map[string][]fromToPair)
 	untyped := []fromToPair{{From: untypedTableName, To: untypedTableName}}
-	for _, name := range sortedKeys(db.edgeTypeDefs) {
-		actual, err := connectionPairsOnConn(db.conn, name)
+	for _, name := range sortedKeys(edges) {
+		actual, err := connectionPairsOnConn(conn, name)
 		if err != nil {
-			return fmt.Errorf("read relationship endpoints for %q: %w", name, err)
+			return nil, fmt.Errorf("read relationship endpoints for %q: %w", name, err)
 		}
 		if equalFromToPairs(actual, untyped) {
 			continue
 		}
 		pairs[name] = actual
 	}
-	db.edgePairs = pairs
-	return nil
+	return pairs, nil
 }
 
 // HydrateBranchFromFiles loads entities/edges from JSON files into a branch.

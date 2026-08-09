@@ -629,9 +629,12 @@ func propsFromEdge(et *flowv1.EdgeType) []store.PropertyDef {
 	return props
 }
 
-// fromToPair describes a single FROM → TO clause for a rel table.
+// fromToPair describes a single FROM → TO clause for a rel table. The json tags
+// keep schema.json's persisted edge_pairs keys snake_case like the rest of the
+// metadata file.
 type fromToPair struct {
-	From, To string
+	From string `json:"from"`
+	To   string `json:"to"`
 }
 
 // collectFromToPairs scans entity-type rules to build edge-type FROM/TO pairs.

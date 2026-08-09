@@ -4351,6 +4351,120 @@ func TestReplicateSchemaToBranch_RealInferredPairsAfterBothLostRehydration(t *te
 	}
 }
 
+// TestRehydrateMainFromFiles_InferredEdgeTypeSurvivesFileBackedReopen pins the
+// both-lost write-and-reopen cycle for an inferred EDGE type (SPEC R8): the
+// schema metadata persisted by the re-hydration path must carry the edge type's
+// real FROM/TO endpoint pairs. Without them, a subsequent Open's
+// applySchemaMetadata derives an empty pair set for an inferred type (it carries
+// no connection rules) and validateMetadataAgainstCatalog normalizes the
+// expected endpoints to the `_untyped` placeholder, which fails the comparison
+// against the rel table's real endpoints ("relationship endpoints do not match
+// schema metadata") — bricking every file-backed Open after a both-lost
+// recovery that inferred edge types. The same lossy write affects the branch
+// metadata (ReplicateSchemaToBranch), so the reopened branch metadata must
+// validate too.
+func TestRehydrateMainFromFiles_InferredEdgeTypeSurvivesFileBackedReopen(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	ctx := context.Background()
+	schema := &flowv1.Schema{EntityTypes: []*flowv1.EntityType{{
+		Name: "Component", Properties: []*flowv1.Property{{Name: "name", Type: "string"}},
+	}}}
+	if err := s.ApplySchema(ctx, schema); err != nil {
+		t.Fatalf("ApplySchema: %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	// Lose both: corrupt main.lbug and remove schema.json.
+	dbPath := filepath.Join(dir, "main.lbug")
+	if err := os.WriteFile(dbPath, []byte("not a ladybug database"), 0600); err != nil {
+		t.Fatalf("corrupt main.lbug: %v", err)
+	}
+	if err := os.Remove(filepath.Join(dir, "schema.json")); err != nil {
+		t.Fatalf("remove schema.json: %v", err)
+	}
+
+	// Open recovers a fresh empty database — the R8 both-lost corner where every
+	// edge type present in the committed git data is inferred.
+	recovered, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open after both-lost corruption: %v", err)
+	}
+
+	fromID := uuid.NewString()
+	toID := uuid.NewString()
+	edgeID := uuid.NewString()
+	root := t.TempDir()
+	entitiesDir := filepath.Join(root, "entities")
+	edgesDir := filepath.Join(root, "edges")
+	writeJSONFile(t, filepath.Join(entitiesDir, "Component", fromID+".json"), map[string]any{
+		"id": fromID, "type": "Component",
+	})
+	writeJSONFile(t, filepath.Join(entitiesDir, "Component", toID+".json"), map[string]any{
+		"id": toID, "type": "Component",
+	})
+	writeJSONFile(t, filepath.Join(edgesDir, "DependsOn", edgeID+".json"), map[string]any{
+		"id": edgeID, "type": "DependsOn", "from": fromID, "to": toID,
+		"properties": map[string]string{"strength": strengthValue},
+	})
+
+	if err := recovered.RehydrateMainFromFiles(ctx, entitiesDir, edgesDir); err != nil {
+		t.Fatalf("RehydrateMainFromFiles: %v", err)
+	}
+	got, err := recovered.GetEdge(ctx, edgeID, "main")
+	if err != nil {
+		t.Fatalf("re-hydrated edge not served: %v", err)
+	}
+	if got.FromEntityID != fromID || got.ToEntityID != toID {
+		t.Fatalf("re-hydrated edge endpoints = %q -> %q, want %q -> %q",
+			got.FromEntityID, got.ToEntityID, fromID, toID)
+	}
+
+	// Replicate the inferred schema to a branch: the branch metadata write
+	// mirrors the main write and must persist the same endpoint pairs.
+	const branch = "tx1"
+	if err := recovered.CreateBranchDB(ctx, branch); err != nil {
+		t.Fatalf("CreateBranchDB: %v", err)
+	}
+	if err := recovered.ReplicateSchemaToBranch(ctx, branch); err != nil {
+		t.Fatalf("ReplicateSchemaToBranch: %v", err)
+	}
+
+	if err := recovered.Close(); err != nil {
+		t.Fatalf("Close after re-hydration: %v", err)
+	}
+
+	// Reopen the file-backed store: must succeed (the persisted main metadata
+	// carries the inferred DependsOn FROM/TO pairs), the edge endpoints must
+	// survive, and the persisted branch metadata must validate against the
+	// branch catalog on the lazy branch reopen.
+	s2, err := Open(dir)
+	if err != nil {
+		t.Fatalf("reopen after both-lost re-hydration: %v", err)
+	}
+	defer closeStore(t, s2)
+	db := s2.(*ladybugDB)
+	if got := db.edgePairs["DependsOn"]; !equalFromToPairs(got, []fromToPair{{From: "Component", To: "Component"}}) {
+		t.Fatalf("reopened main edgePairs for DependsOn = %v, want Component->Component", got)
+	}
+	got, err = s2.GetEdge(ctx, edgeID, "main")
+	if err != nil {
+		t.Fatalf("edge lost across reopen: %v", err)
+	}
+	if got.FromEntityID != fromID || got.ToEntityID != toID {
+		t.Fatalf("edge endpoints after reopen = %q -> %q, want %q -> %q",
+			got.FromEntityID, got.ToEntityID, fromID, toID)
+	}
+	if _, err := s2.DumpAllEntities(ctx, branch); err != nil {
+		t.Fatalf("persisted branch metadata failed branch reopen validation: %v", err)
+	}
+}
+
 func TestRehydrateMainFromFiles_BothMissing_NoError(t *testing.T) {
 	s, err := OpenInMemory()
 	if err != nil {

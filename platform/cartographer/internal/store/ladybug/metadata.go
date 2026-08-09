@@ -24,11 +24,19 @@ type schemaMetadata struct {
 	EdgeTypes        []store.EdgeTypeDef   `json:"edge_types"`
 	VectorIndexes    map[string]bool       `json:"vector_indexes"`
 	VectorDimensions map[string]int        `json:"vector_dimensions"`
+	// EdgePairs records each edge type's FROM/TO endpoint pairs. It is
+	// authoritative for edge types inferred from the directory structure
+	// (SPEC R8), which carry no connection rules for applySchemaMetadata's
+	// rule derivation to recover on reopen. A legacy schema.json (written
+	// before this field existed) unmarshals it to nil and falls back to rule
+	// derivation, which is equivalent for rule-derived types.
+	EdgePairs map[string][]fromToPair `json:"edge_pairs,omitempty"`
 }
 
 func metadataFromSchema(s *flowv1.Schema) schemaMetadata {
 	metadata := schemaMetadata{
 		Version: schemaMetadataVersion, VectorIndexes: make(map[string]bool), VectorDimensions: make(map[string]int),
+		EdgePairs: collectFromToPairs(s),
 	}
 	for _, entityType := range s.EntityTypes {
 		def := store.EntityTypeDef{Name: entityType.Name, EnableVectorIndex: entityType.EnableVectorIndex}
@@ -57,11 +65,18 @@ func metadataFromSchema(s *flowv1.Schema) schemaMetadata {
 	return metadata
 }
 
+// metadataFromDefinitions rebuilds schema metadata from the in-memory type
+// definitions, persisting the given FROM/TO endpoint pairs so a reopen's
+// applySchemaMetadata can recover pairs for rule-less (inferred, SPEC R8) edge
+// types. Every caller must supply the authoritative pair map (db.edgePairs or
+// the catalog-derived set) — a nil map would round-trip a lossy schema.json.
 func metadataFromDefinitions(
 	entities map[string]*store.EntityTypeDef, edges map[string]*store.EdgeTypeDef,
+	pairs map[string][]fromToPair,
 ) schemaMetadata {
 	metadata := schemaMetadata{
 		Version: schemaMetadataVersion, VectorIndexes: make(map[string]bool), VectorDimensions: make(map[string]int),
+		EdgePairs: pairs,
 	}
 	for _, name := range sortedKeys(entities) {
 		metadata.EntityTypes = append(metadata.EntityTypes, cloneEntityTypeDef(entities[name]))
@@ -292,6 +307,25 @@ func applySchemaMetadata(
 		def := cloneEdgeTypeDef(&metadata.EdgeTypes[i])
 		edges[def.Name] = &def
 	}
+	// Persisted endpoint pairs complete the rule-derived set for the edge types
+	// the rules do not cover. Re-hydration paths infer edge types from the
+	// directory structure (SPEC R8) that carry no connection rules, so nothing
+	// but the persisted pairs can recover them on reopen; without them the
+	// catalog comparison in validateMetadataAgainstCatalog fails closed against
+	// the `_untyped` placeholder ("relationship endpoints do not match schema
+	// metadata"), bricking the next file-backed Open. Rule-derived pairs stay
+	// authoritative for rule-covered types so a hand-edit that changes a rule's
+	// endpoints still fails the strict reopen comparison. Legacy schema.json
+	// files (written before EdgePairs existed) leave the field nil and fall back
+	// to rule derivation alone.
+	if metadata.EdgePairs != nil {
+		for edgeType, persisted := range metadata.EdgePairs {
+			if _, covered := pairs[edgeType]; covered {
+				continue
+			}
+			pairs[edgeType] = append([]fromToPair(nil), persisted...)
+		}
+	}
 	return entities, edges, rules, pairs
 }
 
@@ -313,7 +347,7 @@ func (db *ladybugDB) persistMainVectorMetadataLocked() error {
 	if db.path == "" {
 		return nil
 	}
-	metadata := metadataFromDefinitions(db.entityTypeDefs, db.edgeTypeDefs)
+	metadata := metadataFromDefinitions(db.entityTypeDefs, db.edgeTypeDefs, db.edgePairs)
 	metadata, err := captureVectorState(db.conn, metadata)
 	if err != nil {
 		return fmt.Errorf("capture main vector schema metadata: %w", err)
