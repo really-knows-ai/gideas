@@ -209,12 +209,22 @@ func (s *CartographerServer) addTransactionChange(
 	return s.rejectFullChangeLog(ctx, txID, err)
 }
 
-func (s *CartographerServer) preflightTransactionChange(ctx context.Context, txID string) error {
+// preflightTransactionChange rejects a mutation before the branch write when
+// it would grow the change log past its cap (SPEC:891-892 admission
+// predicate). The entry carries the request's ID where known; CreateEntity and
+// CreateEdge pass an empty ID for an auto-generated UUID, which CheckCapacity
+// treats as a new element (a fresh UUID can never reuse a logged slot). A
+// capacity rejection invalidates the entire transaction, so its branch
+// resources are rolled back while the caller still holds the transaction
+// lifecycle lock.
+func (s *CartographerServer) preflightTransactionChange(
+	ctx context.Context, txID string, entry gitstore.ChangeLogEntry,
+) error {
 	state, lookupErr := s.txManager.Lookup(txID)
 	if lookupErr != nil {
 		return errTransactionNotFound(txID)
 	}
-	if err := state.ChangeLog.CheckCapacity(); err != nil {
+	if err := state.ChangeLog.CheckCapacity(entry); err != nil {
 		return s.rejectFullChangeLog(ctx, txID, err)
 	}
 	return nil
@@ -1085,7 +1095,9 @@ func (s *CartographerServer) CreateEntity(
 	}
 	branch := req.TransactionId
 
-	if err := s.preflightTransactionChange(ctx, req.TransactionId); err != nil {
+	if err := s.preflightTransactionChange(ctx, req.TransactionId, gitstore.ChangeLogEntry{
+		Kind: gitstore.ChangeAddEntity, ID: req.Id, Type: req.EntityType,
+	}); err != nil {
 		return nil, err
 	}
 	ent, err := s.store.CreateEntity(ctx, req.EntityType, req.Id, req.Properties, req.Embedding, branch)
@@ -1139,7 +1151,9 @@ func (s *CartographerServer) UpdateEntity(
 	if err := s.checkEntityCap(ctx, "WRITE", entityType); err != nil {
 		return nil, err
 	}
-	if err := s.preflightTransactionChange(ctx, req.TransactionId); err != nil {
+	if err := s.preflightTransactionChange(ctx, req.TransactionId, gitstore.ChangeLogEntry{
+		Kind: gitstore.ChangeModEntity, ID: req.Id, Type: entityType,
+	}); err != nil {
 		return nil, err
 	}
 	ent, err := s.store.UpdateEntity(ctx, req.Id, req.Properties, req.Embedding, branch)
@@ -1192,7 +1206,9 @@ func (s *CartographerServer) DeleteEntity(
 	if err := s.checkEntityCap(ctx, "WRITE", entityType); err != nil {
 		return nil, err
 	}
-	if err := s.preflightTransactionChange(ctx, req.TransactionId); err != nil {
+	if err := s.preflightTransactionChange(ctx, req.TransactionId, gitstore.ChangeLogEntry{
+		Kind: gitstore.ChangeDelEntity, ID: req.Id, Type: entityType,
+	}); err != nil {
 		return nil, err
 	}
 	// Enumerate the edges that DeleteEntity's cascade will remove (DETACH
@@ -1298,7 +1314,9 @@ func (s *CartographerServer) CreateEdge(
 	if err := s.checkEntityCap(ctx, "WRITE", sourceType); err != nil {
 		return nil, err
 	}
-	if err := s.preflightTransactionChange(ctx, req.TransactionId); err != nil {
+	if err := s.preflightTransactionChange(ctx, req.TransactionId, gitstore.ChangeLogEntry{
+		Kind: gitstore.ChangeAddEdge, ID: "", Type: req.EdgeType,
+	}); err != nil {
 		return nil, err
 	}
 	edge, err := s.store.CreateEdge(ctx, req.EdgeType, req.FromEntityId, req.ToEntityId, req.Properties, branch)
@@ -1381,7 +1399,9 @@ func (s *CartographerServer) DeleteEdge(
 	if err := s.checkEntityCap(ctx, "WRITE", sourceType); err != nil {
 		return nil, err
 	}
-	if err := s.preflightTransactionChange(ctx, req.TransactionId); err != nil {
+	if err := s.preflightTransactionChange(ctx, req.TransactionId, gitstore.ChangeLogEntry{
+		Kind: gitstore.ChangeDelEdge, ID: req.Id, Type: existingEdge.Type,
+	}); err != nil {
 		return nil, err
 	}
 	edge, err := s.store.DeleteEdge(ctx, req.Id, branch)
@@ -1977,6 +1997,7 @@ func (s *CartographerServer) snapshotWorkingTree(ctx context.Context) (gitGraphS
 }
 
 func (s *CartographerServer) validateRefresh(
+	ctx context.Context,
 	state *TransactionState, before, current gitGraphSnapshot,
 ) error {
 	for _, entry := range state.ChangeLog.Entries() {
@@ -2003,7 +2024,7 @@ func (s *CartographerServer) validateRefresh(
 			}
 		}
 		if entry.Entity != nil && len(entry.Entity.Embedding) > 0 {
-			dimension, err := s.store.GetEstablishedDimension(entry.Type, "main")
+			dimension, err := s.store.GetEstablishedDimension(ctx, entry.Type, "main")
 			if err != nil {
 				return mapStoreError(err)
 			}
@@ -2098,7 +2119,7 @@ func (s *CartographerServer) RefreshTransaction(
 		if err := s.resetBranchStoreFromWorkingTree(ctx, req.TransactionId); err != nil {
 			return err
 		}
-		if err := s.validateRefresh(state, before, current); err != nil {
+		if err := s.validateRefresh(ctx, state, before, current); err != nil {
 			return err
 		}
 		if err := s.reapplyTransactionChanges(ctx, req.TransactionId, state.ChangeLog); err != nil {

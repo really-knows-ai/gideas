@@ -5177,7 +5177,7 @@ func TestRefreshTransaction_EmbeddingDimensionConflict(t *testing.T) {
 
 	// No entity/edge files collide — before and current are empty — so only the
 	// dimension check can fire. It must map to an ABORTED refresh conflict.
-	err = srv.validateRefresh(state, gitGraphSnapshot{}, gitGraphSnapshot{})
+	err = srv.validateRefresh(ctx, state, gitGraphSnapshot{}, gitGraphSnapshot{})
 	if status.Code(err) != codes.Aborted {
 		t.Fatalf("expected ABORTED dimension-scope refresh conflict, got %v", err)
 	}
@@ -5282,7 +5282,7 @@ func TestRecoveryDiffClassifiesModifiedEdges(t *testing.T) {
 			Properties: map[string]string{"weight": "low"},
 		},
 	}}
-	if err := srv.validateRefresh(state, before, current); status.Code(err) != codes.Aborted {
+	if err := srv.validateRefresh(ctx, state, before, current); status.Code(err) != codes.Aborted {
 		t.Fatalf("expected ABORTED refresh conflict for recovered edge modification, got %v", err)
 	}
 	if err := srv.reapplyTransactionChanges(ctx, txID, state.ChangeLog); status.Code(err) != codes.Aborted {
@@ -5542,16 +5542,21 @@ func TestRecoverRollbackOnlyTransactionWhenRejectedUpdateDoesNotIncreaseNetDiff(
 	if err != nil {
 		t.Fatalf("begin transaction: %v", err)
 	}
-	for i, version := range []string{"first", "rejected"} {
-		_, err = srv.UpdateEntity(ctx, &flowv1.UpdateEntityRequest{
-			Id: mainEntity.Id, Properties: map[string]string{"version": version}, TransactionId: begin.TransactionId,
-		})
-		if i == 0 && err != nil {
-			t.Fatalf("first update: %v", err)
-		}
+	if _, err := srv.UpdateEntity(ctx, &flowv1.UpdateEntityRequest{
+		Id: mainEntity.Id, Properties: map[string]string{"version": "first"}, TransactionId: begin.TransactionId,
+	}); err != nil {
+		t.Fatalf("first update: %v", err)
 	}
+	// The rejected mutation is a CreateEntity: under the SPEC change-log
+	// admission predicate a same-ID update at cap is admitted (it reuses the
+	// element's slot and does not grow the log), so the capacity trigger must
+	// be a mutation that adds a new distinct element — a CreateEntity always
+	// does.
+	_, err = srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
+		EntityType: "Component", Properties: map[string]string{"name": "rejected"}, TransactionId: begin.TransactionId,
+	})
 	if status.Code(err) != codes.ResourceExhausted || !strings.Contains(err.Error(), "rollback failed") {
-		t.Fatalf("rejected update error = %v", err)
+		t.Fatalf("rejected mutation error = %v", err)
 	}
 	markerPath := filepath.Join(dataPath, "branches", begin.TransactionId+".state.json")
 	if _, err := os.Stat(markerPath); err != nil {
@@ -5671,8 +5676,13 @@ func TestChangeLogMarkerAndCleanupFailureCannotRecoverAsActive(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("first update: %v", err)
 	}
-	_, err = srv.UpdateEntity(ctx, &flowv1.UpdateEntityRequest{
-		Id: mainEntity.Id, Properties: map[string]string{"version": "rejected"}, TransactionId: begin.TransactionId,
+	// The rejected mutation is a CreateEntity: under the SPEC change-log
+	// admission predicate a same-ID update at cap is admitted (it reuses the
+	// element's slot and does not grow the log), so the capacity trigger must
+	// be a mutation that adds a new distinct element — a CreateEntity always
+	// does.
+	_, err = srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
+		EntityType: "Component", Properties: map[string]string{"name": "rejected"}, TransactionId: begin.TransactionId,
 	})
 	if status.Code(err) != codes.ResourceExhausted ||
 		!strings.Contains(err.Error(), "simulated rollback-only marker failure") ||

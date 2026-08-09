@@ -17,27 +17,20 @@ func TestValidate(t *testing.T) {
 	}
 
 	// Every spelling google/uuid.Parse accepts of a valid RFC4122 v4 UUID
-	// passes — uppercase hex, no-hyphen, braced, and urn:uuid: all decode to
-	// the same UUID as `good`.
-	valid := []struct {
-		name string
-		in   string
-	}{
-		{"no-hyphen 32-char", "550e8400e29b41d4a716446655440000"},
-		{"braced", "{550e8400-e29b-41d4-a716-446655440000}"},
-		{"urn prefix", "urn:uuid:550e8400-e29b-41d4-a716-446655440000"},
-		{"uppercase hex", "550E8400-E29B-41D4-A716-446655440000"},
-	}
-	for _, tc := range valid {
-		if err := Validate(tc.in); err != nil {
-			t.Errorf("%s: expected nil, got %v", tc.name, err)
-		}
-	}
-
+	// is rejected — uppercase hex, no-hyphen, braced, and urn:uuid: all
+	// decode to the same UUID as `good`, but none is the canonical RFC4122
+	// §3 string representation. The store persists IDs verbatim as
+	// <id>.json files, so accepting a second spelling of an existing UUID
+	// would let two entities exist for one UUID and bypass the
+	// CreateEntity ALREADY_EXISTS check (SPEC:942).
 	invalid := []struct {
 		name string
 		in   string
 	}{
+		{"non-canonical uppercase hex", "550E8400-E29B-41D4-A716-446655440000"},
+		{"non-canonical no-hyphen 32-char", "550e8400e29b41d4a716446655440000"},
+		{"non-canonical braced", "{550e8400-e29b-41d4-a716-446655440000}"},
+		{"non-canonical urn prefix", "urn:uuid:550e8400-e29b-41d4-a716-446655440000"},
 		{"wrong version", "550e8400-e29b-31d4-a716-446655440000"},
 		// Version nibble left at 4, canonical dashed form, but variant nibble
 		// (first hex of 4th group) set to 1100 (Microsoft variant) instead of

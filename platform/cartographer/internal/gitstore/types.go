@@ -139,7 +139,7 @@ type ChangeLog struct {
 	ModifiedEdges    map[string]*EdgeEntry    // edgeID -> entry
 	DeletedEdges     map[string]*DeletionInfo // edgeID -> deletion info (type + suspected flag)
 	mu               sync.Mutex
-	count            int // total tracked changes
+	count            int // distinct entities/edges touched (the cap counts these)
 	cap              int
 }
 

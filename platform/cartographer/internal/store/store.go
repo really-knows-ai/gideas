@@ -3,25 +3,19 @@
 // Design boundary: The Store interface covers only the graph database (schema,
 // entity/edge CRUD, queries, branch DB lifecycle). Transaction change-log
 // management — append, read, and cap enforcement — is NOT part of this layer.
-// The gitstore package owns the ChangeLog type and its 100K cap
-// (ErrChangeLogFull). The service-layer TransactionManager holds the ChangeLog
-// and routes mutation entries to it. The Store has no awareness of the change
-// log; implementers adding transaction-scoped features must use
-// TransactionManager.AddChangeEntry and gitstore.ChangeLog directly.
+// The gitstore package owns the ChangeLog type; the service-layer
+// TransactionManager holds the ChangeLog and routes mutation entries to it.
+// The Store has no awareness of the change log; implementers adding
+// transaction-scoped features must use TransactionManager.AddChangeEntry and
+// gitstore.ChangeLog directly.
 //
-// ponytail: SPEC divergence (~839). SPEC.md describes the 100K change-log cap
-// (ErrChangeLogFull → RESOURCE_EXHAUSTED) as "a hard-coded constant in the
-// Cartographer store layer." In the implementation the constant
-// (gitstore.DefaultChangeLogCap, gitstore/changelog.go) and the sentinel
-// (gitstore.ErrChangeLogFull) live in the gitstore package; the cap is enforced
-// by ChangeLog.Add/CheckCapacity plus the service-layer TransactionManager
-// (transaction_manager.go), which routes entries and surfaces overflow as
-// RESOURCE_EXHAUSTED with a full transaction rollback (rejectFullChangeLog in
-// cartographer_server.go). The Store layer has no awareness of the change log —
-// this is the intended design boundary, not a defect. The trade-off: the
-// constant is owned by gitstore, so the store layer cannot tune it. Upgrade
-// path: if SPEC:842's placement is ever enforced, centralize the constant in
-// this store layer and have gitstore import it.
+// The 100K change-log admission cap is a hard-coded constant in this store
+// layer — DefaultChangeLogCap below (SPEC.md:888-889: "hard-coded constant in
+// the Cartographer store layer") — imported by gitstore's default ChangeLog
+// (NewChangeLog) and by cmd/main.go when wiring the service-layer
+// TransactionManager. The ErrChangeLogFull sentinel lives in gitstore next to
+// the ChangeLog type it guards; the service maps it to RESOURCE_EXHAUSTED with
+// a full transaction rollback (rejectFullChangeLog in cartographer_server.go).
 package store
 
 import (
@@ -29,6 +23,14 @@ import (
 
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
 )
+
+// DefaultChangeLogCap is the per-transaction change-log admission cap: 100 000
+// distinct entities/edges touched (SPEC.md:888-889 and the "Transaction change
+// log exceeds capacity" error row, SPEC.md:968). It is the single source of
+// truth for the cap: gitstore.NewChangeLog applies it by default and
+// cmd/main.go passes it to the service-layer TransactionManager, so the
+// admission and recovery ceilings cannot silently diverge.
+const DefaultChangeLogCap = 100000
 
 // Store is the interface the service layer depends on.
 // It defines the complete graph database abstraction for the Cartographer.
@@ -116,8 +118,8 @@ type Store interface {
 	RehydrateFromBranch(ctx context.Context, txID string) error
 	RehydrateMainFromFiles(ctx context.Context, entitiesDir, edgesDir string) error
 	HydrateBranchFromFiles(ctx context.Context, txID, entitiesDir, edgesDir string) error
-	IsVectorIndexBootstrapped(entityType, branch string) bool
-	GetEstablishedDimension(entityType, branch string) (int, error)
+	IsVectorIndexBootstrapped(ctx context.Context, entityType, branch string) bool
+	GetEstablishedDimension(ctx context.Context, entityType, branch string) (int, error)
 
 	// Wipe
 	WipeAll(ctx context.Context) error

@@ -262,22 +262,12 @@ func main() {
 		catchUpPush, err := tryRemotePullOnInit(gs, remoteURL, remoteAuthSecretRef, readSecretFn, auditPub,
 			// SPEC R10 Init: after clone-on-init seeds the git working tree,
 			// re-hydrate main from the cloned file-per-element representation so
-			// the graph is not empty.
-			//
-			// ponytail: this re-hydration is unconditional — like
-			// rehydrateMainAfterRecovery it re-hydrates whenever the repo is
-			// non-empty — so a clone-on-init replaces main.lbug's prior content
-			// with the remote seed. That is the intended design: with the
-			// transaction-only write model there are no non-transactional
-			// writes to main.lbug that git does not already contain, so
-			// re-hydration from git is always complete and safe. The clone
-			// supersedes local state by design: the operator explicitly
-			// configured pullOnInit + REMOTE_URL to seed from the remote, and
-			// the clone path runs only when the local repo has no graph-data
-			// commits (IsEmpty). Ceiling: a pullOnInit first boot following a
-			// local-only period replaces the local graph with the remote seed —
-			// acceptable because committed data is git-backed and survives, and
-			// uncommitted data cannot exist under the transaction-only model.
+			// the graph is not empty. With the transaction-only write model there
+			// are no non-transactional writes to main.lbug that git does not
+			// already contain, so re-hydration from git is always complete and
+			// safe. The clone path runs only when the local repo has no
+			// graph-data commits (IsEmpty), so there is no local committed graph
+			// for the clone to supersede.
 			func() error {
 				entitiesDir := filepath.Join(ladybugDBPath, "graph-repo/entities")
 				edgesDir := filepath.Join(ladybugDBPath, "graph-repo/edges")
@@ -336,19 +326,17 @@ func main() {
 	// capacity requirement) is passed to NewChangeLogWithCap inside the
 	// TransactionManager; exceeding it yields ErrChangeLogFull →
 	// RESOURCE_EXHAUSTED with transaction rollback. The cap is sourced from
-	// gitstore.DefaultChangeLogCap — the same constant the store default
-	// (NewChangeLog) and the startup-recovery path (RecoverOpenTransactions)
-	// read — so the admission ceiling and the recovery ceiling cannot silently
-	// diverge.
-	// ponytail: the cap value still lives in gitstore while the service
-	// package's own tests mirror it by rote (100000 literals); a future cap
-	// change must touch the gitstore constant plus every service-test literal.
-	// Upgrade path: hoist the constant to the service package and have gitstore
-	// import it, collapsing the mirror surfaces to a single definition.
+	// store.DefaultChangeLogCap — the store-layer constant (SPEC.md:888-889)
+	// that gitstore's default NewChangeLog and the startup-recovery path
+	// (RecoverOpenTransactions) also read — so the admission ceiling and the
+	// recovery ceiling cannot silently diverge.
+	// ponytail: the service package's own tests mirror the cap by rote (100000
+	// literals); a future cap change must touch the store constant plus every
+	// service-test literal.
 	server := service.NewCartographerServer(
 		dbStore, gs, operatorKey, sidecarKey,
 		readSecretFn, remoteURL, stalenessWindow,
-		podNamespace, transactionTimeout, gitstore.DefaultChangeLogCap,
+		podNamespace, transactionTimeout, store.DefaultChangeLogCap,
 		opts...,
 	)
 	slog.Info("Cartographer server constructed")

@@ -286,6 +286,154 @@ func TestChangeLogFullCapEnforced(t *testing.T) {
 	}
 }
 
+// TestChangeLogAtCapSameIDUpdateSucceeds pins the SPEC admission predicate
+// (SPEC:891-892): only a mutation that would grow the log past its cap is
+// rejected. At cap, a mutation on an already-logged element is admitted —
+// it reuses the element's slot. The entry-aware preflight (CheckCapacity)
+// mirrors the same predicate.
+func TestChangeLogAtCapSameIDUpdateSucceeds(t *testing.T) {
+	cl := NewChangeLogWithCap(2)
+
+	// Fill the log to its cap with two distinct entities.
+	for _, id := range []string{"e1", "e2"} {
+		if err := cl.Add(ChangeLogEntry{
+			Kind: ChangeAddEntity, ID: id, Type: testComponentType,
+			Entity: &EntityEntry{ID: id, Type: testComponentType},
+		}); err != nil {
+			t.Fatalf("Add %s failed: %v", id, err)
+		}
+	}
+	if cl.Len() != 2 {
+		t.Fatalf("expected Len()=2, got %d", cl.Len())
+	}
+
+	// At cap, the preflight admits a same-ID update (it does not grow the log),
+	// and Add records it.
+	if err := cl.CheckCapacity(ChangeLogEntry{Kind: ChangeModEntity, ID: "e1", Type: testComponentType}); err != nil {
+		t.Fatalf("CheckCapacity for same-ID update at cap: %v", err)
+	}
+	if err := cl.Add(ChangeLogEntry{
+		Kind: ChangeModEntity, ID: "e1", Type: testComponentType,
+		Entity: &EntityEntry{ID: "e1", Type: testComponentType, Properties: map[string]string{"name": "updated"}},
+	}); err != nil {
+		t.Fatalf("same-ID update at cap failed: %v", err)
+	}
+	if cl.Len() != 2 {
+		t.Fatalf("expected Len()=2 after slot-reuse update, got %d", cl.Len())
+	}
+	if _, ok := cl.ModifiedEntities["e1"]; !ok {
+		t.Fatal("expected the same-ID update to be recorded in ModifiedEntities")
+	}
+
+	// A new-ID insert at cap is rejected by both the preflight and Add.
+	if err := cl.CheckCapacity(ChangeLogEntry{
+		Kind: ChangeAddEntity, ID: "e3", Type: testComponentType,
+	}); err != ErrChangeLogFull {
+		t.Fatalf("CheckCapacity for new-ID insert at cap: expected ErrChangeLogFull, got %v", err)
+	}
+	if err := cl.Add(ChangeLogEntry{
+		Kind: ChangeAddEntity, ID: "e3", Type: testComponentType,
+		Entity: &EntityEntry{ID: "e3", Type: testComponentType},
+	}); err != ErrChangeLogFull {
+		t.Fatalf("new-ID insert at cap: expected ErrChangeLogFull, got %v", err)
+	}
+
+	// An unknown (auto-generated) ID is treated as a new element — a fresh
+	// UUID can never reuse a logged slot.
+	if err := cl.CheckCapacity(ChangeLogEntry{Kind: ChangeAddEdge, ID: "", Type: "DEPENDS_ON"}); err != ErrChangeLogFull {
+		t.Fatalf("CheckCapacity with unknown ID at cap: expected ErrChangeLogFull, got %v", err)
+	}
+}
+
+// TestChangeLogCountsDistinctElements pins the SPEC error-table row
+// "Transaction change log exceeds capacity" (SPEC:968), whose trigger is a
+// transaction that "modified more than 100 000 entities/edges": the cap counts
+// distinct elements, so add-then-modify of the same entity/edge records two
+// mutation entries but counts as one element.
+func TestChangeLogCountsDistinctElements(t *testing.T) {
+	cl := NewChangeLogWithCap(4)
+
+	addEntity := func(id string) {
+		t.Helper()
+		if err := cl.Add(ChangeLogEntry{
+			Kind: ChangeAddEntity, ID: id, Type: testComponentType,
+			Entity: &EntityEntry{ID: id, Type: testComponentType},
+		}); err != nil {
+			t.Fatalf("Add entity %s failed: %v", id, err)
+		}
+	}
+	modEntity := func(id string) {
+		t.Helper()
+		if err := cl.Add(ChangeLogEntry{
+			Kind: ChangeModEntity, ID: id, Type: testComponentType,
+			Entity: &EntityEntry{ID: id, Type: testComponentType, Properties: map[string]string{"name": "x"}},
+		}); err != nil {
+			t.Fatalf("Mod entity %s failed: %v", id, err)
+		}
+	}
+	addEdge := func(id string) {
+		t.Helper()
+		if err := cl.Add(ChangeLogEntry{
+			Kind: ChangeAddEdge, ID: id, Type: "DEPENDS_ON",
+			Edge: &EdgeEntry{ID: id, Type: "DEPENDS_ON", FromEntityID: "a", ToEntityID: "b"},
+		}); err != nil {
+			t.Fatalf("Add edge %s failed: %v", id, err)
+		}
+	}
+	modEdge := func(id string) {
+		t.Helper()
+		if err := cl.Add(ChangeLogEntry{
+			Kind: ChangeModEdge, ID: id, Type: "DEPENDS_ON",
+			Edge: &EdgeEntry{ID: id, Type: "DEPENDS_ON", FromEntityID: "a", ToEntityID: "b"},
+		}); err != nil {
+			t.Fatalf("Mod edge %s failed: %v", id, err)
+		}
+	}
+
+	// e1 added-then-modified: two mutation entries, one distinct element.
+	addEntity("e1")
+	modEntity("e1")
+	if cl.Len() != 1 {
+		t.Fatalf("expected Len()=1 after add+mod of one entity, got %d", cl.Len())
+	}
+	// A second entity and an edge are each distinct elements.
+	addEntity("e2")
+	if cl.Len() != 2 {
+		t.Fatalf("expected Len()=2 after two distinct entities, got %d", cl.Len())
+	}
+	addEdge("edge-1")
+	if cl.Len() != 3 {
+		t.Fatalf("expected Len()=3 after adding an edge, got %d", cl.Len())
+	}
+	// Modifying the same edge still counts once.
+	modEdge("edge-1")
+	if cl.Len() != 3 {
+		t.Fatalf("expected Len()=3 after add+mod of one edge, got %d", cl.Len())
+	}
+	// The fourth distinct element reaches the cap.
+	addEntity("e3")
+	if cl.Len() != 4 {
+		t.Fatalf("expected Len()=4, got %d", cl.Len())
+	}
+	// A fifth distinct element is rejected — the cap counts distinct elements,
+	// so 60K added-then-modified entities fit (120K entries would not).
+	if err := cl.Add(ChangeLogEntry{
+		Kind: ChangeAddEntity, ID: "e4", Type: testComponentType,
+		Entity: &EntityEntry{ID: "e4", Type: testComponentType},
+	}); err != ErrChangeLogFull {
+		t.Fatalf("5th distinct element: expected ErrChangeLogFull, got %v", err)
+	}
+	// All six admitted mutations are still recorded as entries.
+	if entries := cl.Entries(); len(entries) != 6 {
+		t.Fatalf("expected 6 logged mutation entries, got %d", len(entries))
+	}
+	// An at-cap slot-reuse (re-modifying a tracked element) is still admitted.
+	modEntity("e1")
+	if cl.Len() != 4 {
+		t.Fatalf("expected Len()=4 after at-cap slot reuse, got %d", cl.Len())
+	}
+}
+
 // TestChangeLogAddEntryBypassesCap exercises the startup-recovery reconstruct
 // path (RecoverOpenTransactions): AddEntry must admit entries beyond the cap
 // because the original addition was already gated when the transaction ran.

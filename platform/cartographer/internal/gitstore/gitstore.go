@@ -20,15 +20,21 @@ import (
 
 // GitStore is the authoritative interface for all git-backed versioning
 // operations. Every method must be called with the git lock held (via
-// WithGitLock). The context parameter is reserved for future cancellation
-// support in I/O-bound operations.
+// WithGitLock). The context parameter cancels remote git operations (threaded
+// into go-git's ctx-aware network calls, below); the remaining filesystem and
+// worktree I/O is not cancellable (see the ponytail below).
 //
-// ponytail: none of the ctx parameters are wired into the underlying go-billy
-// or go-git I/O, because neither library exposes a ctx-aware filesystem API.
-// Consequence: a hung CSI/NFS filesystem (a blocked stat, open, write, or
-// Close) blocks the reconcile or RPC for the duration of the hang regardless
-// of caller cancellation — the contract param is a pure affordance today.
-// Upgrade path: run the store's I/O on a goroutine and select on ctx.Done(),
+// ponytail: ctx is wired into go-git's ctx-aware network operations —
+// FetchAndMerge and CloneSingleBranch thread it into FetchContext, PushRemote
+// into PushContext (remote.go) — so caller cancellation and deadlines abort a
+// hung remote and surface the context error (the sync worker's per-operation
+// git deadline, SPEC R10 / SPEC:978, depends on this). All other store I/O is
+// not ctx-aware: go-billy filesystem operations (stat, open, write, Close) and
+// the go-git worktree operations (add, commit, checkout, clean, remove, log)
+// take no context, so a hung CSI/NFS filesystem (a blocked stat, open, write,
+// or Close) still blocks the reconcile or RPC for the duration of the hang
+// regardless of caller cancellation.
+// Upgrade path: run the remaining I/O on a goroutine and select on ctx.Done(),
 // or wrap the filesystem in a deadline-bounding adapter that fails operations
 // exceeding a configured budget; once go-billy gains ctx-aware IO, thread ctx
 // through directly.

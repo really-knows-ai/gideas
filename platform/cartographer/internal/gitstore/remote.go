@@ -142,33 +142,24 @@ func (g *gitStore) setLocalRefAndCheckout(branch string, hash plumbing.Hash) err
 	return nil
 }
 
-// FetchAndMerge is used on two distinct paths, distinguished by which branch
-// they pass:
+// FetchAndMerge is the sync worker's pull: the worker's fetch-merge-re-hydrate
+// cycle (SPEC R10) calls it with branch "main" to bring local main up to date
+// with the remote before re-hydrating main.lbug and pushing any pending commit.
+// Sync() and BeginTransaction wake the worker, so FetchAndMerge has a single
+// production caller — the worker's fetch attempt. SPEC mandates that when main
+// has diverged from the remote, the pull fails with FAILED_PRECONDITION (SPEC
+// R10, error-table row "Sync diverged"). On divergence this method returns
+// ErrPullDiverged, which service mapGitError maps to FAILED_PRECONDITION; the
+// local main ref is left unchanged (no merge commit is fabricated), so the
+// SPEC-mandated divergence failure is reachable.
 //
-//   - Remote pull (branch "main"): the sync worker's fetch-merge-re-hydrate
-//     cycle and Sync()/BeginTransaction wake the worker to pull main. SPEC
-//     mandates that when main has diverged from the remote, the pull fails with
-//     FAILED_PRECONDITION ("Remote pull diverged" — error table row "Remote
-//     pull diverged", SPEC R10, line 929). On divergence this method returns
-//     ErrPullDiverged, which service mapGitError maps to FAILED_PRECONDITION;
-//     the local main ref is left unchanged (no merge commit is fabricated), so
-//     the SPEC-mandated divergence failure is reachable.
-//   - Commit step 14 (pull-before-push, branch "main"): the fire-and-forget
-//     push path needs the local branch to fast-forward onto the remote so the
-//     subsequent push is fast-forward. It only ever fast-forwards (or is
-//     already up-to-date), so in the normal case the fetch+ancestor-check
-//     below advances local main and the push succeeds. A local-ahead state
-//     (remote strictly behind local) is treated as up-to-date — there is
-//     nothing to pull — so a failed fire-and-forget push leaves the retry
-//     path open on the next commit (SPEC:788). On true divergence it
-//     receives ErrPullDiverged and simply skips that push (logged +
-//     telemetry) rather than fabricating a merge commit on local main that
-//     mixes a peer's commits into the published timeline. The commit itself is
-//     unaffected — the push is fire-and-forget behind an already-returned
-//     CommitTransaction success. (ponytail: the fire-and-forget push therefore
-//     silently drops a divergent pull; it is only logged/telemetry, matching a
-//     rejected push. Upgrade path: retry the push itself rather than a
-//     pre-merge when it fails non-fast-forward.)
+// The ancestry classification below is three-way: equal tips and fast-forward
+// (the remote a descendant of local main) leave local main at the remote tip;
+// local main strictly ahead of the remote (a committed-but-unpushed state
+// awaiting the worker's push) is treated as up-to-date — there is nothing to
+// pull; true divergence returns ErrPullDiverged. If the local branch does not
+// exist it is created pointing at the remote tracking ref. Returns the
+// resulting local HEAD hash.
 //
 // For any branch, the fetch refspec and the tracking-ref lookup both use the
 // given branch, so the parameter is honored for non-main branches too.
@@ -262,10 +253,11 @@ func (g *gitStore) FetchAndMerge(ctx context.Context, remoteName, branch string)
 	// Local is ahead of the remote (remote strictly behind): the remote tip is
 	// an ancestor of the local commit. There is nothing to pull, so this is
 	// treated as up-to-date rather than ErrPullDiverged. This matters for the
-	// Commit step-14 pull-before-push: a fire-and-forget push that failed
-	// transiently leaves local main ahead of the remote, and the next commit's
-	// pull must not fail (which would skip the retried push, defeating SPEC:788
-	// "the next commit will retry the push").
+	// sync worker's push-retry contract: a push that failed transiently
+	// (retries exhausted, SPEC R10 leaves the flag set for the next cycle)
+	// leaves local main ahead of the remote, and the next cycle's pull must
+	// not fail — otherwise the retried push is skipped and the pending push
+	// wedges the cycle.
 	remoteIsAncestor, err := remoteCommit.IsAncestor(localCommit)
 	if err != nil {
 		return plumbing.ZeroHash, fmt.Errorf("check remote ancestor: %w", err)
@@ -275,10 +267,9 @@ func (g *gitStore) FetchAndMerge(ctx context.Context, remoteName, branch string)
 	}
 
 	// Diverged: neither local nor remote is an ancestor of the other. The
-	// explicit pull path must fail FAILED_PRECONDITION (SPEC R10, error-table
-	// row "Remote pull diverged", line 929) rather than fabricate a merge
-	// commit on local main that masks the divergence. mapGitError maps
-	// ErrPullDiverged to FAILED_PRECONDITION.
+	// pull must fail FAILED_PRECONDITION (SPEC R10, error-table row "Sync
+	// diverged") rather than fabricate a merge commit on local main that masks
+	// the divergence. mapGitError maps ErrPullDiverged to FAILED_PRECONDITION.
 	return plumbing.ZeroHash, ErrPullDiverged
 }
 

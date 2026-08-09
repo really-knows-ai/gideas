@@ -154,10 +154,12 @@ func TestRehydrateMainFromFilesReplacesEntitiesAndEdgesAndPreservesVectorState(t
 	if _, err := s.GetEdge(ctx, edgeID, "main"); err != nil {
 		t.Fatalf("rehydrated edge missing: %v", err)
 	}
-	if dimension, err := s.GetEstablishedDimension("Component", "main"); err != nil || dimension != 2 {
+	if dimension, err := s.GetEstablishedDimension(
+		context.Background(), "Component", "main",
+	); err != nil || dimension != 2 {
 		t.Fatalf("vector dimension changed: dimension=%d error=%v", dimension, err)
 	}
-	if !s.IsVectorIndexBootstrapped("Component", "main") {
+	if !s.IsVectorIndexBootstrapped(context.Background(), "Component", "main") {
 		t.Fatal("vector index was not preserved")
 	}
 }
@@ -915,6 +917,32 @@ func TestCreateEntity_InvalidUUID(t *testing.T) {
 	_, err = s.CreateEntity(context.Background(), "Component", "not-a-uuid", nil, nil, "")
 	if err == nil {
 		t.Fatal("expected error for invalid UUID")
+	}
+	if !errors.Is(err, store.ErrInvalidIDFormat) {
+		t.Errorf("expected ErrInvalidIDFormat, got %v", err)
+	}
+}
+
+func TestCreateEntity_NonCanonicalUUIDSpellingRejected(t *testing.T) {
+	s, err := OpenInMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeStore(t, s)
+	applyTestSchema(t, s)
+
+	id := uuid.New().String()
+	if _, err := s.CreateEntity(context.Background(), "Component", id, nil, nil, ""); err != nil {
+		t.Fatalf("CreateEntity: %v", err)
+	}
+	// The same UUID in a non-canonical spelling must be rejected at the ID
+	// format gate, never stored as a second entity — accepting it would let
+	// two spellings of one UUID become two entities and bypass the
+	// ALREADY_EXISTS check (SPEC:942). The rejection surfaces on the
+	// INVALID_ARGUMENT-style store.ErrInvalidIDFormat path (SPEC:941).
+	_, err = s.CreateEntity(context.Background(), "Component", strings.ToUpper(id), nil, nil, "")
+	if err == nil {
+		t.Fatal("expected error for non-canonical UUID spelling")
 	}
 	if !errors.Is(err, store.ErrInvalidIDFormat) {
 		t.Errorf("expected ErrInvalidIDFormat, got %v", err)
@@ -3020,10 +3048,14 @@ func TestFileBackedVectorBootstrapSurvivesMainAndBranchReopen(t *testing.T) {
 		t.Fatalf("reopen: %v", err)
 	}
 	defer closeStore(t, reopened)
-	if dimension, err := reopened.GetEstablishedDimension("Vector", ""); err != nil || dimension != 2 {
+	if dimension, err := reopened.GetEstablishedDimension(
+		context.Background(), "Vector", "",
+	); err != nil || dimension != 2 {
 		t.Fatalf("main vector dimension after reopen = %d, %v", dimension, err)
 	}
-	if dimension, err := reopened.GetEstablishedDimension("Vector", branch); err != nil || dimension != 3 {
+	if dimension, err := reopened.GetEstablishedDimension(
+		context.Background(), "Vector", branch,
+	); err != nil || dimension != 3 {
 		t.Fatalf("branch vector dimension after reopen = %d, %v", dimension, err)
 	}
 	if _, err := reopened.GetEntity(context.Background(), mainEntity.Id, ""); err != nil {
@@ -3057,7 +3089,7 @@ func TestRehydrateFromBranch_PromotedVectorMetadataSurvivesReopen(t *testing.T) 
 	}}}); err != nil {
 		t.Fatalf("ApplySchema: %v", err)
 	}
-	if database.IsVectorIndexBootstrapped("Vector", "") {
+	if database.IsVectorIndexBootstrapped(context.Background(), "Vector", "") {
 		t.Fatal("expected Vector not bootstrapped on main before branch write")
 	}
 
@@ -3080,7 +3112,7 @@ func TestRehydrateFromBranch_PromotedVectorMetadataSurvivesReopen(t *testing.T) 
 	if err := database.RehydrateFromBranch(context.Background(), branch); err != nil {
 		t.Fatalf("RehydrateFromBranch: %v", err)
 	}
-	if !database.IsVectorIndexBootstrapped("Vector", "") {
+	if !database.IsVectorIndexBootstrapped(context.Background(), "Vector", "") {
 		t.Fatal("expected vector index promoted to main after rehydrate")
 	}
 
@@ -3094,7 +3126,9 @@ func TestRehydrateFromBranch_PromotedVectorMetadataSurvivesReopen(t *testing.T) 
 		t.Fatalf("reopen after rehydrate: %v", err)
 	}
 	defer closeStore(t, reopened)
-	if dimension, derr := reopened.GetEstablishedDimension("Vector", ""); derr != nil || dimension != 3 {
+	if dimension, derr := reopened.GetEstablishedDimension(
+		context.Background(), "Vector", "",
+	); derr != nil || dimension != 3 {
 		t.Fatalf("main vector dimension after reopen = %d, error = %v, want 3", dimension, derr)
 	}
 }
@@ -3111,7 +3145,7 @@ func TestGetEstablishedDimension_UnknownType(t *testing.T) {
 	defer closeStore(t, s)
 	applyTestSchema(t, s)
 
-	_, err = s.GetEstablishedDimension("NoSuchType", "")
+	_, err = s.GetEstablishedDimension(context.Background(), "NoSuchType", "")
 	if err == nil {
 		t.Fatal("expected error for unknown entity type")
 	}
@@ -4014,7 +4048,7 @@ func TestVectorIndex_Bootstrap(t *testing.T) {
 	defer closeStore(t, s)
 	applyTestSchema(t, s)
 
-	if s.IsVectorIndexBootstrapped("VectorType", "") {
+	if s.IsVectorIndexBootstrapped(context.Background(), "VectorType", "") {
 		t.Error("expected not bootstrapped before first entity")
 	}
 
@@ -4024,7 +4058,7 @@ func TestVectorIndex_Bootstrap(t *testing.T) {
 		t.Fatalf("CreateEntity: %v", err)
 	}
 
-	if !s.IsVectorIndexBootstrapped("VectorType", "") {
+	if !s.IsVectorIndexBootstrapped(context.Background(), "VectorType", "") {
 		t.Error("expected bootstrapped after first entity with embedding")
 	}
 }
@@ -4552,7 +4586,7 @@ func TestRehydrateMainFromFiles_InferredTypePromotesEnableVectorIndex(t *testing
 	if !def.EnableVectorIndex {
 		t.Error("expected EnableVectorIndex to be promoted to true for re-hydrated type with embedding")
 	}
-	if !s.IsVectorIndexBootstrapped("Document", "main") {
+	if !s.IsVectorIndexBootstrapped(context.Background(), "Document", "main") {
 		t.Error("expected vector index to be bootstrapped for re-hydrated type with embedding")
 	}
 }
@@ -5529,7 +5563,7 @@ func TestApplySchema_EnableVectorIndexFalseToTrue_NonDestructive(t *testing.T) {
 		map[string]string{"title": "doc"}, []float32{1, 2, 3}, "main"); err != nil {
 		t.Fatalf("CreateEntity on non-vector type should accept (and discard) an embedding: %v", err)
 	}
-	if s.IsVectorIndexBootstrapped("Document", "main") {
+	if s.IsVectorIndexBootstrapped(context.Background(), "Document", "main") {
 		t.Fatal("vector index must not be bootstrapped while EnableVectorIndex is false")
 	}
 
@@ -5543,7 +5577,7 @@ func TestApplySchema_EnableVectorIndexFalseToTrue_NonDestructive(t *testing.T) {
 	if err := s.ApplySchema(ctx, enabled); err != nil {
 		t.Fatalf("false→true ApplySchema must be non-destructive, got %v", err)
 	}
-	if s.IsVectorIndexBootstrapped("Document", "main") {
+	if s.IsVectorIndexBootstrapped(context.Background(), "Document", "main") {
 		t.Fatal("the false→true transition must stay lazy — no entity written yet")
 	}
 
@@ -5552,10 +5586,10 @@ func TestApplySchema_EnableVectorIndexFalseToTrue_NonDestructive(t *testing.T) {
 		map[string]string{"title": "vec"}, []float32{1, 2, 3}, "main"); err != nil {
 		t.Fatalf("CreateEntity with embedding after enable: %v", err)
 	}
-	if !s.IsVectorIndexBootstrapped("Document", "main") {
+	if !s.IsVectorIndexBootstrapped(context.Background(), "Document", "main") {
 		t.Fatal("expected vector index bootstrapped after first embedding write")
 	}
-	if dim, derr := s.GetEstablishedDimension("Document", "main"); derr != nil || dim != 3 {
+	if dim, derr := s.GetEstablishedDimension(context.Background(), "Document", "main"); derr != nil || dim != 3 {
 		t.Fatalf("dimension after enable = %d, error = %v, want 3", dim, derr)
 	}
 
@@ -5568,10 +5602,10 @@ func TestApplySchema_EnableVectorIndexFalseToTrue_NonDestructive(t *testing.T) {
 		t.Fatalf("reopen: %v", err)
 	}
 	defer closeStore(t, s2)
-	if !s2.IsVectorIndexBootstrapped("Document", "main") {
+	if !s2.IsVectorIndexBootstrapped(context.Background(), "Document", "main") {
 		t.Fatal("lazy vector index was not restored on reopen")
 	}
-	if dim, derr := s2.GetEstablishedDimension("Document", "main"); derr != nil || dim != 3 {
+	if dim, derr := s2.GetEstablishedDimension(context.Background(), "Document", "main"); derr != nil || dim != 3 {
 		t.Fatalf("restored dimension = %d, error = %v, want 3", dim, derr)
 	}
 }
@@ -6305,7 +6339,7 @@ func TestUpdateEntity_EmbeddingBootstrap(t *testing.T) {
 	defer closeStore(t, s)
 	applyTestSchema(t, s)
 
-	if s.IsVectorIndexBootstrapped("VectorType", "") {
+	if s.IsVectorIndexBootstrapped(context.Background(), "VectorType", "") {
 		t.Fatal("expected VectorType not bootstrapped before rehydration")
 	}
 
@@ -6325,7 +6359,7 @@ func TestUpdateEntity_EmbeddingBootstrap(t *testing.T) {
 	if err := s.RehydrateMainFromFiles(context.Background(), entitiesDir, edgesDir); err != nil {
 		t.Fatalf("RehydrateMainFromFiles: %v", err)
 	}
-	if s.IsVectorIndexBootstrapped("VectorType", "") {
+	if s.IsVectorIndexBootstrapped(context.Background(), "VectorType", "") {
 		t.Fatal("rehydration must not bootstrap the vector index")
 	}
 
@@ -6336,10 +6370,10 @@ func TestUpdateEntity_EmbeddingBootstrap(t *testing.T) {
 	if !errors.Is(err, store.ErrEmbeddingUpdateUnsupported) {
 		t.Fatalf("expected ErrEmbeddingUpdateUnsupported, got %v", err)
 	}
-	if !s.IsVectorIndexBootstrapped("VectorType", "") {
+	if !s.IsVectorIndexBootstrapped(context.Background(), "VectorType", "") {
 		t.Fatalf("expected vector index bootstrapped after first embedding update (update err: %v)", err)
 	}
-	if dim, derr := s.GetEstablishedDimension("VectorType", ""); derr != nil || dim != 3 {
+	if dim, derr := s.GetEstablishedDimension(context.Background(), "VectorType", ""); derr != nil || dim != 3 {
 		t.Fatalf("dimension = %d, error = %v (update err: %v)", dim, derr, err)
 	}
 }
@@ -6368,7 +6402,7 @@ func TestUpdateEntity_EmbeddingMatchingDimensionUnsupported(t *testing.T) {
 	if err != nil {
 		t.Fatalf("bootstrap CreateEntity: %v", err)
 	}
-	if !s.IsVectorIndexBootstrapped("VectorType", "") {
+	if !s.IsVectorIndexBootstrapped(context.Background(), "VectorType", "") {
 		t.Fatal("expected VectorType bootstrapped after create")
 	}
 
@@ -6380,7 +6414,7 @@ func TestUpdateEntity_EmbeddingMatchingDimensionUnsupported(t *testing.T) {
 	}
 	// The dimension is unchanged (already locked by the create) and the entity
 	// survives the rejected update.
-	if dim, derr := s.GetEstablishedDimension("VectorType", ""); derr != nil || dim != 3 {
+	if dim, derr := s.GetEstablishedDimension(context.Background(), "VectorType", ""); derr != nil || dim != 3 {
 		t.Fatalf("dimension = %d, error = %v, want 3", dim, derr)
 	}
 	got, err := s.GetEntity(ctx, e.Id, "")
@@ -6432,7 +6466,7 @@ func TestBranch_DropBranchDB_LeavesMainUnbootstrapped(t *testing.T) {
 	applyTestSchema(t, s)
 	ctx := context.Background()
 
-	if s.IsVectorIndexBootstrapped("VectorType", "") {
+	if s.IsVectorIndexBootstrapped(context.Background(), "VectorType", "") {
 		t.Fatal("expected VectorType not bootstrapped on main before branch")
 	}
 
@@ -6449,7 +6483,7 @@ func TestBranch_DropBranchDB_LeavesMainUnbootstrapped(t *testing.T) {
 		map[string]string{"name": "v"}, []float32{1, 2, 3}, branch); err != nil {
 		t.Fatalf("CreateEntity on branch: %v", err)
 	}
-	if !s.IsVectorIndexBootstrapped("VectorType", branch) {
+	if !s.IsVectorIndexBootstrapped(context.Background(), "VectorType", branch) {
 		t.Fatal("expected VectorType bootstrapped on branch")
 	}
 
@@ -6459,10 +6493,10 @@ func TestBranch_DropBranchDB_LeavesMainUnbootstrapped(t *testing.T) {
 	}
 
 	// Main must remain un-bootstrapped (SPEC R7 branch scope).
-	if s.IsVectorIndexBootstrapped("VectorType", "") {
+	if s.IsVectorIndexBootstrapped(context.Background(), "VectorType", "") {
 		t.Fatal("main must not be bootstrapped after branch rollback")
 	}
-	dim, err := s.GetEstablishedDimension("VectorType", "")
+	dim, err := s.GetEstablishedDimension(context.Background(), "VectorType", "")
 	if err != nil {
 		t.Fatalf("GetEstablishedDimension: %v", err)
 	}
@@ -6491,7 +6525,7 @@ func TestBranch_InheritsMainVectorDimension_RejectsConflict(t *testing.T) {
 		map[string]string{"name": "main-v"}, []float32{1, 2, 3}, ""); err != nil {
 		t.Fatalf("bootstrap main vector: %v", err)
 	}
-	if dim, err := s.GetEstablishedDimension("VectorType", ""); err != nil || dim != 3 {
+	if dim, err := s.GetEstablishedDimension(context.Background(), "VectorType", ""); err != nil || dim != 3 {
 		t.Fatalf("main dimension = %d, err = %v", dim, err)
 	}
 
@@ -6541,7 +6575,7 @@ func TestRehydrateFromBranch_PromotesEmbeddingDimensionToMain(t *testing.T) {
 		t.Fatalf("ReplicateSchemaToBranch: %v", err)
 	}
 
-	if s.IsVectorIndexBootstrapped("VectorType", "") {
+	if s.IsVectorIndexBootstrapped(context.Background(), "VectorType", "") {
 		t.Fatal("expected VectorType not bootstrapped on main before commit")
 	}
 
@@ -6557,10 +6591,10 @@ func TestRehydrateFromBranch_PromotesEmbeddingDimensionToMain(t *testing.T) {
 		t.Fatalf("RehydrateFromBranch promotes embedding schema to main: %v", err)
 	}
 
-	if !s.IsVectorIndexBootstrapped("VectorType", "") {
+	if !s.IsVectorIndexBootstrapped(context.Background(), "VectorType", "") {
 		t.Fatal("expected vector index promoted to main after RehydrateFromBranch")
 	}
-	if dim, derr := s.GetEstablishedDimension("VectorType", ""); derr != nil || dim != 3 {
+	if dim, derr := s.GetEstablishedDimension(context.Background(), "VectorType", ""); derr != nil || dim != 3 {
 		t.Fatalf("dimension on main = %d, error = %v, want 3", dim, derr)
 	}
 }
@@ -6658,7 +6692,7 @@ func TestSearchNeighbors_VectorPrepareFailureSurfacesError(t *testing.T) {
 		map[string]string{"name": "v"}, []float32{1, 2, 3}, ""); err != nil {
 		t.Fatalf("bootstrap vector type: %v", err)
 	}
-	if !s.IsVectorIndexBootstrapped("VectorType", "") {
+	if !s.IsVectorIndexBootstrapped(context.Background(), "VectorType", "") {
 		t.Fatal("expected VectorType vector index bootstrapped")
 	}
 

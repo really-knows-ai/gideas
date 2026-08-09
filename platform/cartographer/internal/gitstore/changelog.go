@@ -2,16 +2,14 @@ package gitstore
 
 import (
 	"sort"
+
+	"github.com/foundry/flow/cartographer/internal/store"
 )
 
-// DefaultChangeLogCap is the admission cap applied when NewChangeLog is used.
-// Exported so the store/service layer can import it rather than hardcoding the
-// 100 000 literal.
-const DefaultChangeLogCap = 100000
-
-// NewChangeLog creates a new ChangeLog with all maps initialised.
+// NewChangeLog creates a new ChangeLog with all maps initialised, applying the
+// store-layer admission cap (store.DefaultChangeLogCap, SPEC.md:888-889).
 func NewChangeLog() *ChangeLog {
-	return newChangeLog(DefaultChangeLogCap)
+	return newChangeLog(store.DefaultChangeLogCap)
 }
 
 // NewChangeLogWithCap creates a ChangeLog with an explicit admission cap.
@@ -32,43 +30,57 @@ func newChangeLog(capacity int) *ChangeLog {
 }
 
 // Add routes a ChangeLogEntry to the correct map based on Kind.
-// Returns ErrChangeLogFull if the 100K cap would be exceeded.
-// Returns ErrUnknownChangeKind for unrecognised ChangeKind values.
+// Enforces the SPEC change-log admission predicate (SPEC:891-892): a mutation
+// is rejected with ErrChangeLogFull only when it would grow the log past its
+// cap. At cap, a mutation on an element already tracked by the log is admitted
+// — it reuses the element's slot and does not exceed the limit. Returns
+// ErrUnknownChangeKind for unrecognised ChangeKind values.
 func (cl *ChangeLog) Add(entry ChangeLogEntry) error {
 	cl.mu.Lock()
 	defer cl.mu.Unlock()
 
-	if cl.checkCapacityLocked() {
+	if cl.checkCapacityLocked(entry) {
 		return ErrChangeLogFull
 	}
 
 	return cl.add(entry)
 }
 
-// CheckCapacity reports whether another mutation can be admitted. Transaction
-// lifecycle locking serialises this preflight with the subsequent Add call.
-func (cl *ChangeLog) CheckCapacity() error {
+// CheckCapacity reports whether the given mutation can be admitted without
+// growing the change log past its cap. It is the entry-aware preflight used by
+// the service layer before a branch mutation, mirroring Add's admission
+// predicate. Callers that cannot yet know the entry's ID (CreateEntity or
+// CreateEdge with an auto-generated UUID) pass an entry with an empty ID,
+// which is treated as a new element — exact, because a fresh UUID can never
+// reuse a logged slot.
+//
+// ponytail: The check-then-add performed by a caller of CheckCapacity followed
+// by Add is not atomic — between the two lock acquisitions another goroutine
+// could grow the log, so CheckCapacity is advisory only. This is safe in the
+// transaction lifecycle context because per-transaction lifecycle locking
+// serialises mutations for a given transaction. The Add method itself
+// re-checks under the lock with the actual entry and returns ErrChangeLogFull
+// only if the entry would exceed the cap.
+func (cl *ChangeLog) CheckCapacity(entry ChangeLogEntry) error {
 	cl.mu.Lock()
 	defer cl.mu.Unlock()
 
-	if cl.checkCapacityLocked() {
+	if cl.checkCapacityLocked(entry) {
 		return ErrChangeLogFull
 	}
 	return nil
 }
 
-// checkCapacityLocked reports whether the ChangeLog has reached its cap.
-// Must be called with cl.mu held.
-//
-// ponytail: The check-then-add performed by a caller of CheckCapacity followed
-// by Add is not atomic — between the two lock acquisitions another goroutine
-// could fill the final slot, so CheckCapacity is advisory only. This is safe in
-// the transaction lifecycle context because per-transaction lifecycle locking
-// serialises mutations for a given transaction, making the preflight reliable
-// there. The Add method itself re-checks under the lock and returns
-// ErrChangeLogFull if the cap was reached.
-func (cl *ChangeLog) checkCapacityLocked() bool {
-	return cl.count >= cl.cap
+// checkCapacityLocked reports whether the entry would grow the log past its
+// cap. An entry whose element is already tracked reuses its slot and is
+// admitted even at cap — the SPEC admission predicate rejects only operations
+// "that would cause the log to exceed the limit" (SPEC:891-892). Must be
+// called with cl.mu held.
+func (cl *ChangeLog) checkCapacityLocked(entry ChangeLogEntry) bool {
+	if cl.count < cl.cap {
+		return false
+	}
+	return !cl.hasElement(entry.ID)
 }
 
 // AddEntry adds a ChangeLogEntry to the ChangeLog without checking the 100K cap.
@@ -78,9 +90,10 @@ func (cl *ChangeLog) checkCapacityLocked() bool {
 // Returns ErrUnknownChangeKind for unrecognised ChangeKind values.
 //
 // ponytail: Recovery bypasses the cap via this method. The per-transaction cap
-// means a single recovered transaction cannot exceed 100K entries. If the recovery
-// algorithm changes to merge entries across transactions into a single ChangeLog,
-// callers must ensure the combined count does not exceed the cap.
+// means a single recovered transaction cannot exceed 100K distinct
+// entities/edges. If the recovery algorithm changes to merge entries across
+// transactions into a single ChangeLog, callers must ensure the combined
+// distinct-element count does not exceed the cap.
 func (cl *ChangeLog) AddEntry(entry ChangeLogEntry) error {
 	cl.mu.Lock()
 	defer cl.mu.Unlock()
@@ -91,33 +104,27 @@ func (cl *ChangeLog) AddEntry(entry ChangeLogEntry) error {
 // add is the shared insertion logic used by both Add and AddEntry.
 // Must be called with cl.mu held.
 //
-// ponytail: cl.count counts per map slot, not per distinct element. The same
-// entityID modified twice (Add then Mod, or Add/Mod coordinated with Del)
-// occupies distinct slots in different category maps and so counts twice toward
-// the 100K cap, even though only one distinct element was touched. SPEC error
-// row "Transaction change log exceeds capacity" (line 917) is framed per
-// entity/edge, so a transaction touching 60K distinct entities each
-// added-then-modified fails at 120K slots despite only 60K distinct elements.
-// A distinct-element count would need a cross-map de-dup set keyed by ID. The
-// slot-count is retained because the cap is a memory guard and worst-case (all
-// 100K slots are distinct elements) admits at most 100K entities; double-count
-// only errs toward rejection. Upgrade path: track distinct IDs in a
-// map[string]struct{} across categories and count that set if SPEC-per-entity
-// semantics become a requirement.
+// cl.count counts distinct entities/edges touched by the transaction, matching
+// the SPEC error-table row "Transaction change log exceeds capacity"
+// (SPEC:968): the trigger is a transaction that "modified more than 100 000
+// entities/edges". An element is distinct by ID across all six category maps —
+// adding then modifying the same entity records two mutation entries but
+// counts as one element. IDs are UUID v4s, unique across entities and edges,
+// so raw-ID membership across the maps is the distinct-element test.
 func (cl *ChangeLog) add(entry ChangeLogEntry) error {
 	switch entry.Kind {
 	case ChangeAddEntity:
-		if _, exists := cl.AddedEntities[entry.ID]; !exists {
+		if !cl.hasElement(entry.ID) {
 			cl.count++
 		}
 		cl.AddedEntities[entry.ID] = entry.Entity
 	case ChangeModEntity:
-		if _, exists := cl.ModifiedEntities[entry.ID]; !exists {
+		if !cl.hasElement(entry.ID) {
 			cl.count++
 		}
 		cl.ModifiedEntities[entry.ID] = entry.Entity
 	case ChangeDelEntity:
-		if _, exists := cl.DeletedEntities[entry.ID]; !exists {
+		if !cl.hasElement(entry.ID) {
 			cl.count++
 		}
 		cl.DeletedEntities[entry.ID] = &DeletionInfo{
@@ -125,17 +132,17 @@ func (cl *ChangeLog) add(entry ChangeLogEntry) error {
 			Suspected: entry.Suspected,
 		}
 	case ChangeAddEdge:
-		if _, exists := cl.AddedEdges[entry.ID]; !exists {
+		if !cl.hasElement(entry.ID) {
 			cl.count++
 		}
 		cl.AddedEdges[entry.ID] = entry.Edge
 	case ChangeModEdge:
-		if _, exists := cl.ModifiedEdges[entry.ID]; !exists {
+		if !cl.hasElement(entry.ID) {
 			cl.count++
 		}
 		cl.ModifiedEdges[entry.ID] = entry.Edge
 	case ChangeDelEdge:
-		if _, exists := cl.DeletedEdges[entry.ID]; !exists {
+		if !cl.hasElement(entry.ID) {
 			cl.count++
 		}
 		cl.DeletedEdges[entry.ID] = &DeletionInfo{
@@ -147,6 +154,30 @@ func (cl *ChangeLog) add(entry ChangeLogEntry) error {
 	}
 
 	return nil
+}
+
+// hasElement reports whether an element with the given ID is already tracked
+// in any of the six category maps — the distinct-element test. IDs are UUID
+// v4s, unique across entities and edges, so an ID identifies exactly one
+// element regardless of category. Must be called with cl.mu held.
+func (cl *ChangeLog) hasElement(id string) bool {
+	if _, ok := cl.AddedEntities[id]; ok {
+		return true
+	}
+	if _, ok := cl.ModifiedEntities[id]; ok {
+		return true
+	}
+	if _, ok := cl.DeletedEntities[id]; ok {
+		return true
+	}
+	if _, ok := cl.AddedEdges[id]; ok {
+		return true
+	}
+	if _, ok := cl.ModifiedEdges[id]; ok {
+		return true
+	}
+	_, ok := cl.DeletedEdges[id]
+	return ok
 }
 
 // Entries returns all entries flattened into a slice.
@@ -227,7 +258,8 @@ func (cl *ChangeLog) Clear() {
 	cl.count = 0
 }
 
-// Len returns the total number of tracked changes across all maps.
+// Len returns the number of distinct entities/edges touched by the
+// transaction — the metric the 100K cap counts (SPEC:968).
 // Acquires cl.mu for safe concurrent access.
 func (cl *ChangeLog) Len() int {
 	cl.mu.Lock()

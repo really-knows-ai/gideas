@@ -1326,7 +1326,7 @@ func TestWaitForShutdownTeardownCompletes(t *testing.T) {
 	db := &shutdownStore{}
 	gs := &shutdownGitStore{}
 	server := service.NewCartographerServer(db, gs, nil, nil, nil, "", 30*time.Second,
-		"default", 30*time.Second, gitstore.DefaultChangeLogCap)
+		"default", 30*time.Second, store.DefaultChangeLogCap)
 
 	healthSrv := health.NewServer()
 	grpcServer := grpc.NewServer()
@@ -1393,7 +1393,7 @@ func TestWaitForShutdownLockFailureStillCompletes(t *testing.T) {
 	db := &shutdownStore{}
 	gs := &lockErrGitStore{lockErr: errors.New("git lock acquisition failed")}
 	server := service.NewCartographerServer(db, gs, nil, nil, nil, "", 30*time.Second,
-		"default", 30*time.Second, gitstore.DefaultChangeLogCap)
+		"default", 30*time.Second, store.DefaultChangeLogCap)
 
 	healthSrv := health.NewServer()
 	grpcServer := grpc.NewServer()

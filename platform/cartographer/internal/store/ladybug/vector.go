@@ -13,7 +13,7 @@ import (
 
 // IsVectorIndexBootstrapped returns true if the entity type has a non-null
 // embedding column and a vector index exists.
-func (db *ladybugDB) IsVectorIndexBootstrapped(entityType, branch string) bool {
+func (db *ladybugDB) IsVectorIndexBootstrapped(_ context.Context, entityType, branch string) bool {
 	conn, typeDefs, unlock, err := db.lockForRead(branch)
 	if err != nil {
 		return false
@@ -63,7 +63,7 @@ func (db *ladybugDB) IsVectorIndexBootstrapped(entityType, branch string) bool {
 
 // GetEstablishedDimension returns the dimension of the FLOAT[n] embedding
 // column for the given entity type, or 0 if not established.
-func (db *ladybugDB) GetEstablishedDimension(entityType, branch string) (int, error) {
+func (db *ladybugDB) GetEstablishedDimension(_ context.Context, entityType, branch string) (int, error) {
 	conn, typeDefs, unlock, err := db.lockForRead(branch)
 	if err != nil {
 		return 0, err
