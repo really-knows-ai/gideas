@@ -3376,6 +3376,7 @@ func TestSyncWorker_RecoverableError_RetriesAndGivesUp(t *testing.T) {
 	}
 	syncGit := &syncMockGitStore{GitStore: gs, fetchErr: gitstore.ErrRemoteUnreachable}
 	sw := newSyncWorker(t, syncGit, RealClock{})
+	sw.backoffFn = func(int) time.Duration { return 0 }
 	sw.SetPushNeeded()
 
 	sw.runSyncCycle()
