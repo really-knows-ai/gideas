@@ -1166,6 +1166,80 @@ func TestReadAllEdgeFilesTypeDirectoryMismatch(t *testing.T) {
 	}
 }
 
+// TestReadAllEdgeFilesZeroFromToGuard: a JSON edge file whose embedded from
+// or to endpoint is a zero UUID (external corruption) must surface
+// ErrInvalidUUID, not be silently loaded with a nil-UUID endpoint. This
+// mirrors the write path (writeEdgeFile rejects zero/non-v4 endpoints via
+// ErrInvalidUUID) and the sibling id-vs-filename and type-vs-directory
+// guards (SPEC R8 corruption recovery).
+func TestReadAllEdgeFilesZeroFromToGuard(t *testing.T) {
+	gs := setupTestStore(t)
+	err := gs.WithGitLock(func() error {
+		eID := validUUID(t)
+		fromID := validUUID(t)
+		toID := validUUID(t)
+		now := time.Now().UTC().Round(time.Millisecond)
+		if err := gs.WriteEdgeFiles(ctx(), "DEPENDS_ON", []Edge{
+			{ID: eID, Type: "DEPENDS_ON", FromEntityID: fromID, ToEntityID: toID, CreatedAt: now, UpdatedAt: now},
+		}); err != nil {
+			return err
+		}
+		path := "edges/DEPENDS_ON/" + eID + ".json"
+		// The real EdgeJSON unmarshals from json:"from"/json:"to" keys, so the
+		// rewrite must emit those exact keys for the zero UUID to genuinely
+		// exercise the decode path.
+		rewrite := func(from, to uuid.UUID) error {
+			ej := struct {
+				ID           uuid.UUID         `json:"id"`
+				Type         string            `json:"type"`
+				FromEntityID uuid.UUID         `json:"from"`
+				ToEntityID   uuid.UUID         `json:"to"`
+				Properties   map[string]string `json:"properties,omitempty"`
+				CreatedAt    time.Time         `json:"created_at"`
+				UpdatedAt    time.Time         `json:"updated_at"`
+			}{
+				ID:           uuid.MustParse(eID),
+				Type:         "DEPENDS_ON",
+				FromEntityID: from,
+				ToEntityID:   to,
+				CreatedAt:    now,
+				UpdatedAt:    now,
+			}
+			data, err := json.Marshal(ej)
+			if err != nil {
+				return err
+			}
+			f, err := gs.fs.Create(path)
+			if err != nil {
+				return fmt.Errorf("recreate zero-endpoint edge file: %w", err)
+			}
+			if _, err := f.Write(data); err != nil {
+				_ = f.Close()
+				return fmt.Errorf("write zero-endpoint edge file: %w", err)
+			}
+			return f.Close()
+		}
+		// (a) Zero from endpoint.
+		if err := rewrite(uuid.Nil, uuid.MustParse(toID)); err != nil {
+			return err
+		}
+		if _, err := gs.ReadAllEdgeFiles(ctx(), "DEPENDS_ON"); !errors.Is(err, ErrInvalidUUID) {
+			return fmt.Errorf("expected ErrInvalidUUID for zero from endpoint, got %v", err)
+		}
+		// (b) Zero to endpoint.
+		if err := rewrite(uuid.MustParse(fromID), uuid.Nil); err != nil {
+			return err
+		}
+		if _, err := gs.ReadAllEdgeFiles(ctx(), "DEPENDS_ON"); !errors.Is(err, ErrInvalidUUID) {
+			return fmt.Errorf("expected ErrInvalidUUID for zero to endpoint, got %v", err)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("TestReadAllEdgeFilesZeroFromToGuard: %v", err)
+	}
+}
+
 // TestWriteEdgeFilesTypeMismatch asserts that writing an edge whose Type
 // differs from the batch type returns ErrEdgeTypeMismatch (edge.go:109).
 func TestWriteEdgeFilesTypeMismatch(t *testing.T) {

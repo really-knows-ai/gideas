@@ -86,6 +86,25 @@ func (g *gitStore) ReadAllEdgeFiles(ctx context.Context, edgeType string) ([]Edg
 				_ = f.Close()
 				return EdgeFile{}, fmt.Errorf("%w: %q != %q", ErrEdgeTypeMismatch, edgeType, ej.Type)
 			}
+			// Guard against a zero or non-v4 from/to endpoint. writeEdgeFile
+			// rejects these (ErrInvalidUUID), and recovery reconstruction and
+			// refresh snapshots consume this path — a file whose embedded
+			// endpoint is uuid.Nil or not version 4 (external corruption) must
+			// surface the same sentinel rather than load an edge pointing at a
+			// never-valid UUID. Version() is 0 for uuid.Nil, so the single
+			// version check covers both.
+			if ej.FromEntityID.Version() != 4 {
+				_ = f.Close()
+				return EdgeFile{}, fmt.Errorf(
+					"%w: edge file %s embedded from %s is not a valid UUID v4",
+					ErrInvalidUUID, fi.Name(), ej.FromEntityID)
+			}
+			if ej.ToEntityID.Version() != 4 {
+				_ = f.Close()
+				return EdgeFile{}, fmt.Errorf(
+					"%w: edge file %s embedded to %s is not a valid UUID v4",
+					ErrInvalidUUID, fi.Name(), ej.ToEntityID)
+			}
 			// A Close error signals an I/O problem reading the file; propagating it
 			// prevents a clean-but-corrupt read from silently passing.
 			if err := f.Close(); err != nil {
