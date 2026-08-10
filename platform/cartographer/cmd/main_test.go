@@ -271,6 +271,42 @@ func TestTryRemotePullOnInitCloneBounded(t *testing.T) {
 	}
 }
 
+// TestTryRemotePullOnInitPreflightReadBounded pins the pre-flight Secret-read
+// deadline: the boot-path auth check is a network-touching boot step, so its
+// Secret read carries the same per-operation deadline the sync worker applies
+// to every git operation (service.DefaultGitOperationTimeout, SPEC R10 /
+// SPEC:981) — a hung or unreachable k8s API server must fail startup within a
+// bounded window instead of blocking it indefinitely.
+func TestTryRemotePullOnInitPreflightReadBounded(t *testing.T) {
+	gs := &initPullGitStore{isEmpty: true}
+	var readCtx context.Context
+	readSecretFn := func(ctx context.Context, name string) (map[string]string, error) {
+		readCtx = ctx
+		return map[string]string{"password": "valid-pass"}, nil
+	}
+	if _, err := tryRemotePullOnInit(gs, "https://private.example/repo.git", "remote-auth", "",
+		readSecretFn, nil, nil); err != nil {
+		t.Fatalf("tryRemotePullOnInit: %v", err)
+	}
+	if gs.cloneCalls != 1 {
+		t.Fatalf("clone calls = %d, want 1 (pre-flight passed, clone ran)", gs.cloneCalls)
+	}
+	if readCtx == nil {
+		t.Fatal("expected the pre-flight Secret read to receive a context, got nil")
+	}
+	deadline, ok := readCtx.Deadline()
+	if !ok {
+		t.Fatal("expected the pre-flight Secret read to carry a deadline (bounded read), got none")
+	}
+	wantDeadline := time.Now().Add(service.DefaultGitOperationTimeout)
+	if deadline.Before(time.Now()) {
+		t.Fatalf("pre-flight read deadline %v is already in the past", deadline)
+	}
+	if delta := wantDeadline.Sub(deadline); delta > 5*time.Second {
+		t.Fatalf("pre-flight read deadline %v deviates %v from %v (wrong timeout?)", deadline, delta, wantDeadline)
+	}
+}
+
 func TestTryRemotePullOnInitConfiguredSecretFailure(t *testing.T) {
 	gs := &initPullGitStore{isEmpty: true}
 	secretErr := errors.New("secret unavailable")
@@ -1221,6 +1257,43 @@ func TestBuildResolveAuthFnReadSecretErrorPropagates(t *testing.T) {
 	}
 }
 
+// TestBuildResolveAuthFnSecretReadBounded pins the resolver's bounded Secret
+// read: go-git invokes the resolver without a context (the authFn signature
+// carries none), so the resolver must bound its own read with the sync worker's
+// per-operation deadline (service.DefaultGitOperationTimeout, SPEC R10 /
+// SPEC:981) — a hung k8s API server aborts the read with a context error
+// instead of blocking the worker's git operation past its deadline and wedging
+// the worker.
+func TestBuildResolveAuthFnSecretReadBounded(t *testing.T) {
+	var readCtx context.Context
+	readSecretFn := func(ctx context.Context, name string) (map[string]string, error) {
+		readCtx = ctx
+		return map[string]string{"username": tSecretUsername, "password": tSecretPassword}, nil
+	}
+	fn := buildResolveAuthFn("remote-auth", readSecretFn, "https://private.example/repo.git")
+	auth, err := fn()
+	if err != nil {
+		t.Fatalf("auth resolution failed: %v", err)
+	}
+	if auth == nil {
+		t.Fatal("expected non-nil auth, got nil")
+	}
+	if readCtx == nil {
+		t.Fatal("expected the resolver's Secret read to receive a context, got nil")
+	}
+	deadline, ok := readCtx.Deadline()
+	if !ok {
+		t.Fatal("expected the resolver's Secret read to carry a deadline (bounded read), got none")
+	}
+	wantDeadline := time.Now().Add(service.DefaultGitOperationTimeout)
+	if deadline.Before(time.Now()) {
+		t.Fatalf("resolver read deadline %v is already in the past", deadline)
+	}
+	if delta := wantDeadline.Sub(deadline); delta > 5*time.Second {
+		t.Fatalf("resolver read deadline %v deviates %v from %v (wrong timeout?)", deadline, delta, wantDeadline)
+	}
+}
+
 // TestBuildResolveAuthFnSSHSigner verifies SPEC R1: an ssh:// URL with a valid
 // ssh-privatekey produces a public-key SSH signer (with insecure host-key
 // verification when no known_hosts is supplied).
@@ -1508,8 +1581,8 @@ func TestBuildResolveAuthFnURLParseFailure(t *testing.T) {
 	readSecretFn := func(ctx context.Context, name string) (map[string]string, error) {
 		return map[string]string{"username": tSecretUsername, "password": tSecretPassword}, nil
 	}
-	// malformedURL contains a NUL control character, which url.Parse rejects
-	// ("net/url: invalid control character in URL").
+	// malformedURL contains an invalid percent-escape, which url.Parse rejects
+	// ("net/url: invalid URL escape \"%zz\"").
 	malformedURL := "https://host/%zz"
 	// Guard the fixture: this must actually be a URL url.Parse rejects, or the
 	// test is asserting the wrong branch.
