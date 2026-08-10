@@ -544,9 +544,16 @@ func classifySyncError(err error) syncClassification {
 	// pre-flight config errors where "the git operation cannot be attempted at
 	// all" (SPEC:123) — missing auth config and an unsupported remote URL
 	// scheme (SPEC error-table row "Unsupported remote URL scheme" →
-	// INVALID_ARGUMENT). A scheme that is not https:// or ssh:// is permanent,
-	// so retrying it within the cycle can never succeed; it must fail the
-	// cycle immediately so Sync() surfaces INVALID_ARGUMENT via mapGitError.
+	// INVALID_ARGUMENT, pinned by TestSync_WakesWorkerAndBlocks). A scheme
+	// that is not https:// or ssh:// is permanent, so retrying it within the
+	// cycle can never succeed; it must fail the cycle immediately so Sync()
+	// surfaces the mapped status. In production the unsupported-scheme error
+	// is unreachable in this cycle — SetRemote validates the scheme once at
+	// startup and resolveAuth folds any resolver error (including
+	// buildResolveAuthFn's unsupported-scheme default branch) into
+	// ErrAuthConfigMissing — so a broken remote URL instead surfaces as
+	// ErrNoRemote (FAILED_PRECONDITION "no remote configured", errors.go);
+	// the branch is kept as the test-injectable mapping for the SPEC row.
 	if errors.Is(err, gitstore.ErrAuthFailed) ||
 		errors.Is(err, gitstore.ErrAuthConfigMissing) ||
 		errors.Is(err, gitstore.ErrUnsupportedURLScheme) ||
