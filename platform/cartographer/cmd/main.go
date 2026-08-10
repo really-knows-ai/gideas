@@ -202,20 +202,30 @@ func main() {
 		if err := gs.SetRemote(context.Background(), remoteURL, resolveAuthFn); err != nil {
 			// ponytail: a misconfigured remote (unsupported or erroneous URL
 			// scheme, parse failure, or missing host) is warn-logged but not
-			// fatal at startup. SetRemote validates the URL scheme and returns
-			// ErrUnsupportedURLScheme for non-https/ssh/file schemes, but the failure
-			// is only surfaced here; the scheme is never re-validated until the
-			// next runtime sync (error-table "Unsupported remote URL scheme" →
-			// INVALID_ARGUMENT). Consequence: when pullOnInit is false
-			// (the common default), a broken remote URL silently degrades — the
-			// operator sees only a Warn log at startup and an INVALID_ARGUMENT
-			// on the first pull/push, with no init-time signal for the
-			// misconfiguration. The SPEC only mandates scheme validation at
-			// pull/push time (R10), so this is spec-compliant but the
-			// silent-degradation seam is wider than a one-shot startup check.
-			// Upgrade path: fail startup (os.Exit) on SetRemote error when
-			// remoteURL is explicitly set, since an operator who configures a
-			// remote URL intends it to work; revisit if silent degradation for
+			// fatal at startup whenever pullOnInit is false (the common
+			// default) — and also when pullOnInit is true with no secretRef,
+			// since tryRemotePullOnInit's pre-flight short-circuits on an empty
+			// secretRef and never re-parses the URL. In those cases SetRemote
+			// validates the URL scheme and returns ErrUnsupportedURLScheme for
+			// non-https/ssh/file schemes, but the failure is only surfaced
+			// here; the scheme is never re-validated until the next runtime
+			// sync (error-table "Unsupported remote URL scheme" →
+			// INVALID_ARGUMENT). When pullOnInit is true AND a secretRef is
+			// configured, the scheme IS re-validated before any runtime sync:
+			// the pre-flight authFn re-parses the URL and returns
+			// ErrUnsupportedURLScheme for unsupported schemes, which main turns
+			// into os.Exit(1) — fatal at startup. Consequence: when pullOnInit
+			// is false (the common default), a broken remote URL silently
+			// degrades — the operator sees only a Warn log at startup and an
+			// INVALID_ARGUMENT on the first pull/push, with no init-time signal
+			// for the misconfiguration. The SPEC only mandates scheme
+			// validation at pull/push time (R10), so this is spec-compliant but
+			// the silent-degradation seam is wider than a one-shot startup
+			// check. Upgrade path: make the fatal behavior unconditional — fail
+			// startup (os.Exit) on SetRemote error whenever remoteURL is
+			// explicitly set, i.e. also when pullOnInit is false (the
+			// pullOnInit=true + secretRef path already fails startup via the
+			// pre-flight re-validation); revisit if silent degradation for
 			// optional remotes becomes a product requirement.
 			slog.Warn("Failed to configure remote", "error", err)
 		} else {
@@ -521,16 +531,24 @@ func tryRemotePullOnInit(
 		if remoteAuthSecretRef == "" {
 			return nil
 		}
+		parsedURL, parseErr := url.Parse(remoteURL)
+		if parseErr != nil {
+			return fmt.Errorf("pre-flight auth: parse URL: %w", parseErr)
+		}
+		// SPEC.md:91-100 defines secret data keys only for ssh:// and
+		// https://; a file:// remote has no auth keys and proceeds
+		// anonymously (SPEC error-table row 987 lists file:// as a supported
+		// scheme). Short-circuit before the Secret read so a configured
+		// secretRef — or a Secret-read failure — cannot block it.
+		if parsedURL.Scheme == "file" {
+			return nil
+		}
 		if readSecretFn == nil {
 			return gitstore.ErrAuthConfigMissing
 		}
 		data, err := readSecretFn(context.Background(), remoteAuthSecretRef)
 		if err != nil {
 			return fmt.Errorf("pre-flight auth: read secret: %w", err)
-		}
-		parsedURL, parseErr := url.Parse(remoteURL)
-		if parseErr != nil {
-			return fmt.Errorf("pre-flight auth: parse URL: %w", parseErr)
 		}
 		switch parsedURL.Scheme {
 		case "ssh":
@@ -543,11 +561,6 @@ func tryRemotePullOnInit(
 			if len(data["password"]) == 0 {
 				return gitstore.ErrAuthConfigMissing
 			}
-		case "file":
-			// SPEC.md:91-100 defines secret data keys only for ssh:// and
-			// https://; a file:// remote has no auth keys and proceeds
-			// anonymously (SPEC error-table row 987 lists file:// as a
-			// supported scheme). A configured secretRef must not block it.
 		default:
 			return gitstore.ErrUnsupportedURLScheme
 		}
@@ -635,6 +648,20 @@ func buildResolveAuthFn(
 		if remoteAuthSecretRef == "" {
 			return nil, nil
 		}
+		parsedURL, parseErr := url.Parse(remoteURL)
+		if parseErr != nil {
+			return nil, parseErr
+		}
+		// SPEC.md:91-100 defines secret data keys only for ssh:// and https://;
+		// a file:// remote has no auth keys, so a configured secretRef resolves
+		// to explicit anonymous access (SPEC error-table row 987 lists file://
+		// as a supported scheme). Short-circuit before the Secret read — or its
+		// nil-reader guard — so neither a missing reader nor a Secret-read
+		// failure can block a file:// remote. This mirrors gitstore's
+		// requiresAuth, which never demands credentials for file:// remotes.
+		if parsedURL.Scheme == "file" {
+			return nil, nil
+		}
 		// Mirror tryRemotePullOnInit's pre-flight: a configured Secret ref with
 		// no way to read it must fail closed (ErrAuthConfigMissing) rather than
 		// widen to anonymous access — the git operation cannot be attempted
@@ -646,10 +673,6 @@ func buildResolveAuthFn(
 		data, err := readSecretFn(context.Background(), remoteAuthSecretRef)
 		if err != nil {
 			return nil, err
-		}
-		parsedURL, parseErr := url.Parse(remoteURL)
-		if parseErr != nil {
-			return nil, parseErr
 		}
 		switch parsedURL.Scheme {
 		case "ssh":
@@ -703,14 +726,6 @@ func buildResolveAuthFn(
 				return &http.BasicAuth{Username: httpsUser, Password: password}, nil
 			}
 			return nil, gitstore.ErrAuthConfigMissing
-		case "file":
-			// SPEC.md:91-100 defines secret data keys only for ssh:// and
-			// https://; a file:// remote has no auth keys, so a configured
-			// secretRef resolves to explicit anonymous access (SPEC error-table
-			// row 987 lists file:// as a supported scheme). This mirrors
-			// gitstore's requiresAuth, which never demands credentials for
-			// file:// remotes.
-			return nil, nil
 		default:
 			return nil, gitstore.ErrUnsupportedURLScheme
 		}

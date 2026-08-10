@@ -292,6 +292,23 @@ func TestTryRemotePullOnInitFileSchemeAnonymous(t *testing.T) {
 	if gs.cloneCalls != 1 {
 		t.Fatalf("file:// clone calls = %d, want 1", gs.cloneCalls)
 	}
+	// The file:// short-circuit precedes the Secret read: even a failing
+	// reader must not block a file:// remote (SPEC.md:91-100 defines auth keys
+	// only for ssh:// and https://).
+	failGS := &initPullGitStore{isEmpty: true}
+	catchUp, err = tryRemotePullOnInit(failGS, "file:///tmp/repo.git", "remote-auth",
+		func(context.Context, string) (map[string]string, error) {
+			return nil, errors.New("secret unavailable")
+		}, nil, nil)
+	if err != nil {
+		t.Fatalf("file:// pre-flight with failing reader error = %v, want nil (anonymous)", err)
+	}
+	if catchUp {
+		t.Fatal("file:// clone path with failing reader must not flag a catch-up push")
+	}
+	if failGS.cloneCalls != 1 {
+		t.Fatalf("file:// clone calls with failing reader = %d, want 1", failGS.cloneCalls)
+	}
 }
 
 // TestTryRemotePullOnInitHTTPSMissingPasswordFailsClosed verifies the
@@ -1384,6 +1401,20 @@ func TestBuildResolveAuthFnUnsupportedScheme(t *testing.T) {
 		}
 		if auth != nil {
 			t.Fatalf("expected nil (anonymous) auth for file://, got %v", auth)
+		}
+		// The file:// short-circuit precedes the Secret read: even a failing
+		// reader must not block a file:// remote (SPEC.md:91-100 defines auth
+		// keys only for ssh:// and https://).
+		failingFn := buildResolveAuthFn("remote-auth",
+			func(ctx context.Context, name string) (map[string]string, error) {
+				return nil, errors.New("secret unavailable")
+			}, "file:///tmp/repo.git")
+		auth, err = failingFn()
+		if err != nil {
+			t.Fatalf("expected nil error for file:// with failing reader, got %v", err)
+		}
+		if auth != nil {
+			t.Fatalf("expected nil (anonymous) auth for file:// with failing reader, got %v", auth)
 		}
 	})
 }
