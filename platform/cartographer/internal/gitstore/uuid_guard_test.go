@@ -97,3 +97,30 @@ func TestWriteEdgeFilesRejectsNonCanonicalUUID(t *testing.T) {
 		t.Fatalf("TestWriteEdgeFilesRejectsNonCanonicalUUID: %v", err)
 	}
 }
+
+// TestCreateBranchRejectsNonCanonicalUUID pins the canonical-form guard on the
+// branch-creation path (CreateBranch): every non-canonical spelling must
+// surface ErrInvalidUUID before anything is persisted. The txID becomes the
+// branch name, so a non-canonical spelling of a valid UUID must be rejected
+// per SPEC:978 ("Invalid transaction ID format" error-table row), matching the
+// entity/edge write-path gate (uuidutil.Validate).
+func TestCreateBranchRejectsNonCanonicalUUID(t *testing.T) {
+	gs := setupTestStore(t)
+	err := gs.WithGitLock(func() error {
+		// Positive control: the canonical spelling must still pass.
+		if err := gs.CreateBranch(ctx(), "550e8400-e29b-41d4-a716-446655440000"); err != nil {
+			return fmt.Errorf("canonical txID rejected: %w", err)
+		}
+
+		for _, id := range nonCanonicalSpellings {
+			err := gs.CreateBranch(ctx(), id)
+			if !errors.Is(err, ErrInvalidUUID) {
+				return fmt.Errorf("CreateBranch(%q) = %v, want ErrInvalidUUID", id, err)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("TestCreateBranchRejectsNonCanonicalUUID: %v", err)
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -69,9 +70,24 @@ func (g *gitStore) ReadAllEdgeFiles(ctx context.Context, edgeType string) ([]Edg
 			if err != nil {
 				return EdgeFile{}, fmt.Errorf("open edge file %s: %w", fi.Name(), err)
 			}
-			var ej EdgeJSON
-			if err := json.NewDecoder(f).Decode(&ej); err != nil {
+			// Read the entire file and unmarshal it as a single document.
+			// json.Unmarshal rejects trailing content after the top-level value,
+			// whereas a streaming Decoder.Decode would silently consume only the
+			// first of two concatenated documents — a corrupted file must fail
+			// loudly like every sibling corruption guard (SPEC R8), not
+			// truncate.
+			data, err := io.ReadAll(f)
+			if err != nil {
 				_ = f.Close()
+				return EdgeFile{}, fmt.Errorf("read edge file %s: %w", fi.Name(), err)
+			}
+			// A Close error signals an I/O problem reading the file; propagating it
+			// prevents a clean-but-corrupt read from silently passing.
+			if err := f.Close(); err != nil {
+				return EdgeFile{}, fmt.Errorf("close edge file %s: %w", fi.Name(), err)
+			}
+			var ej EdgeJSON
+			if err := json.Unmarshal(data, &ej); err != nil {
 				return EdgeFile{}, fmt.Errorf("decode edge file %s: %w", fi.Name(), err)
 			}
 			// Guard against the embedded id conflicting with the filename. A
@@ -79,11 +95,13 @@ func (g *gitStore) ReadAllEdgeFiles(ctx context.Context, edgeType string) ([]Edg
 			// filename base (writeEdgeFile); a file whose embedded id differs
 			// (external corruption) would otherwise be loaded under an id that
 			// was never written to that path, hiding the intended-UUID file
-			// during R8 re-hydration. Compare parsed UUIDs so a case-only
-			// filename/body variation is not treated as corruption.
-			fileID, fileErr := uuid.Parse(strings.TrimSuffix(fi.Name(), ".json"))
-			if fileErr != nil || fileID != ej.ID {
-				_ = f.Close()
+			// during R8 re-hydration. The raw filename base must equal the
+			// canonical spelling (ej.ID.String()): comparing parsed UUIDs would
+			// normalise case and admit an uppercase-spelled <id>.json coexisting
+			// with the canonical file for one UUID — the two-files-one-UUID
+			// hazard SPEC:162/:944 prevent on the write path, so a case-variant
+			// file is corruption.
+			if base := strings.TrimSuffix(fi.Name(), ".json"); base != ej.ID.String() {
 				return EdgeFile{}, fmt.Errorf("edge file %s embedded id %s conflicts with filename", fi.Name(), ej.ID)
 			}
 			// Guard against a zero or non-v4 embedded id. writeEdgeFile
@@ -94,7 +112,6 @@ func (g *gitStore) ReadAllEdgeFiles(ctx context.Context, edgeType string) ([]Edg
 			// UUID. Version() is 0 for uuid.Nil, so the single version check
 			// covers both.
 			if ej.ID.Version() != 4 {
-				_ = f.Close()
 				return EdgeFile{}, fmt.Errorf(
 					"%w: edge file %s embedded id %s is not a valid UUID v4",
 					ErrInvalidUUID, fi.Name(), ej.ID)
@@ -106,7 +123,6 @@ func (g *gitStore) ReadAllEdgeFiles(ctx context.Context, edgeType string) ([]Edg
 			// directory (external corruption) must surface the same sentinel
 			// rather than load under a never-written type.
 			if edgeType != ej.Type {
-				_ = f.Close()
 				return EdgeFile{}, fmt.Errorf("%w: %q != %q", ErrEdgeTypeMismatch, edgeType, ej.Type)
 			}
 			// Guard against a zero or non-v4 from/to endpoint. writeEdgeFile
@@ -117,21 +133,14 @@ func (g *gitStore) ReadAllEdgeFiles(ctx context.Context, edgeType string) ([]Edg
 			// never-valid UUID. Version() is 0 for uuid.Nil, so the single
 			// version check covers both.
 			if ej.FromEntityID.Version() != 4 {
-				_ = f.Close()
 				return EdgeFile{}, fmt.Errorf(
 					"%w: edge file %s embedded from %s is not a valid UUID v4",
 					ErrInvalidUUID, fi.Name(), ej.FromEntityID)
 			}
 			if ej.ToEntityID.Version() != 4 {
-				_ = f.Close()
 				return EdgeFile{}, fmt.Errorf(
 					"%w: edge file %s embedded to %s is not a valid UUID v4",
 					ErrInvalidUUID, fi.Name(), ej.ToEntityID)
-			}
-			// A Close error signals an I/O problem reading the file; propagating it
-			// prevents a clean-but-corrupt read from silently passing.
-			if err := f.Close(); err != nil {
-				return EdgeFile{}, fmt.Errorf("close edge file %s: %w", fi.Name(), err)
 			}
 			ef := EdgeFile{
 				ID:           ej.ID.String(),

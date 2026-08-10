@@ -623,6 +623,105 @@ func TestReadAllEntityFilesCorrupt(t *testing.T) {
 	}
 }
 
+// TestReadAllEntityFilesTrailingContentRejected: a JSON entity file holding
+// two concatenated documents (external corruption) must surface an error, not
+// silently load only the first document. The read path decodes the full file
+// content (json.Unmarshal), which rejects trailing data after the top-level
+// value, whereas a streaming Decode would consume just the first value (SPEC
+// R8 corruption recovery).
+func TestReadAllEntityFilesTrailingContentRejected(t *testing.T) {
+	gs := setupTestStore(t)
+	err := gs.WithGitLock(func() error {
+		now := time.Now().UTC().Round(time.Millisecond)
+		eID := validUUID(t)
+		if err := gs.WriteEntityFiles(ctx(), "Component", []Entity{
+			{ID: eID, Type: "Component", CreatedAt: now, UpdatedAt: now},
+		}); err != nil {
+			return err
+		}
+		path := "entities/Component/" + eID + ".json"
+		// Rewrite the file with two concatenated JSON documents: the first is
+		// the valid entity, the second is a trailing document that a streaming
+		// decode would silently ignore.
+		first := fmt.Appendf(nil,
+			`{"id":%q,"type":"Component","created_at":%q,"updated_at":%q}`,
+			eID, now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano))
+		second := fmt.Appendf(nil,
+			`{"id":%q,"type":"Component","created_at":%q,"updated_at":%q}`,
+			validUUID(t), now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano))
+		concat := append(append([]byte{}, first...), second...)
+		f, err := gs.fs.Create(path)
+		if err != nil {
+			return fmt.Errorf("recreate concatenated file: %w", err)
+		}
+		if _, err := f.Write(concat); err != nil {
+			_ = f.Close()
+			return fmt.Errorf("write concatenated entity file: %w", err)
+		}
+		if err := f.Close(); err != nil {
+			return fmt.Errorf("close concatenated entity file: %w", err)
+		}
+		if _, err := gs.ReadAllEntityFiles(ctx(), "Component"); err == nil {
+			return fmt.Errorf("expected error for concatenated entity content, got nil")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("TestReadAllEntityFilesTrailingContentRejected: %v", err)
+	}
+}
+
+// TestReadAllEntityFilesCaseVariantFilenameRejected: an uppercase-spelled
+// <id>.json coexisting with the canonical <id>.json for one UUID (external
+// corruption) must surface an error, not load the same entity twice. The write
+// path only ever persists the canonical spelling (uuidutil.Validate), so a
+// case-variant filename is the two-files-one-UUID hazard SPEC:162/:944 exist
+// to prevent; the read path must reject it (SPEC R8 corruption recovery).
+func TestReadAllEntityFilesCaseVariantFilenameRejected(t *testing.T) {
+	gs := setupTestStore(t)
+	err := gs.WithGitLock(func() error {
+		now := time.Now().UTC().Round(time.Millisecond)
+		eID := validUUID(t)
+		if err := gs.WriteEntityFiles(ctx(), "Component", []Entity{
+			{ID: eID, Type: "Component", CreatedAt: now, UpdatedAt: now},
+		}); err != nil {
+			return err
+		}
+		// A second file under the uppercase spelling of the same id, with the
+		// canonical id embedded: a parsed-UUID comparison would accept it.
+		upperPath := "entities/Component/" + strings.ToUpper(eID) + ".json"
+		ej := struct {
+			ID         uuid.UUID         `json:"id"`
+			Type       string            `json:"type"`
+			Properties map[string]string `json:"properties,omitempty"`
+			CreatedAt  time.Time         `json:"created_at"`
+			UpdatedAt  time.Time         `json:"updated_at"`
+		}{ID: uuid.MustParse(eID), Type: "Component", CreatedAt: now, UpdatedAt: now}
+		data, err := json.Marshal(ej)
+		if err != nil {
+			return err
+		}
+		f, err := gs.fs.Create(upperPath)
+		if err != nil {
+			return fmt.Errorf("create case-variant entity file: %w", err)
+		}
+		if _, err := f.Write(data); err != nil {
+			_ = f.Close()
+			return fmt.Errorf("write case-variant entity file: %w", err)
+		}
+		if err := f.Close(); err != nil {
+			return fmt.Errorf("close case-variant entity file: %w", err)
+		}
+		if _, err := gs.ReadAllEntityFiles(ctx(), "Component"); err == nil {
+			return fmt.Errorf("expected error for case-variant entity filename, got nil")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("TestReadAllEntityFilesCaseVariantFilenameRejected: %v", err)
+	}
+}
+
 // TestReadAllEntityFilesIDFilenameConflict: a JSON entity file whose embedded id
 // differs from its filename (external corruption) must surface an error, not be
 // silently loaded under the conflicting id (SPEC R8 corruption recovery). Without
@@ -1089,6 +1188,118 @@ func TestReadAllEdgeFilesCorrupt(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("ReadAllEdgeFilesCorrupt: %v", err)
+	}
+}
+
+// TestReadAllEdgeFilesTrailingContentRejected: a JSON edge file holding two
+// concatenated documents (external corruption) must surface an error, not
+// silently load only the first document. The read path decodes the full file
+// content (json.Unmarshal), which rejects trailing data after the top-level
+// value, whereas a streaming Decode would consume just the first value (SPEC
+// R8 corruption recovery).
+func TestReadAllEdgeFilesTrailingContentRejected(t *testing.T) {
+	gs := setupTestStore(t)
+	err := gs.WithGitLock(func() error {
+		now := time.Now().UTC().Round(time.Millisecond)
+		eID := validUUID(t)
+		fromID := validUUID(t)
+		toID := validUUID(t)
+		if err := gs.WriteEdgeFiles(ctx(), "DEPENDS_ON", []Edge{
+			{ID: eID, Type: "DEPENDS_ON", FromEntityID: fromID, ToEntityID: toID, CreatedAt: now, UpdatedAt: now},
+		}); err != nil {
+			return err
+		}
+		path := "edges/DEPENDS_ON/" + eID + ".json"
+		// Rewrite the file with two concatenated JSON documents: the first is
+		// the valid edge, the second is a trailing document that a streaming
+		// decode would silently ignore.
+		first := fmt.Appendf(nil,
+			`{"id":%q,"type":"DEPENDS_ON","from":%q,"to":%q,"created_at":%q,"updated_at":%q}`,
+			eID, fromID, toID, now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano))
+		second := fmt.Appendf(nil,
+			`{"id":%q,"type":"DEPENDS_ON","from":%q,"to":%q,"created_at":%q,"updated_at":%q}`,
+			validUUID(t), fromID, toID, now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano))
+		concat := append(append([]byte{}, first...), second...)
+		f, err := gs.fs.Create(path)
+		if err != nil {
+			return fmt.Errorf("recreate concatenated file: %w", err)
+		}
+		if _, err := f.Write(concat); err != nil {
+			_ = f.Close()
+			return fmt.Errorf("write concatenated edge file: %w", err)
+		}
+		if err := f.Close(); err != nil {
+			return fmt.Errorf("close concatenated edge file: %w", err)
+		}
+		if _, err := gs.ReadAllEdgeFiles(ctx(), "DEPENDS_ON"); err == nil {
+			return fmt.Errorf("expected error for concatenated edge content, got nil")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("TestReadAllEdgeFilesTrailingContentRejected: %v", err)
+	}
+}
+
+// TestReadAllEdgeFilesCaseVariantFilenameRejected: an uppercase-spelled
+// <id>.json coexisting with the canonical <id>.json for one UUID (external
+// corruption) must surface an error, not load the same edge twice. The write
+// path only ever persists the canonical spelling (uuidutil.Validate), so a
+// case-variant filename is the two-files-one-UUID hazard SPEC:162/:944 exist
+// to prevent; the read path must reject it (SPEC R8 corruption recovery).
+func TestReadAllEdgeFilesCaseVariantFilenameRejected(t *testing.T) {
+	gs := setupTestStore(t)
+	err := gs.WithGitLock(func() error {
+		now := time.Now().UTC().Round(time.Millisecond)
+		eID := validUUID(t)
+		fromID := validUUID(t)
+		toID := validUUID(t)
+		if err := gs.WriteEdgeFiles(ctx(), "DEPENDS_ON", []Edge{
+			{ID: eID, Type: "DEPENDS_ON", FromEntityID: fromID, ToEntityID: toID, CreatedAt: now, UpdatedAt: now},
+		}); err != nil {
+			return err
+		}
+		// A second file under the uppercase spelling of the same id, with the
+		// canonical id embedded: a parsed-UUID comparison would accept it.
+		upperPath := "edges/DEPENDS_ON/" + strings.ToUpper(eID) + ".json"
+		ej := struct {
+			ID           uuid.UUID         `json:"id"`
+			Type         string            `json:"type"`
+			FromEntityID uuid.UUID         `json:"from"`
+			ToEntityID   uuid.UUID         `json:"to"`
+			Properties   map[string]string `json:"properties,omitempty"`
+			CreatedAt    time.Time         `json:"created_at"`
+			UpdatedAt    time.Time         `json:"updated_at"`
+		}{
+			ID:           uuid.MustParse(eID),
+			Type:         "DEPENDS_ON",
+			FromEntityID: uuid.MustParse(fromID),
+			ToEntityID:   uuid.MustParse(toID),
+			CreatedAt:    now,
+			UpdatedAt:    now,
+		}
+		data, err := json.Marshal(ej)
+		if err != nil {
+			return err
+		}
+		f, err := gs.fs.Create(upperPath)
+		if err != nil {
+			return fmt.Errorf("create case-variant edge file: %w", err)
+		}
+		if _, err := f.Write(data); err != nil {
+			_ = f.Close()
+			return fmt.Errorf("write case-variant edge file: %w", err)
+		}
+		if err := f.Close(); err != nil {
+			return fmt.Errorf("close case-variant edge file: %w", err)
+		}
+		if _, err := gs.ReadAllEdgeFiles(ctx(), "DEPENDS_ON"); err == nil {
+			return fmt.Errorf("expected error for case-variant edge filename, got nil")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("TestReadAllEdgeFilesCaseVariantFilenameRejected: %v", err)
 	}
 }
 
