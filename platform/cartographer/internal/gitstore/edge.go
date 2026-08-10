@@ -8,14 +8,21 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/foundry/flow/cartographer/internal/uuidutil"
 	"github.com/google/uuid"
 )
 
 // WriteEdgeFiles batch-writes all edge files for a single type.
-// Parses each edge's ID, FromEntityID, and ToEntityID as UUID v4 and
-// returns ErrInvalidUUID if any is invalid. Non-existent files for edges
-// absent from the provided slice are NOT removed — the caller must separately
-// call RemoveEdgeFiles.
+// Parses each edge's ID, FromEntityID, and ToEntityID as canonical RFC4122 §3
+// UUID v4 and returns ErrInvalidUUID if any is invalid, including
+// non-canonical spellings of a valid UUID (uppercase hex, no-hyphen, braced,
+// urn:uuid:) that would be persisted verbatim as <id>.json and split one UUID
+// across two files (SPEC:162/:944). PRECONDITION: edgeType must match
+// [a-zA-Z_][a-zA-Z0-9_]* (as enforced by schema.Validate on ApplySchema) so
+// the type directory stays under edges/; a type name containing a path
+// separator would escape the tree. Non-existent files for edges absent from
+// the provided slice are NOT removed — the caller must separately call
+// RemoveEdgeFiles.
 func (g *gitStore) WriteEdgeFiles(ctx context.Context, edgeType string, edges []Edge) error {
 	for _, edge := range edges {
 		if err := g.writeEdgeFile(edgeType, edge); err != nil {
@@ -39,6 +46,9 @@ func (g *gitStore) RemoveEdgeFiles(ctx context.Context, edgeType string, ids []s
 // ReadAllEdgeFiles reads all JSON files under edges/<edgeType>/,
 // unmarshals them, and returns the result ordered by filename (alphabetical).
 // Returns an empty slice (not nil) when the directory does not exist or is empty.
+// PRECONDITION: edgeType must match [a-zA-Z_][a-zA-Z0-9_]* (as enforced by
+// schema.Validate on ApplySchema) so the type directory stays under edges/; a
+// type name containing a path separator would escape the tree.
 func (g *gitStore) ReadAllEdgeFiles(ctx context.Context, edgeType string) ([]EdgeFile, error) {
 	dir := filepath.Join("edges", edgeType)
 	entries, err := g.fs.ReadDir(dir)
@@ -156,25 +166,34 @@ func (g *gitStore) ListEdgeTypes(ctx context.Context) ([]string, error) {
 }
 
 // writeEdgeFile writes a single edge file. It parses the edge's ID,
-// FromEntityID, and ToEntityID as UUID v4, creates the directory if needed,
-// and marshals the edge to indented JSON.
+// FromEntityID, and ToEntityID as canonical RFC4122 §3 UUID v4 (rejecting the
+// non-canonical spellings that uuid.Parse alone would accept — the ID is
+// persisted verbatim as <id>.json), creates the directory if needed, and
+// marshals the edge to indented JSON. The edgeType must match
+// [a-zA-Z_][a-zA-Z0-9_]* (see WriteEdgeFiles).
 func (g *gitStore) writeEdgeFile(edgeType string, edge Edge) error {
 	if edgeType != edge.Type {
 		return fmt.Errorf("%w: %q != %q", ErrEdgeTypeMismatch, edgeType, edge.Type)
 	}
 
-	uid, err := uuid.Parse(edge.ID)
-	if err != nil || uid.Version() != 4 {
+	// SPEC:162/SPEC:944 require the canonical RFC4122 §3 UUID v4 string form
+	// (the lowercase 8-4-4-4-12 dashed string) for the edge ID and both
+	// endpoints. uuidutil.Validate — the same gate the store's write path
+	// uses — rejects the non-canonical spellings uuid.Parse accepts; the edge
+	// ID is persisted verbatim as <id>.json, so a second spelling of one UUID
+	// would split the edge across two files.
+	if err := uuidutil.Validate(edge.ID); err != nil {
 		return ErrInvalidUUID
 	}
-	fromUID, err := uuid.Parse(edge.FromEntityID)
-	if err != nil || fromUID.Version() != 4 {
+	if err := uuidutil.Validate(edge.FromEntityID); err != nil {
 		return ErrInvalidUUID
 	}
-	toUID, err := uuid.Parse(edge.ToEntityID)
-	if err != nil || toUID.Version() != 4 {
+	if err := uuidutil.Validate(edge.ToEntityID); err != nil {
 		return ErrInvalidUUID
 	}
+	uid := uuid.MustParse(edge.ID)
+	fromUID := uuid.MustParse(edge.FromEntityID)
+	toUID := uuid.MustParse(edge.ToEntityID)
 
 	ej := EdgeJSON{
 		ID:           uid,

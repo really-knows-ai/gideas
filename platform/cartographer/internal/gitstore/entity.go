@@ -9,14 +9,21 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/foundry/flow/cartographer/internal/uuidutil"
 	"github.com/go-git/go-billy/v5"
 	"github.com/google/uuid"
 )
 
 // WriteEntityFiles batch-writes all entity files for a single type.
-// Parses each entity's ID as a UUID v4 and returns ErrInvalidUUID if any
-// ID is invalid. Non-existent files for entities missing from the provided
-// slice are NOT removed — the caller must separately call RemoveEntityFiles.
+// Parses each entity's ID as a canonical RFC4122 §3 UUID v4 and returns
+// ErrInvalidUUID if any ID is invalid, including non-canonical spellings of a
+// valid UUID (uppercase hex, no-hyphen, braced, urn:uuid:) that would be
+// persisted verbatim as <id>.json and split one UUID across two files
+// (SPEC:162/:944). PRECONDITION: entityType must match [a-zA-Z_][a-zA-Z0-9_]* (as
+// enforced by schema.Validate on ApplySchema) so the type directory stays
+// under entities/; a type name containing a path separator would escape the
+// tree. Non-existent files for entities missing from the provided slice are
+// NOT removed — the caller must separately call RemoveEntityFiles.
 func (g *gitStore) WriteEntityFiles(ctx context.Context, entityType string, entities []Entity) error {
 	for _, ent := range entities {
 		if err := g.writeEntityFile(entityType, ent); err != nil {
@@ -40,6 +47,9 @@ func (g *gitStore) RemoveEntityFiles(ctx context.Context, entityType string, ids
 // ReadAllEntityFiles reads all JSON files under entities/<entityType>/,
 // unmarshals them, and returns the result ordered by filename (alphabetical).
 // Returns an empty slice (not nil) when the directory does not exist or is empty.
+// PRECONDITION: entityType must match [a-zA-Z_][a-zA-Z0-9_]* (as enforced by
+// schema.Validate on ApplySchema) so the type directory stays under entities/;
+// a type name containing a path separator would escape the tree.
 func (g *gitStore) ReadAllEntityFiles(ctx context.Context, entityType string) ([]EntityFile, error) {
 	dir := filepath.Join("entities", entityType)
 	entries, err := g.fs.ReadDir(dir)
@@ -138,18 +148,26 @@ func (g *gitStore) ListEntityTypes(ctx context.Context) ([]string, error) {
 	return listTypesWithJSON(g.fs, "entities")
 }
 
-// writeEntityFile writes a single entity file. It parses the entity's ID
-// as a UUID v4, creates the directory if needed, and marshals the entity
-// to indented JSON.
+// writeEntityFile writes a single entity file. It parses the entity's ID as
+// a canonical RFC4122 §3 UUID v4 (rejecting the non-canonical spellings that
+// uuid.Parse alone would accept — the ID is persisted verbatim as <id>.json),
+// creates the directory if needed, and marshals the entity to indented JSON.
+// The entityType must match [a-zA-Z_][a-zA-Z0-9_]* (see WriteEntityFiles).
 func (g *gitStore) writeEntityFile(entityType string, ent Entity) error {
 	if entityType != ent.Type {
 		return fmt.Errorf("%w: %q != %q", ErrEntityTypeMismatch, entityType, ent.Type)
 	}
 
-	uid, err := uuid.Parse(ent.ID)
-	if err != nil || uid.Version() != 4 {
+	// SPEC:162/SPEC:944 require the canonical RFC4122 §3 UUID v4 string form
+	// (the lowercase 8-4-4-4-12 dashed string). uuidutil.Validate — the same
+	// gate the store's write path uses — rejects the non-canonical spellings
+	// uuid.Parse accepts; a second spelling of one UUID persisted verbatim as
+	// <id>.json would split the entity across two files and bypass the
+	// CreateEntity ALREADY_EXISTS check (SPEC:162).
+	if err := uuidutil.Validate(ent.ID); err != nil {
 		return ErrInvalidUUID
 	}
+	uid := uuid.MustParse(ent.ID)
 
 	ej := EntityJSON{
 		ID:         uid,
