@@ -202,31 +202,26 @@ func main() {
 		if err := gs.SetRemote(context.Background(), remoteURL, resolveAuthFn); err != nil {
 			// ponytail: a misconfigured remote (unsupported or erroneous URL
 			// scheme, parse failure, or missing host) is warn-logged but not
-			// fatal at startup whenever pullOnInit is false (the common
-			// default) — and also when pullOnInit is true with no secretRef,
-			// since tryRemotePullOnInit's pre-flight short-circuits on an empty
-			// secretRef and never re-parses the URL. In those cases SetRemote
-			// validates the URL scheme and returns ErrUnsupportedURLScheme for
-			// non-https/ssh/file schemes, but the failure is only surfaced
-			// here; the scheme is never re-validated until the next runtime
-			// sync (error-table "Unsupported remote URL scheme" →
-			// INVALID_ARGUMENT). When pullOnInit is true AND a secretRef is
-			// configured, the scheme IS re-validated before any runtime sync:
-			// the pre-flight authFn re-parses the URL and returns
-			// ErrUnsupportedURLScheme for unsupported schemes, which main turns
-			// into os.Exit(1) — fatal at startup. Consequence: when pullOnInit
-			// is false (the common default), a broken remote URL silently
-			// degrades — the operator sees only a Warn log at startup and an
-			// INVALID_ARGUMENT on the first pull/push, with no init-time signal
-			// for the misconfiguration. The SPEC only mandates scheme
-			// validation at pull/push time (R10), so this is spec-compliant but
-			// the silent-degradation seam is wider than a one-shot startup
-			// check. Upgrade path: make the fatal behavior unconditional — fail
+			// fatal at startup. SetRemote validates the URL before storing it
+			// (remote.go validateRemoteURL), so after this failure g.remoteURL
+			// stays empty even though REMOTE_URL is set — and the sync worker
+			// is still created below because it keys off the env var, not
+			// g.remoteURL. The misconfiguration therefore degrades silently:
+			// the first cycle's fetch returns ErrNoRemote ("no remote
+			// configured"), which the fetch path treats as a benign no-op, and
+			// a pending catch-up push surfaces FAILED_PRECONDITION "no remote
+			// configured" via mapGitError (errors.go) on the WithAck/Commit
+			// surface — never INVALID_ARGUMENT. ErrUnsupportedURLScheme is
+			// unreachable in the sync cycle: the scheme was already validated
+			// here, and resolveAuth folds any resolver error (including
+			// buildResolveAuthFn's unsupported-scheme default branch) into
+			// ErrAuthConfigMissing. The one loud signal is the pullOnInit=true
+			// + secretRef startup path, whose pre-flight re-parses the URL and
+			// exits the process on an unsupported scheme (tryRemotePullOnInit).
+			// Upgrade path: make the fatal behavior unconditional — fail
 			// startup (os.Exit) on SetRemote error whenever remoteURL is
-			// explicitly set, i.e. also when pullOnInit is false (the
-			// pullOnInit=true + secretRef path already fails startup via the
-			// pre-flight re-validation); revisit if silent degradation for
-			// optional remotes becomes a product requirement.
+			// explicitly set; revisit if silent degradation for optional
+			// remotes becomes a product requirement.
 			slog.Warn("Failed to configure remote", "error", err)
 		} else {
 			slog.Info("Remote configured", "url", remoteURL)
@@ -269,14 +264,20 @@ func main() {
 	}
 
 	// -----------------------------------------------------------------------
-	// 7. Optional remote pull on init
+	// 7. Optional remote pull on init + startup catch-up push decision
 	// -----------------------------------------------------------------------
 	// initCatchUpPush records whether R10 Init found locally-committed-but-
-	// unpushed data that the sync worker's first cycle must push (SPEC R10 Init
-	// "The sync worker pushes any locally-committed-but-unpushed data on its
-	// first cycle (startup catch-up push)"; GIT_PLAN.md:33). The worker is
-	// constructed after this init path, so tryRemotePullOnInit reports the
-	// decision and main wires it into the worker before the first cycle runs.
+	// unpushed data that the sync worker's first cycle must push (SPEC R10 Init,
+	// SPEC.md:640-641: "The sync worker pushes any locally-committed-but-
+	// unpushed data on its first cycle (startup catch-up push), including any
+	// unsent commits from a prior pod lifetime"). The decision is independent
+	// of pullOnInit: the pull is optional, but the startup catch-up push is
+	// not — a prior pod that terminated before its push completed left its
+	// commits in the local git repo (the push flag itself is in-memory and is
+	// lost on restart), and only the worker's first cycle can deliver them.
+	// The worker is constructed after this init path, so tryRemotePullOnInit /
+	// startupCatchUpPushNeeded report the decision and main wires it into the
+	// worker before the first cycle runs.
 	var initCatchUpPush bool
 	if remotePullOnInit && remoteURL != "" {
 		catchUpPush, err := tryRemotePullOnInit(gs, remoteURL, remoteAuthSecretRef, readSecretFn, auditPub,
@@ -299,6 +300,14 @@ func main() {
 			os.Exit(1)
 		}
 		initCatchUpPush = catchUpPush
+	} else if remoteURL != "" {
+		// pullOnInit=false (the common default): no clone runs, but the
+		// startup catch-up push still applies — unsent commits from a prior pod
+		// lifetime must be delivered by the worker's first cycle
+		// (SPEC.md:640-641; GIT_PLAN.md:136's restart rationale depends on it).
+		// A repo-state check failure is logged and non-blocking, mirroring
+		// tryRemotePullOnInit's IsEmpty handling (SPEC R10 Init).
+		initCatchUpPush = startupCatchUpPushNeeded(context.Background(), gs)
 	}
 
 	// -----------------------------------------------------------------------
@@ -328,15 +337,17 @@ func main() {
 		syncOpts = append(syncOpts, service.SyncWorkerWithSyncInterval(syncInterval))
 		syncW = service.NewSyncWorker(remoteURL, gs, dbStore, service.RealClock{}, syncOpts...)
 		opts = append(opts, service.WithSyncWorker(syncW))
-		// SPEC R10 Init / GIT_PLAN.md:33: when init found committed-but-
-		// unpushed data (non-empty repo booting with pullOnInit), flag the
-		// push before the worker's first cycle runs so the startup catch-up
-		// push goes through the worker's error-table contract — recoverable
-		// failures retried within the cycle with backoff (up to 3 attempts)
-		// and the push flag left set for the next cycle; non-recoverable
-		// failures logged immediately + telemetry, flag left set — instead of
-		// a one-shot synchronous push that was logged + telemetry only and
-		// never retried until the next Commit() or a restart.
+		// SPEC R10 Init / SPEC.md:640-641: when init found committed-but-
+		// unpushed data (non-empty repo booting with a remote configured —
+		// independent of pullOnInit: the pull is optional, the startup
+		// catch-up push is not), flag the push before the worker's first cycle
+		// runs so the startup catch-up push goes through the worker's
+		// error-table contract — recoverable failures retried within the cycle
+		// with backoff (up to 3 attempts) and the push flag left set for the
+		// next cycle; non-recoverable failures logged immediately + telemetry,
+		// flag left set — instead of a one-shot synchronous push that was
+		// logged + telemetry only and never retried until the next Commit() or
+		// a restart.
 		if initCatchUpPush {
 			syncW.SetPushNeeded()
 		}
@@ -500,6 +511,28 @@ func rehydrateMainAfterRecovery(ctx context.Context, dbStore store.Store, gs git
 	}
 	slog.Info("Main re-hydrated from git working tree (SPEC R8 recovery)")
 	return nil
+}
+
+// startupCatchUpPushNeeded reports whether the sync worker's first cycle must
+// run the startup catch-up push (SPEC R10 Init, SPEC.md:640-641): the local
+// git repository holds graph-data commits (non-empty), which may include unsent
+// commits from a prior pod lifetime (the push flag itself is in-memory and is
+// lost on restart). It backs the pullOnInit=false path, where
+// tryRemotePullOnInit does not run — its pre-flight auth check and clone are
+// gated on pullOnInit, but the catch-up push is not. A repository-state check
+// failure is logged and treated as "no catch-up needed" (non-blocking),
+// mirroring tryRemotePullOnInit's IsEmpty handling (SPEC R10 Init).
+func startupCatchUpPushNeeded(ctx context.Context, gs gitstore.GitStore) bool {
+	var empty bool
+	if err := gs.WithGitLock(func() error {
+		var err error
+		empty, err = gs.IsEmpty(ctx)
+		return err
+	}); err != nil {
+		slog.Warn("Failed to check git repo state on init (non-blocking)", "error", err)
+		return false
+	}
+	return !empty
 }
 
 // tryRemotePullOnInit performs the SPEC R10 Init pre-flight auth check and the

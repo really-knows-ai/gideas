@@ -536,6 +536,37 @@ func TestTryRemotePullOnInitStateCheckFailureNonBlocking(t *testing.T) {
 	}
 }
 
+// TestStartupCatchUpPushNeeded verifies the pullOnInit=false startup catch-up
+// push decision (SPEC R10 Init, SPEC.md:640-641): a non-empty local repo —
+// which may hold unsent commits from a prior pod lifetime — must be flagged
+// for the sync worker's first cycle, independent of pullOnInit, while an empty
+// repo (nothing local to push) and a failed repo-state check (repo state
+// unknown, non-blocking) must not.
+func TestStartupCatchUpPushNeeded(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("non-empty repo needs a catch-up push", func(t *testing.T) {
+		gs := &initPullGitStore{isEmpty: false}
+		if !startupCatchUpPushNeeded(ctx, gs) {
+			t.Fatal("expected catch-up push for a non-empty repo (unsent commits from a prior pod lifetime)")
+		}
+	})
+
+	t.Run("empty repo needs no catch-up push", func(t *testing.T) {
+		gs := &initPullGitStore{isEmpty: true}
+		if startupCatchUpPushNeeded(ctx, gs) {
+			t.Fatal("expected no catch-up push for an empty repo (nothing local to push)")
+		}
+	})
+
+	t.Run("state-check failure is non-blocking", func(t *testing.T) {
+		gs := &initPullGitStore{isEmpty: false, initStateErr: errors.New("state check boom")}
+		if startupCatchUpPushNeeded(ctx, gs) {
+			t.Fatal("expected no catch-up push after a repo-state check failure (repo state unknown)")
+		}
+	})
+}
+
 // ---------------------------------------------------------------------------
 // SPEC R8 startup corruption-recovery re-hydration (rehydrateMainAfterRecovery)
 // ---------------------------------------------------------------------------
