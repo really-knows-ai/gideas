@@ -140,22 +140,35 @@ func main() {
 		os.Exit(1)
 	}
 
-	// SPEC R8 (SPEC.md:509-519): after ladybug.Open recovered a corrupted
-	// main.lbug by deleting and re-opening it fresh, main holds schema metadata
-	// but no graph data. When the git repository has commits, re-hydrate main
-	// from the file-per-element representation so the service does not serve a
-	// vacuous empty graph while committed data exists. The working tree is
-	// switched back to main (RestoreMain + CleanUntracked) before files are
-	// read: after a crash (SIGKILL/eviction) the tree can be stranded on a
-	// transaction branch whose snapshot predates main's current commits, and
-	// re-hydrating a healthy main.lbug from that stale snapshot would silently
-	// roll back committed data. With the transaction-only write model there
-	// are no non-transactional writes to main.lbug that git does not already
-	// contain, so re-hydration from git is always complete and safe: any
-	// non-empty repo is re-hydrated unconditionally; a fresh install is a
-	// no-op (an empty git repo has no committed state to recover). A failure
-	// here is fatal: serving an empty graph after a corrupt-reopen silently
-	// drops all committed data, so fail loudly instead.
+	// SPEC R8 (SPEC.md:526): after ladybug.Open recovered a corrupted main.lbug
+	// by deleting and re-opening it fresh, main holds schema metadata but no
+	// graph data. When the git repository has commits, re-hydrate main from the
+	// file-per-element representation so the service does not serve a vacuous
+	// empty graph while committed data exists.
+	// ponytail: re-hydration runs unconditionally (any non-empty repo), not
+	// gated on actual corruption recovery, because ladybug.Open gives no signal
+	// that recovery occurred (the delete+reopen runs internally and both the
+	// failure and recovery paths return nil error, main.go:122-134). Cost: every
+	// pod restart DETACH-DELETEs a healthy main.lbug and rebuilds it from the
+	// git working tree — a full graph re-load on each restart, paid even when
+	// main.lbug was never corrupted. The ordering is deliberately
+	// trust-git-over-main.lbug: the transaction-only write model (SPEC R2)
+	// commits every mutation to git before main is re-hydrated (the git commit
+	// precedes RehydrateMainFromFiles in CommitTransaction), so main.lbug never
+	// holds data git lacks and the rebuild is always complete and lossless. The
+	// unconditional scope also covers the crash-mid-commit staleness case — a
+	// pod killed between the git commit and main's re-hydration leaves main.lbug
+	// behind main's HEAD, and only this startup rebuild recovers the committed
+	// data (no remote configured is required) — which a corruption-only gate
+	// would miss. Failure mode: if the R2 invariant ever broke (a future
+	// non-transactional write path), the rebuild would silently drop healthy
+	// main.lbug data; mitigated today by the RestoreMain + CleanUntracked that
+	// reset the working tree to main's HEAD before any files are read
+	// (rehydrateMainAfterRecovery). Upgrade path: surface a
+	// recovered-from-corruption signal from ladybug.Open (or gate on a
+	// main-is-empty probe) so a healthy main.lbug is left untouched.
+	// A failure here is fatal: serving an empty graph after a corrupt-reopen
+	// silently drops all committed data, so fail loudly instead.
 	if err := rehydrateMainAfterRecovery(context.Background(), dbStore, gs); err != nil {
 		slog.Error("Failed to re-hydrate main from git after open (SPEC R8 recovery)",
 			"error", err,
@@ -285,8 +298,7 @@ func main() {
 			// graph-data commits (IsEmpty), so there is no local committed graph
 			// for the clone to supersede.
 			func() error {
-				entitiesDir := filepath.Join(ladybugDBPath, "graph-repo/entities")
-				edgesDir := filepath.Join(ladybugDBPath, "graph-repo/edges")
+				entitiesDir, edgesDir := gs.HydrationDirs()
 				return dbStore.RehydrateMainFromFiles(context.Background(), entitiesDir, edgesDir)
 			},
 		)
@@ -452,8 +464,9 @@ func main() {
 }
 
 // rehydrateMainAfterRecovery re-synchronizes main LadybugDB from the git
-// working tree when the startup open left main holding no graph data but the
-// git repository has commits (SPEC R8 corruption recovery, SPEC.md:509-519).
+// working tree whenever the git repository has commits (SPEC R8 corruption
+// recovery, SPEC.md:526); the unconditional scope and its every-restart cost
+// are documented in the ponytail at the call site in main().
 // ladybug.Open performs the destructive half of R8 recovery — deleting a
 // corrupted main.lbug and re-opening a fresh, empty database — but does not
 // restore the committed graph; that is this function's job. The working tree

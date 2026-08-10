@@ -1381,6 +1381,31 @@ func TestBuildResolveAuthFnSSHUserDefaultsToGit(t *testing.T) {
 	}
 }
 
+// TestBuildResolveAuthFnSSHURLUserOverridesDefault verifies SPEC R1: a
+// distinct username embedded in the ssh URL wins over the "git" default,
+// mirroring the https URL-user-precedence branch
+// (TestBuildResolveAuthFnURLUserOverridesSecret). Without this test the
+// embedded-user branch (main.go:732) is only exercised with the user
+// "git", indistinguishable from the default.
+func TestBuildResolveAuthFnSSHURLUserOverridesDefault(t *testing.T) {
+	keyPEM := ed25519PEM(t)
+	readSecretFn := func(ctx context.Context, name string) (map[string]string, error) {
+		return map[string]string{"ssh-privatekey": keyPEM}, nil
+	}
+	fn := buildResolveAuthFn("remote-auth", readSecretFn, "ssh://deploy-user@example.com/org/repo.git")
+	auth, err := fn()
+	if err != nil {
+		t.Fatalf("ssh auth construction failed: %v", err)
+	}
+	signer, ok := auth.(*gogitssh.PublicKeys)
+	if !ok {
+		t.Fatalf("expected *gogitssh.PublicKeys, got %T", auth)
+	}
+	if signer.User != "deploy-user" {
+		t.Fatalf("ssh user = %q, want URL-embedded %q to win over the %q default", signer.User, "deploy-user", tSSHUser)
+	}
+}
+
 // TestBuildResolveAuthFnParseURLFailure verifies the url.Parse error branch of
 // buildResolveAuthFn (main.go:461-463): a remote URL the parser rejects must
 // surface the parse error (never a sentinel, never a nil auth) and stay in the
