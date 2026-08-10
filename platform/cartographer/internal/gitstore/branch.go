@@ -160,6 +160,11 @@ func (g *gitStore) ListBranches(ctx context.Context) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("list branches: %w", err)
 	}
+	// Every iterator this package acquires must be closed (sibling pattern:
+	// defer log.Close() in remote.go IsEmpty and commit.go); for the
+	// filesystem-backed storer the reference iterator holds a packed-refs file
+	// handle until Close.
+	defer refIter.Close()
 
 	var branches []string
 	if err := refIter.ForEach(func(ref *plumbing.Reference) error {
