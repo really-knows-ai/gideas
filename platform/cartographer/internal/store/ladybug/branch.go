@@ -871,65 +871,54 @@ func insertEntityOnConn(
 	return nil
 }
 
-// insertEdgeOnConn verifies both endpoints exist under the edge type's expected
-// FROM/TO endpoint labels before creating the edge, then creates it. pairs is
+// insertEdgeOnConn verifies both endpoints exist under one of the edge type's
+// FROM/TO endpoint pairs before creating the edge, then creates it. pairs is
 // the edge type's FROM/TO endpoint set (SPEC R2: fixed at CREATE time from the
 // rel table's endpoint clauses).
 func insertEdgeOnConn(conn *lbug.Connection, edgeType string, pairs []fromToPair, edge *store.Edge) error {
-	// Verify both endpoints exist before creating the edge. The
-	// MATCH (a {id: $from}), (b {id: $to}) CREATE ... statement silently no-ops
-	// when an endpoint matches nothing — creating no edge and no error — so an
-	// edge whose source or target entity is absent would vanish from the graph
-	// with no signal on the re-hydration read path. The load path fails loudly
-	// on every other corruption (unparseable files, missing keys, type/directory
-	// mismatch); an absent endpoint must fail loudly too (never silently drop a
-	// row or swallow a not-exist on a read path).
+	// Verify both endpoints exist and form a permitted FROM/TO pair before
+	// creating the edge. The MATCH (a {id: $from}), (b {id: $to}) CREATE ...
+	// statement silently no-ops when an endpoint matches nothing — creating no
+	// edge and no error — so an edge whose source or target entity is absent
+	// would vanish from the graph with no signal on the re-hydration read path.
+	// The load path fails loudly on every other corruption (unparseable files,
+	// missing keys, type/directory mismatch); an absent or cross-pair endpoint
+	// must fail loudly too (never silently drop a row or swallow a not-exist on
+	// a read path).
 	//
-	// The probe is constrained to the edge type's expected endpoint labels: an
-	// untyped MATCH (n {id: $id}) passes when the id exists under ANY label, so
-	// an endpoint id present under a non-endpoint label would pass the probe
-	// while the subsequent CREATE silently no-ops against the rel table's
-	// endpoint clauses — the edge would be silently dropped on re-hydration.
-	// Probing each expected label makes that case fail loudly with
-	// ErrSourceOrTargetNotFound, mirroring the normal write path's typed
-	// findEntityByID + rule validation (crud.go CreateEdge).
-	fromLabels := make(map[string]bool)
-	toLabels := make(map[string]bool)
-	for _, p := range pairs {
-		fromLabels[p.From] = true
-		toLabels[p.To] = true
+	// The endpoint set is validated by PAIR, not by per-role label union: for a
+	// multi-pair edge type (e.g. rules Alpha→Beta and Beta→Alpha both via the
+	// same edge type) the union of FROM labels equals the union of TO labels, so
+	// an edge whose endpoints both resolve to Alpha-typed entities would pass a
+	// membership check against either union while the rel table's per-pair
+	// endpoint clauses reject (or silently no-op) the CREATE — the edge would
+	// not be served. The write path rejects the same edge via validateEdgeRulesFor
+	// (crud.go), so the load path must too. Resolving each endpoint to its actual
+	// node label (untyped MATCH returns the node's own label) and requiring the
+	// resulting pair to be one of the edge type's FROM/TO pairs makes every
+	// wrong-pair case fail loudly with ErrSourceOrTargetNotFound, mirroring the
+	// normal write path's typed findEntityByID + rule validation (crud.go
+	// CreateEdge).
+	fromLabel, err := nodeLabelOnConn(conn, edge.FromEntityID)
+	if err != nil {
+		return fmt.Errorf("%w: edge %q from endpoint entity %q not found",
+			store.ErrSourceOrTargetNotFound, edge.Id, edge.FromEntityID)
 	}
-	for _, endpoint := range []struct {
-		id     string
-		role   string
-		labels map[string]bool
-	}{
-		{edge.FromEntityID, "from", fromLabels},
-		{edge.ToEntityID, "to", toLabels},
-	} {
-		found := false
-		for label := range endpoint.labels {
-			stmt, err := conn.Prepare(fmt.Sprintf("MATCH (n:%s {id: $id}) RETURN n;", quoteID(label)))
-			if err != nil {
-				return fmt.Errorf("prepare edge %s endpoint lookup: %w", endpoint.role, err)
-			}
-			result, err := conn.Execute(stmt, map[string]any{"id": endpoint.id})
-			stmt.Close()
-			if err != nil {
-				return fmt.Errorf("look up edge %s endpoint %q: %w", endpoint.role, endpoint.id, err)
-			}
-			if result.HasNext() {
-				found = true
-			}
-			result.Close()
-			if found {
-				break
-			}
+	toLabel, err := nodeLabelOnConn(conn, edge.ToEntityID)
+	if err != nil {
+		return fmt.Errorf("%w: edge %q to endpoint entity %q not found",
+			store.ErrSourceOrTargetNotFound, edge.Id, edge.ToEntityID)
+	}
+	pairOK := false
+	for _, p := range pairs {
+		if p.From == fromLabel && p.To == toLabel {
+			pairOK = true
+			break
 		}
-		if !found {
-			return fmt.Errorf("%w: edge %q %s endpoint entity %q not found",
-				store.ErrSourceOrTargetNotFound, edge.Id, endpoint.role, endpoint.id)
-		}
+	}
+	if !pairOK {
+		return fmt.Errorf("%w: edge %q connects %q -> %q, not one of edge type %q's FROM/TO pairs",
+			store.ErrSourceOrTargetNotFound, edge.Id, fromLabel, toLabel, edgeType)
 	}
 	relProps := make([]string, 0, 1+len(edge.Properties))
 	params := map[string]any{"from": edge.FromEntityID, "to": edge.ToEntityID, "id": edge.Id}

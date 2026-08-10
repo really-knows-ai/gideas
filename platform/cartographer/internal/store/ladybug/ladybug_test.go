@@ -7444,6 +7444,91 @@ func TestRehydrateFiles_WrongLabelEndpointFailsLoudly(t *testing.T) {
 	}
 }
 
+// The endpoint probe must enforce the edge type's FROM/TO endpoint PAIRS, not
+// per-role label-union membership. For a multi-pair edge type (rules
+// Alpha→Beta and Beta→Alpha both via CONNECTS) the union of FROM labels equals
+// the union of TO labels ({Alpha, Beta}), so an edge whose endpoints both
+// resolve to Alpha-typed entities passes a union-membership probe for both
+// roles while the rel table's per-pair endpoint clauses (FROM Alpha TO Beta,
+// FROM Beta TO Alpha) cannot serve an Alpha→Alpha edge — the edge would not be
+// loaded (or, on an engine that silently no-ops an unmatched pair, silently
+// dropped). The write path rejects the same edge via validateEdgeRulesFor
+// (crud.go → ErrEdgeRuleViolation), so the load path must fail loudly with
+// ErrSourceOrTargetNotFound instead of relying on coincidental engine errors.
+func TestRehydrateFiles_CrossPairEndpointFailsLoudly(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		branch bool
+	}{
+		{"main", false},
+		{"branch", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, err := OpenInMemory()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer closeStore(t, s)
+			ctx := context.Background()
+
+			// Multi-pair edge type: CONNECTS permits Alpha→Beta and Beta→Alpha.
+			if err := s.ApplySchema(ctx, &flowv1.Schema{
+				EntityTypes: []*flowv1.EntityType{
+					{Name: "Alpha", Rules: []*flowv1.ConnectionRule{
+						{CanConnectTo: []string{"Beta"}, Using: []string{"CONNECTS"}},
+					}},
+					{Name: "Beta", Rules: []*flowv1.ConnectionRule{
+						{CanConnectTo: []string{"Alpha"}, Using: []string{"CONNECTS"}},
+					}},
+				},
+				EdgeTypes: []*flowv1.EdgeType{{Name: "CONNECTS"}},
+			}); err != nil {
+				t.Fatalf("ApplySchema: %v", err)
+			}
+
+			const branch = "tx1"
+			if tc.branch {
+				if err := s.CreateBranchDB(ctx, branch); err != nil {
+					t.Fatalf("CreateBranchDB: %v", err)
+				}
+				if err := s.ReplicateSchemaToBranch(ctx, branch); err != nil {
+					t.Fatalf("ReplicateSchemaToBranch: %v", err)
+				}
+			}
+
+			// Both endpoints are Alpha-typed: Alpha→Alpha is NOT one of
+			// CONNECTS' FROM/TO pairs (Alpha→Beta, Beta→Alpha).
+			fromID := uuid.NewString()
+			toID := uuid.NewString()
+			root := t.TempDir()
+			entitiesDir := filepath.Join(root, "entities")
+			edgesDir := filepath.Join(root, "edges")
+			writeJSONFile(t, filepath.Join(entitiesDir, "Alpha", fromID+".json"), map[string]any{
+				"id": fromID, "type": "Alpha",
+			})
+			writeJSONFile(t, filepath.Join(entitiesDir, "Alpha", toID+".json"), map[string]any{
+				"id": toID, "type": "Alpha",
+			})
+			writeJSONFile(t, filepath.Join(edgesDir, "CONNECTS", uuid.NewString()+".json"), map[string]any{
+				"id": uuid.NewString(), "type": "CONNECTS", "from": fromID, "to": toID,
+			})
+
+			var loadErr error
+			if tc.branch {
+				loadErr = s.HydrateBranchFromFiles(ctx, branch, entitiesDir, edgesDir)
+			} else {
+				loadErr = s.RehydrateMainFromFiles(ctx, entitiesDir, edgesDir)
+			}
+			if loadErr == nil {
+				t.Fatal("expected loud failure for an edge whose endpoint pair is not in the edge type's FROM/TO pair set")
+			}
+			if !errors.Is(loadErr, store.ErrSourceOrTargetNotFound) {
+				t.Fatalf("expected ErrSourceOrTargetNotFound, got %v", loadErr)
+			}
+		})
+	}
+}
+
 // The store load path must decode the created_at/updated_at fields the gitstore
 // write path persists on every entity/edge file (gitstore EntityJSON/EdgeJSON)
 // instead of fabricating time.Now() at the re-hydration moment (LEARNINGS: "a
