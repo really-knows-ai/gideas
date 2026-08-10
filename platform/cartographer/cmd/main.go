@@ -69,9 +69,10 @@ func main() {
 	}
 	// SPEC R5 fail-fast guard: a non-positive TRANSACTION_TIMEOUT parses
 	// cleanly but makes every BeginTransaction fail at runtime with
-	// INVALID_ARGUMENT ("requestedTimeout must be positive",
-	// transaction_manager.go:170-172), so it must fail startup just like an
-	// unparseable value. Mirrors the SYNC_INTERVAL positivity guard below.
+	// INVALID_ARGUMENT ("invalid transaction timeout duration: duration must be
+	// positive", transaction_manager.go:171 via errInvalidTransactionTimeoutDuration,
+	// errors.go:259-261), so it must fail startup just like an unparseable
+	// value. Mirrors the SYNC_INTERVAL positivity guard below.
 	if transactionTimeout <= 0 {
 		slog.Error("invalid TRANSACTION_TIMEOUT", "value", transactionTimeout.String(),
 			"error", "must be a positive duration")
@@ -607,7 +608,15 @@ func tryRemotePullOnInit(
 		if readSecretFn == nil {
 			return gitstore.ErrAuthConfigMissing
 		}
-		data, err := readSecretFn(context.Background(), remoteAuthSecretRef)
+		// The pre-flight Secret read is a network-touching boot step, so it
+		// carries the same per-operation deadline the sync worker applies to
+		// every git operation (service.DefaultGitOperationTimeout, SPEC R10 /
+		// SPEC:981): a hung or unreachable k8s API server must fail startup
+		// within a bounded window instead of blocking it indefinitely. Mirrors
+		// the clone-on-init deadline below.
+		readCtx, cancel := context.WithTimeout(context.Background(), service.DefaultGitOperationTimeout)
+		defer cancel()
+		data, err := readSecretFn(readCtx, remoteAuthSecretRef)
 		if err != nil {
 			return fmt.Errorf("pre-flight auth: read secret: %w", err)
 		}
@@ -748,7 +757,15 @@ func buildResolveAuthFn(
 		if readSecretFn == nil {
 			return nil, gitstore.ErrAuthConfigMissing
 		}
-		data, err := readSecretFn(context.Background(), remoteAuthSecretRef)
+		// go-git invokes this resolver without a context (the authFn signature
+		// carries none), so the Secret read bounds itself with the sync worker's
+		// per-operation deadline (service.DefaultGitOperationTimeout, SPEC R10 /
+		// SPEC:981): a hung k8s API server aborts the read with a context error
+		// instead of blocking the worker's git operation past its deadline and
+		// wedging the worker.
+		readCtx, cancel := context.WithTimeout(context.Background(), service.DefaultGitOperationTimeout)
+		defer cancel()
+		data, err := readSecretFn(readCtx, remoteAuthSecretRef)
 		if err != nil {
 			return nil, err
 		}
