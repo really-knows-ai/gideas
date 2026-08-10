@@ -357,6 +357,14 @@ func (g *gitStore) PushRemote(ctx context.Context) error {
 // g.remoteURL). After fetching, the local main ref is set to the fetched
 // commit and the working tree is checked out to main.
 //
+// Precondition enforced: this is the SPEC R10 clone-on-init path, so the
+// local repo must be empty (only New()'s init commit). Cloning over a
+// non-empty repo would silently overwrite the local main ref and discard any
+// local commits, so the method rejects the call with ErrRepoNotEmpty before
+// any fetch. The production caller (cmd/main.go) additionally gates on
+// IsEmpty, but the primitive enforces the invariant itself — a caller that
+// omits the gate fails loudly rather than silently losing data.
+//
 // Caller-state dependency: an already-existing "origin" remote is tolerated
 // (CreateRemote's ErrRemoteExists) and the fetch then goes through the
 // pre-existing origin, whose configured URL — not rawURL — determines where
@@ -369,6 +377,22 @@ func (g *gitStore) PushRemote(ctx context.Context) error {
 func (g *gitStore) CloneSingleBranch(ctx context.Context, rawURL, branch string) error {
 	if err := validateRemoteURL(rawURL); err != nil {
 		return err
+	}
+
+	// Pre-flight: clone is the SPEC R10 clone-on-init path and requires an
+	// empty local repo (only New()'s init commit). Reject the call when the
+	// repo has data — cloning over a non-empty repo would silently overwrite
+	// the local main ref and discard local commits (data-loss hazard). The
+	// production caller (cmd/main.go) gates on IsEmpty, but the primitive
+	// enforces the precondition itself per the low-level-primitive rule: a
+	// caller that omits the gate fails loudly instead of silently producing a
+	// wrong result.
+	empty, isEmptyErr := g.IsEmpty(ctx)
+	if isEmptyErr != nil {
+		return fmt.Errorf("check repo empty: %w", isEmptyErr)
+	}
+	if !empty {
+		return ErrRepoNotEmpty
 	}
 
 	// Pre-flight: an authenticated URL requires an auth provider. A nil authFn
