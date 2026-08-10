@@ -534,6 +534,11 @@ false positive.
 After pruning, note if any learning was matched multiple times.  A learning
 that catches many instances per pass is too broad — flag it for tightening.
 
+Also scan for **clusters of 3+ related findings** that share a root-cause
+category not yet covered by LEARNINGS.md.  These are *candidate* patterns — they
+may become learnings once fixed and verified in a future cycle, but fresh
+findings are unproven.  Report them as suggestions.
+
 **LEARNINGS.md:**
 [path to LEARNINGS.md]
 
@@ -552,6 +557,10 @@ For each pruned-by-learning:
 For each learning that matched 3+ items:
 `TIGHTEN <learning title> — matched <N> instances, consider splitting`
 
+For each candidate pattern cluster (3+ related findings):
+`LEARNING-SUGGESTION <proposed title> — <pattern observed>
+  Rule: <actionable rule using "must" or "must not">`
+
 Then the final keep list (numbered, kept items only):
 ```
 1. <description>
@@ -560,64 +569,14 @@ Then the final keep list (numbered, kept items only):
 ```
 ```
 
-Wait for the subagent to complete.  The final keep list is the input to the
-audit.  Save PRUNE-LEARNING lines — they will be recorded in REVIEW_ITEMS.md.
+Wait for the subagent to complete.  The final keep list proceeds to step 5d
+and step 6.  Save PRUNE-LEARNING lines — they will be recorded in REVIEW_ITEMS.md.
 
-#### 5d. Consolidation audit
+#### 5d. Write candidate patterns to LEARNINGS.md
 
-Dispatch ONE reviewer subagent with the final keep list from 5c and the
-path to LEARNINGS.md.  This is the final gate — the audit catches any
-false positives, duplicates, or missed learning-coverage items.  The
-subagent receives:
-
-```
-You are auditing a consolidated review checklist after deduplication,
-impact-tiering, and learning-pruning.  Check the remaining items for:
-
-1. **Any item that IS covered by a learning in LEARNINGS.md** but was
-   not pruned.  If found, report it as a false positive.
-2. **Any pair of items that describe the same divergence** (same issue,
-   different wording or line numbers).  If found, report the duplicate.
-3. **Any cluster of 3+ related findings** that share a root-cause category
-   not yet covered by LEARNINGS.md.  These are *candidate* patterns — they
-   may become learnings once fixed and verified in a future cycle, but
-   fresh findings are unproven.  Report them as suggestions only.
-
-**Pruning rule — only Implementation Notes and observation-type learnings
-prune findings.  Defect-pattern learnings NEVER prune.**
-- A finding that matches an **Implementation Note** is a false positive — report it.
-  Implementation Notes document engine constraints, library limitations, or design
-  decisions that are correct per the criteria despite appearing to diverge.
-- A finding that matches a **defect-pattern learning** is a new instance of a
-  known bug at a specific location — it is a live bug and must be KEPT, not
-  reported as a false positive.
-- A finding that matches an **observation-type learning** is not covered — keep it.
-
-**LEARNINGS.md:**
-[contents of LEARNINGS.md]
-
-**Remaining findings:**
-[the numbered final keep list from 5c]
-
-**Output:**
-- `FALSE-POSITIVE <description> — <reason it is covered by a learning>`
-- `DUPLICATE <description> — <reason it duplicates another item>`
-- `LEARNING-SUGGESTION <proposed title> — <pattern observed>`
-  `  Rule: <actionable rule using "must" or "must not">`
-- If all items pass and no learning suggestions: `ALL CLEAR`
-```
-
-Wait for the subagent to complete.  If it reports false positives or
-duplicates, remove them and re-run step 5d with the updated list until it
-reports `ALL CLEAR`.  Do not proceed to step 6 until the list passes.
-Learning suggestions do NOT block progress — they are written to
-LEARNINGS.md in the next step.
-
-#### 5e. Write candidate patterns to LEARNINGS.md
-
-After the consolidation audit passes (no false positives, no duplicates),
-take the `LEARNING-SUGGESTION` lines from the audit subagent's output and
-write them to `LEARNINGS.md` under a `## Candidate Patterns` section.
+After the learning-prune stage completes, take any `LEARNING-SUGGESTION`
+lines from the 5c subagent's output and write them to `LEARNINGS.md`
+under a `## Candidate Patterns` section.
 
 **Format each candidate pattern as:**
 
@@ -720,8 +679,6 @@ Report:
 - Number of `[!]` items re-opened from prior `[x]` or `[~]` claims
 - Number of new findings from fresh review
 - Number of fresh findings removed because covered by `LEARNINGS.md`
-- Number of false positives caught by consolidation audit
-- Number of duplicates caught by consolidation audit
 - Number of items pruned by impact at consolidation — and list each one
   verbatim with its reason.  This is a decision the user must be able to
   see and veto.
