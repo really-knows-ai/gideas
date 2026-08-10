@@ -76,6 +76,19 @@ func (g *gitStore) ReadAllEdgeFiles(ctx context.Context, edgeType string) ([]Edg
 				_ = f.Close()
 				return EdgeFile{}, fmt.Errorf("edge file %s embedded id %s conflicts with filename", fi.Name(), ej.ID)
 			}
+			// Guard against a zero or non-v4 embedded id. writeEdgeFile
+			// rejects these (ErrInvalidUUID), and recovery reconstruction and
+			// refresh snapshots consume this path — a file whose embedded id
+			// is uuid.Nil or not version 4 (external corruption) must surface
+			// the same sentinel rather than load an edge under a never-valid
+			// UUID. Version() is 0 for uuid.Nil, so the single version check
+			// covers both.
+			if ej.ID.Version() != 4 {
+				_ = f.Close()
+				return EdgeFile{}, fmt.Errorf(
+					"%w: edge file %s embedded id %s is not a valid UUID v4",
+					ErrInvalidUUID, fi.Name(), ej.ID)
+			}
 			// Guard against the embedded type conflicting with the directory it
 			// is read from. writeEdgeFile rejects this mismatch
 			// (ErrEdgeTypeMismatch), and re-hydration enumerates files per type

@@ -724,6 +724,54 @@ func TestReadAllEntityFilesTypeDirectoryMismatch(t *testing.T) {
 		t.Fatalf("TestReadAllEntityFilesTypeDirectoryMismatch: %v", err)
 	}
 }
+
+// TestReadAllEntityFilesZeroIDGuard: a JSON entity file whose embedded id is a
+// zero UUID matching its zero-UUID filename (external corruption) must surface
+// ErrInvalidUUID, not be silently loaded under the nil UUID. This mirrors the
+// write path (writeEntityFile rejects zero/non-v4 ids via ErrInvalidUUID) and
+// the sibling id-vs-filename, type-vs-directory, and edge from/to guards
+// (SPEC R8 corruption recovery).
+func TestReadAllEntityFilesZeroIDGuard(t *testing.T) {
+	gs := setupTestStore(t)
+	err := gs.WithGitLock(func() error {
+		path := "entities/Component/00000000-0000-0000-0000-000000000000.json"
+		ej := struct {
+			ID         uuid.UUID         `json:"id"`
+			Type       string            `json:"type"`
+			Properties map[string]string `json:"properties,omitempty"`
+			CreatedAt  time.Time         `json:"created_at"`
+			UpdatedAt  time.Time         `json:"updated_at"`
+		}{
+			ID:        uuid.Nil,
+			Type:      "Component",
+			CreatedAt: time.Now().UTC().Round(time.Millisecond),
+			UpdatedAt: time.Now().UTC().Round(time.Millisecond),
+		}
+		data, err := json.Marshal(ej)
+		if err != nil {
+			return err
+		}
+		f, err := gs.fs.Create(path)
+		if err != nil {
+			return fmt.Errorf("create zero-id entity file: %w", err)
+		}
+		if _, err := f.Write(data); err != nil {
+			_ = f.Close()
+			return fmt.Errorf("write zero-id entity file: %w", err)
+		}
+		if err := f.Close(); err != nil {
+			return fmt.Errorf("close zero-id entity file: %w", err)
+		}
+		if _, err := gs.ReadAllEntityFiles(ctx(), "Component"); !errors.Is(err, ErrInvalidUUID) {
+			return fmt.Errorf("expected ErrInvalidUUID for zero entity id, got %v", err)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("TestReadAllEntityFilesZeroIDGuard: %v", err)
+	}
+}
+
 func TestWriteEntityFilesTypeMismatch(t *testing.T) {
 	gs := setupTestStore(t)
 	err := gs.WithGitLock(func() error {
@@ -1237,6 +1285,60 @@ func TestReadAllEdgeFilesZeroFromToGuard(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("TestReadAllEdgeFilesZeroFromToGuard: %v", err)
+	}
+}
+
+// TestReadAllEdgeFilesZeroIDGuard: a JSON edge file whose embedded id is a
+// zero UUID matching its zero-UUID filename (external corruption) must surface
+// ErrInvalidUUID, not be silently loaded under the nil UUID. This mirrors the
+// write path (writeEdgeFile rejects zero/non-v4 ids via ErrInvalidUUID) and
+// the sibling id-vs-filename, type-vs-directory, and from/to guards (SPEC R8
+// corruption recovery).
+func TestReadAllEdgeFilesZeroIDGuard(t *testing.T) {
+	gs := setupTestStore(t)
+	err := gs.WithGitLock(func() error {
+		fromID := validUUID(t)
+		toID := validUUID(t)
+		now := time.Now().UTC().Round(time.Millisecond)
+		path := "edges/DEPENDS_ON/00000000-0000-0000-0000-000000000000.json"
+		ej := struct {
+			ID           uuid.UUID         `json:"id"`
+			Type         string            `json:"type"`
+			FromEntityID uuid.UUID         `json:"from"`
+			ToEntityID   uuid.UUID         `json:"to"`
+			Properties   map[string]string `json:"properties,omitempty"`
+			CreatedAt    time.Time         `json:"created_at"`
+			UpdatedAt    time.Time         `json:"updated_at"`
+		}{
+			ID:           uuid.Nil,
+			Type:         "DEPENDS_ON",
+			FromEntityID: uuid.MustParse(fromID),
+			ToEntityID:   uuid.MustParse(toID),
+			CreatedAt:    now,
+			UpdatedAt:    now,
+		}
+		data, err := json.Marshal(ej)
+		if err != nil {
+			return err
+		}
+		f, err := gs.fs.Create(path)
+		if err != nil {
+			return fmt.Errorf("create zero-id edge file: %w", err)
+		}
+		if _, err := f.Write(data); err != nil {
+			_ = f.Close()
+			return fmt.Errorf("write zero-id edge file: %w", err)
+		}
+		if err := f.Close(); err != nil {
+			return fmt.Errorf("close zero-id edge file: %w", err)
+		}
+		if _, err := gs.ReadAllEdgeFiles(ctx(), "DEPENDS_ON"); !errors.Is(err, ErrInvalidUUID) {
+			return fmt.Errorf("expected ErrInvalidUUID for zero edge id, got %v", err)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("TestReadAllEdgeFilesZeroIDGuard: %v", err)
 	}
 }
 
@@ -3156,6 +3258,98 @@ func TestCloneSingleBranchCleansUntracked(t *testing.T) {
 	}
 	if !status.IsClean() {
 		t.Fatalf("expected clean checked-out worktree, got %s", status)
+	}
+}
+
+// TestCloneSingleBranchNonEmptyRepoRejected pins the SPEC R10 clone-on-init
+// precondition: CloneSingleBranch must refuse to clone over a local repo that
+// holds data commits — per the low-level-primitive rule the primitive enforces
+// its empty-repo precondition rather than deferring it to callers. A clone
+// over a non-empty repo would silently overwrite the local main ref and
+// discard local commits (data loss), so the call must fail loudly with
+// ErrRepoNotEmpty and leave local main untouched.
+func TestCloneSingleBranchNonEmptyRepoRejected(t *testing.T) {
+	tmpDir := t.TempDir()
+	sourceDir := filepath.Join(tmpDir, "source")
+	source, err := git.PlainInitWithOptions(sourceDir, &git.PlainInitOptions{
+		InitOptions: git.InitOptions{DefaultBranch: plumbing.NewBranchReferenceName("main")},
+	})
+	if err != nil {
+		t.Fatalf("init source: %v", err)
+	}
+	sourceWT, err := source.Worktree()
+	if err != nil {
+		t.Fatalf("source worktree: %v", err)
+	}
+	const graphContent = `{"graph":"controlled"}`
+	graphFile, err := sourceWT.Filesystem.Create("data.txt")
+	if err != nil {
+		t.Fatalf("create payload file: %v", err)
+	}
+	if _, err := graphFile.Write([]byte(graphContent)); err != nil {
+		t.Fatalf("write payload file: %v", err)
+	}
+	if err := graphFile.Close(); err != nil {
+		t.Fatalf("close payload file: %v", err)
+	}
+	if _, err := sourceWT.Add("data.txt"); err != nil {
+		t.Fatalf("add payload file: %v", err)
+	}
+	if _, err := sourceWT.Commit("main graph", &git.CommitOptions{
+		Author: &object.Signature{Name: "test", Email: "test@test"},
+	}); err != nil {
+		t.Fatalf("commit graph file: %v", err)
+	}
+
+	remoteDir := filepath.Join(tmpDir, "remote.git")
+	if _, err := git.PlainClone(remoteDir, true, &git.CloneOptions{URL: "file://" + sourceDir}); err != nil {
+		t.Fatalf("create bare remote: %v", err)
+	}
+
+	store, err := New(filepath.Join(tmpDir, "local"))
+	if err != nil {
+		t.Fatalf("new local store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	gs := store.(*gitStore)
+
+	err = store.WithGitLock(func() error {
+		// Commit local data so the repo is no longer init-only (IsEmpty false).
+		now := time.Now().UTC().Round(time.Millisecond)
+		if err := gs.WriteEntityFiles(ctx(), "Component", []Entity{
+			{ID: validUUID(t), Type: "Component", CreatedAt: now, UpdatedAt: now},
+		}); err != nil {
+			return err
+		}
+		if err := gs.AddAll(ctx(), "."); err != nil {
+			return err
+		}
+		if err := gs.Commit(ctx(), "transaction:local-data"); err != nil {
+			return err
+		}
+		mainRef, err := gs.repo.Reference(plumbing.NewBranchReferenceName("main"), true)
+		if err != nil {
+			return err
+		}
+		localHash := mainRef.Hash()
+
+		err = gs.CloneSingleBranch(ctx(), "file://"+remoteDir, "main")
+		if !errors.Is(err, ErrRepoNotEmpty) {
+			return fmt.Errorf("expected ErrRepoNotEmpty, got %v", err)
+		}
+
+		// Local main must be untouched — the rejected clone must not overwrite it.
+		mainRef, err = gs.repo.Reference(plumbing.NewBranchReferenceName("main"), true)
+		if err != nil {
+			return err
+		}
+		if mainRef.Hash() != localHash {
+			return fmt.Errorf("main ref changed after rejected clone: got %s, want %s", mainRef.Hash(), localHash)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("TestCloneSingleBranchNonEmptyRepoRejected: %v", err)
 	}
 }
 

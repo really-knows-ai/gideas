@@ -163,6 +163,7 @@ var (
 	ErrEdgeTypeMismatch     = errors.New("edge type mismatch")
 	ErrInvalidHash          = errors.New("invalid commit hash")
 	ErrRemoteURLNoHost      = errors.New("remote URL has no host")
+	ErrRepoNotEmpty         = errors.New("clone requires an empty repository")
 	ErrEmptyBasePath        = errors.New("gitstore: basePath must not be empty")
 	errHasData              = errors.New("has data")
 )

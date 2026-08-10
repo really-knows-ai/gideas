@@ -8668,9 +8668,13 @@ func TestCapability_StalenessBoundary_InsideAndPast(t *testing.T) {
 	srv := NewCartographerServer(st, gs, opPub, scPub, nil, "",
 		30*time.Second, "test-ns", 30*time.Minute, 100000)
 
-	// Capability signed 29 seconds ago — inside the 30-second window
-	// (use 29s instead of 30s to avoid timing flakiness).
-	insideWindow := time.Now().Add(-29 * time.Second).Unix()
+	// Capability signed 25 seconds ago — inside the 30-second window. A margin
+	// (25s, not 29s/30s) is required because Unix() truncates to a whole
+	// second while the verifier's elapsed (time.Since of that second) carries
+	// the sub-second fraction of the current time: signed at -29s, a wall-clock
+	// second tick between signing and verifying pushes elapsed past 30s and the
+	// in-window capability is wrongly rejected as stale.
+	insideWindow := time.Now().Add(-25 * time.Second).Unix()
 	payload := fmt.Sprintf("READ:graph/entity/Component|%d", insideWindow)
 	sig := base64.StdEncoding.EncodeToString(ed25519.Sign(scPriv, []byte(payload)))
 	md := metadata.Pairs(

@@ -77,6 +77,19 @@ func (g *gitStore) ReadAllEntityFiles(ctx context.Context, entityType string) ([
 				_ = f.Close()
 				return EntityFile{}, fmt.Errorf("entity file %s embedded id %s conflicts with filename", fi.Name(), ej.ID)
 			}
+			// Guard against a zero or non-v4 embedded id. writeEntityFile
+			// rejects these (ErrInvalidUUID), and recovery reconstruction and
+			// refresh snapshots consume this path — a file whose embedded id
+			// is uuid.Nil or not version 4 (external corruption) must surface
+			// the same sentinel rather than load an entity under a never-valid
+			// UUID. Version() is 0 for uuid.Nil, so the single version check
+			// covers both.
+			if ej.ID.Version() != 4 {
+				_ = f.Close()
+				return EntityFile{}, fmt.Errorf(
+					"%w: entity file %s embedded id %s is not a valid UUID v4",
+					ErrInvalidUUID, fi.Name(), ej.ID)
+			}
 			// Guard against the embedded type conflicting with the directory it
 			// is read from. writeEntityFile rejects this mismatch
 			// (ErrEntityTypeMismatch), and re-hydration enumerates files per
