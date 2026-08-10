@@ -341,16 +341,37 @@ sequential — each stage's output feeds the next.  The main agent only
 dispatches, forwards inputs/outputs, and writes artifacts.  Do NOT process
 findings yourself between sub-agent stages.
 
+**File-based staging.**  Instead of inlining large lists in prompts, each
+stage reads from and writes to a working file:
+`plans/<project>/REVIEW_WORKING.md`.  The main agent writes this file before
+dispatching each subagent and overwrites it with the subagent's full output
+after the subagent completes.  The next stage reads the file to get its
+input.  Save PRUNE and PRUNE-LEARNING lines from subagent outputs as you
+receive them — they feed into the `## Pruned by Impact` section of
+REVIEW_ITEMS.md in step 6.  At the end of step 6, remove
+`REVIEW_WORKING.md`.
+
 #### 5a. Dedupe + Merge
 
-Dispatch ONE reviewer subagent with all raw findings from the fresh-review
-subagents (Step 4) plus the pre-existing `[ ]` and `[!]` items carried
-forward from Step 2c.  The subagent receives:
+First, write `REVIEW_WORKING.md` in the project directory containing the
+raw findings from all fresh-review subagents (Step 4) plus the pre-existing
+`[ ]` and `[!]` items carried forward from Step 2c.  Format it as two
+sections:
+
+```markdown
+## Carried Items (from REVIEW_ITEMS.md)
+[all pre-existing [ ] and [!] items, verbatim]
+
+## Raw Fresh-Review Findings (from Step 4 subagents)
+[all findings from every fresh-review subagent, verbatim]
+```
+
+Then dispatch ONE reviewer subagent.  The subagent receives:
 
 ```
-You are the consolidation dedupe-and-merge stage.  You receive all raw
-findings from multiple fresh-review subagents plus any open items carried
-forward from prior review passes.  Produce a single numbered master list.
+You are the consolidation dedupe-and-merge stage.  Read the input file at
+<path/to/REVIEW_WORKING.md>.  It has two sections: "Carried Items" and
+"Raw Fresh-Review Findings".  Produce a single numbered master list.
 
 **Task:**
 
@@ -378,12 +399,6 @@ forward from prior review passes.  Produce a single numbered master list.
    …).  The numbers are a communication convenience for downstream stages;
    they do not appear in the final REVIEW_ITEMS.md.
 
-**Carried items (from REVIEW_ITEMS.md):**
-[all pre-existing [ ] and [!] items, verbatim]
-
-**Raw fresh-review findings (from Step 4 subagents):**
-[all findings from every fresh-review subagent, verbatim]
-
 **Output:**
 
 For each item that absorbed a fresh duplicate:
@@ -403,19 +418,20 @@ Then the complete numbered master list:
 ```
 ```
 
-Wait for the subagent to complete.  Its output is the numbered master list
-— the input to the next stage.
+Wait for the subagent to complete.  Overwrite `REVIEW_WORKING.md` with the
+subagent's full output — it is the input to the next stage.
 
 #### 5b. Impact-tier
 
-Dispatch ONE reviewer subagent with the numbered master list from 5a.  The
-subagent assigns a tier to every item and prunes Tier-3 items with reasons.
-This is the only stage that makes value judgements about fix-worthiness;
-fresh-review reviewers never do this.  The subagent receives:
+Dispatch ONE reviewer subagent.  This is the only stage that makes value
+judgements about fix-worthiness; fresh-review reviewers never do this.
+The subagent receives:
 
 ```
-You are the consolidation impact-tiering stage.  Assign a tier to every item
-in the numbered master list and prune Tier-3 items.
+You are the consolidation impact-tiering stage.  Read the numbered master
+list from <path/to/REVIEW_WORKING.md> — find the code block at the bottom
+containing the numbered items.  Assign a tier to every item and prune
+Tier-3 items.
 
 **Tier every item.**  The question is: for each valid finding, is the cost of
 fixing it worth the benefit?  This is a judgement about value, not validity.
@@ -458,9 +474,6 @@ fixing it worth the benefit?  This is a judgement about value, not validity.
   wrong code, or a missing test for a behaviour the criteria explicitly
   names.  Those are Tier 1 regardless of size.
 
-**Numbered master list:**
-[the full output from 5a]
-
 **Output:**
 
 For each kept item:
@@ -478,21 +491,24 @@ Then the pruned numbered list (kept items only, with original numbers):
 ```
 ```
 
-Wait for the subagent to complete.  The pruned list is the input to the
-next stage.  Save the PRUNE lines verbatim — they will be recorded in the
-`## Pruned by Impact` section of REVIEW_ITEMS.md.
+Wait for the subagent to complete.  Save any `PRUNE` lines verbatim (they
+feed the `## Pruned by Impact` section in step 6).  Overwrite
+`REVIEW_WORKING.md` with the subagent's full output — it is the input to
+the next stage.
 
 #### 5c. Learning-prune
 
-Dispatch ONE reviewer subagent with the impact-pruned list from 5b and the
-path to LEARNINGS.md.  The subagent prunes items covered by Known Deviations
-or observation-type learnings, but never prunes defect-pattern instances.
+Dispatch ONE reviewer subagent.  The subagent reads the impact-pruned list
+from `REVIEW_WORKING.md` and prunes items covered by Known Deviations or
+observation-type learnings, but never prunes defect-pattern instances.
 The subagent receives:
 
 ```
-You are the consolidation learning-pruning stage.  Remove items from the
-impact-pruned list that are covered by observation-type learnings in
-LEARNINGS.md.  Defect-pattern learnings NEVER prune.
+You are the consolidation learning-pruning stage.  Read the impact-pruned
+list from <path/to/REVIEW_WORKING.md> — find the code block at the bottom
+containing the numbered items.  Remove items from the list that are covered
+by observation-type learnings in LEARNINGS.md.  Defect-pattern learnings
+NEVER prune.
 
 **Pruning rules:**
 
@@ -542,9 +558,6 @@ findings are unproven.  Report them as suggestions.
 **LEARNINGS.md:**
 [path to LEARNINGS.md]
 
-**Impact-pruned list:**
-[the pruned numbered list from 5b]
-
 **Output:**
 
 For each kept item:
@@ -569,8 +582,9 @@ Then the final keep list (numbered, kept items only):
 ```
 ```
 
-Wait for the subagent to complete.  The final keep list proceeds to step 5d
-and step 6.  Save PRUNE-LEARNING lines — they will be recorded in REVIEW_ITEMS.md.
+Wait for the subagent to complete.  Save any `PRUNE-LEARNING` and
+`LEARNING-SUGGESTION` lines verbatim.  Overwrite `REVIEW_WORKING.md` with
+the subagent's full output — it is the input to step 5d and step 6.
 
 #### 5d. Write candidate patterns to LEARNINGS.md
 
@@ -609,8 +623,11 @@ permanent learning or Known Deviation.
 
 ### 6. Write the consolidated review
 
-Two files are written. The checklist goes to `REVIEW_ITEMS.md`; the criteria
-and pass log go to `REVIEW.md`.
+Two files are written.  Read the final keep list from
+`plans/<project>/REVIEW_WORKING.md` — the code block at the bottom of the
+5c output.  The checklist goes to `REVIEW_ITEMS.md`; the criteria and pass
+log go to `REVIEW.md`.  After both files are written, remove
+`REVIEW_WORKING.md`.
 
 **Write the checklist to `plans/<project>/REVIEW_ITEMS.md`.**  Include a
 header with the review date and summary counts:
