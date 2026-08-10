@@ -32,8 +32,13 @@ func (db *ladybugDB) collectVectorIndexes() (map[string]bool, error) {
 
 	result, err := db.conn.Query("CALL show_indexes() RETURN *;")
 	if err != nil {
-		// ponytail: show_indexes may not be supported in all modes; treat empty.
-		return idxMap, nil
+		// Propagate, never swallow: rebuildSchemaCacheLocked treats a nil error
+		// as authoritative vector state, so a catalog-read failure returning
+		// (empty map, nil) would silently strip vector state from every type
+		// read on schema-cache rebuild (Open and metadata-table restoration).
+		// The caller propagates this error already, so the read path fails
+		// loudly instead of silently marking every type non-vector.
+		return nil, err
 	}
 	defer result.Close()
 
@@ -68,42 +73,48 @@ func (db *ladybugDB) collectVectorIndexes() (map[string]bool, error) {
 
 // indexExistsOnConn reports whether the given table has an index with the
 // given name, using the LadybugDB show_indexes catalog (columns: table_name,
-// index_name, index_type, property_names, ...). It returns false on a catalog
-// read failure (the caller's table-DDL path will surface a genuine subsequent
-// create/drop error rather than silently proceeding), mirroring the
-// best-effort treatment of collectVectorIndexes.
-func indexExistsOnConn(conn *lbug.Connection, table, index string) bool {
+// index_name, index_type, property_names, ...). The catalog-read error is
+// propagated, never swallowed: the callers use this as an existence guard
+// before issuing DROP/CREATE index DDL, and a catalog-read failure reporting
+// "no index" would let WipeSchema's dropTable proceed past a residual
+// vector/FTS index pointing at a vanished table or skip a needed index
+// (re)creation. A genuine create/drop error still surfaces downstream, but the
+// guard itself must fail loudly, not silently report "index absent".
+func indexExistsOnConn(conn *lbug.Connection, table, index string) (bool, error) {
 	result, err := conn.Query("CALL show_indexes() RETURN *;")
 	if err != nil {
-		return false
+		return false, err
 	}
 	defer result.Close()
 	for result.HasNext() {
 		tuple, err := result.Next()
 		if err != nil {
-			return false
+			return false, err
 		}
 		vals, err := tuple.GetAsSlice()
 		tuple.Close()
-		if err != nil || len(vals) < 2 {
+		if err != nil {
+			return false, err
+		}
+		if len(vals) < 2 {
 			continue
 		}
 		if fmt.Sprintf("%v", vals[0]) == table && fmt.Sprintf("%v", vals[1]) == index {
-			return true
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
 }
 
 // ftsIndexExists reports whether the table already carries its _fts full-text
 // index, so CREATE_FTS_INDEX is only issued for a table that lacks one.
-func ftsIndexExists(conn *lbug.Connection, table string) bool {
+func ftsIndexExists(conn *lbug.Connection, table string) (bool, error) {
 	return indexExistsOnConn(conn, table, table+"_fts")
 }
 
 // vectorIndexExists reports whether the table already carries its _vec vector
 // (HNSW) index, so DROP_VECTOR_INDEX is only issued when one is present.
-func vectorIndexExists(conn *lbug.Connection, table string) bool {
+func vectorIndexExists(conn *lbug.Connection, table string) (bool, error) {
 	return indexExistsOnConn(conn, table, table+"_vec")
 }
 
@@ -511,7 +522,9 @@ func (db *ladybugDB) alterNodeTable(et *flowv1.EntityType, existing *store.Entit
 		// silently unsearchable (FTS search in query.go silently skips
 		// index-less types). Intentionally NOT error-text matched; the
 		// existence check is the discriminator.
-		if ftsIndexExists(db.conn, et.Name) {
+		if ok, err := ftsIndexExists(db.conn, et.Name); err != nil {
+			return fmt.Errorf("check FTS index for %q: %w", et.Name, err)
+		} else if ok {
 			r, err := db.conn.Query(fmt.Sprintf("CALL DROP_FTS_INDEX('%s', '%s_fts');", et.Name, et.Name))
 			if err != nil {
 				return fmt.Errorf("drop existing FTS index for %q: %w", et.Name, err)

@@ -2035,6 +2035,24 @@ func TestExtractEntityTypes(t *testing.T) {
 			t.Errorf("expected nil labels, got %v", labels)
 		}
 	})
+
+	// A statement mixing a classifiable label with an unclassifiable one must
+	// fail closed (nil labels → READ:graph/entity/* wildcard fallback), never
+	// return the partial subset: a caller holding only the extracted type must
+	// not be able to execute a query that also touches the missed type
+	// (SPEC R3 every-referenced-type rule, SPEC:260 wildcard bound). The
+	// backtick-quoted label references the existing Component table so the
+	// binder accepts the statement, but `` `Component` `` is not a bare Cypher
+	// identifier, so the analyzer abandons the extraction.
+	t.Run("unclassifiable label fails closed to wildcard", func(t *testing.T) {
+		labels, err := s.ExtractEntityTypes(ctx, "MATCH (a:Component), (b:`Component`) RETURN a")
+		if err != nil {
+			t.Fatalf("ExtractEntityTypes: %v", err)
+		}
+		if labels != nil {
+			t.Errorf("expected nil labels (wildcard fallback), got %v", labels)
+		}
+	})
 }
 
 // TestExtractEntityTypeLabels pins the pure-Go label analyzer directly — the
@@ -2070,6 +2088,14 @@ func TestExtractEntityTypeLabels(t *testing.T) {
 			"MATCH (c:Component) MATCH (s:Service) RETURN c, s", []string{"Component", "Service"}},
 		{"unlabelled-nodes-nil", "MATCH (n) RETURN n", nil},
 		{"no-match-nil", "RETURN 1", nil},
+		// SPEC:260 fail-closed rule: a pattern the analyzer cannot classify
+		// (backtick-quoted, parameterised labels) abandons the extraction and
+		// returns nil so the caller falls back to READ:graph/entity/* — never a
+		// partial subset that could widen access beyond the extracted types.
+		{"backtick-label-fails-closed", "MATCH (c:`Label With Space`) RETURN c", nil},
+		{"parameterised-label-fails-closed", "MATCH (c:$label) RETURN c", nil},
+		{"partial-extraction-fails-closed",
+			"MATCH (a:Component)-[:R]->(b:`Label With Space`) RETURN a", nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			labels := extractEntityTypeLabels(tc.cypher)
@@ -7163,7 +7189,9 @@ func TestFullTextSearch_MissingIndexSilentlySkipped(t *testing.T) {
 		t.Fatalf("drop FTS index: %v", err)
 	}
 	res.Close()
-	if ftsIndexExists(db.conn, "Document") {
+	if ok, err := ftsIndexExists(db.conn, "Document"); err != nil {
+		t.Fatalf("check FTS index: %v", err)
+	} else if ok {
 		t.Fatal("expected Document FTS index dropped")
 	}
 

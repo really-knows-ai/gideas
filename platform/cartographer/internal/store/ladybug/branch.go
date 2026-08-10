@@ -769,7 +769,9 @@ func createNodeTableOnConn(conn *lbug.Connection, name string,
 		// so a genuine index-creation error propagates and cannot silently skip
 		// the type's FullTextSearch coverage (query.go silently skips index-less
 		// types), rather than error-matching the library's "already exists" text.
-		if !ftsIndexExists(conn, name) {
+		if ok, err := ftsIndexExists(conn, name); err != nil {
+			return fmt.Errorf("check FTS index for %q: %w", name, err)
+		} else if !ok {
 			propsList := "'" + strings.Join(stringProps, "', '") + "'"
 			ftsDDL := fmt.Sprintf("CALL CREATE_FTS_INDEX('%s', '%s_fts', [%s], stemmer := 'porter');",
 				name, name, propsList)
