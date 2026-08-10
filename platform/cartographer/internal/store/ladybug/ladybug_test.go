@@ -1508,6 +1508,40 @@ func TestCreateEdge_TargetNotFound(t *testing.T) {
 	}
 }
 
+// A genuine DB failure from the source/target existence probe must propagate as
+// an operational error, not be masked as ErrSourceOrTargetNotFound (a transient
+// DB failure must never surface to the client as "source entity not found" /
+// NOT_FOUND). Regression: CreateEdge wrapped every findEntityByID error —
+// including Prepare/Execute failures — in ErrSourceOrTargetNotFound.
+func TestCreateEdge_PropagatesProbeOperationalError(t *testing.T) {
+	s, err := OpenInMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeStore(t, s)
+	applyTestSchema(t, s)
+	ctx := context.Background()
+
+	db := s.(*ladybugDB)
+	db.mu.Lock()
+	// A phantom entity-type def with no backing table: findEntityByID's Prepare
+	// fails with an operational error. Replacing the defs (rather than adding to
+	// them) makes the failure deterministic regardless of map iteration order —
+	// the probe can never succeed against a real type.
+	db.entityTypeDefs = map[string]*store.EntityTypeDef{
+		"NonExistentTable": {Name: "NonExistentTable"},
+	}
+	db.mu.Unlock()
+
+	_, err = s.CreateEdge(ctx, "DependsOn", uuid.NewString(), uuid.NewString(), nil, "")
+	if err == nil {
+		t.Fatal("expected an operational error from the phantom-type probe")
+	}
+	if errors.Is(err, store.ErrSourceOrTargetNotFound) {
+		t.Fatalf("expected the probe's operational error to propagate, not ErrSourceOrTargetNotFound: %v", err)
+	}
+}
+
 func TestCreateEdge_NoRulesDeclared(t *testing.T) {
 	s, err := OpenInMemory()
 	if err != nil {
@@ -4727,6 +4761,91 @@ func TestHydrateBranchFromFiles_InferredEdgeTypeWithProperties(t *testing.T) {
 	// branch's edge-type cache and rejects unknown types).
 	if _, err := s.ListEdgesOfType(ctx, "DependsOn", branch); err != nil {
 		t.Fatalf("ListEdgesOfType on branch: %v", err)
+	}
+}
+
+// TestHydrateBranchFromFiles_InferredTypesSurviveFileBackedReopen pins the
+// file-backed write-and-reopen cycle for types INFERRED during branch
+// hydration (SPEC R8): HydrateBranchFromFiles registers inferred entity/edge
+// types in the branch's in-memory defs but must also persist them to
+// branches/<txID>.schema.json. ReplicateSchemaToBranch writes that metadata
+// before hydration runs, so without a post-hydration rewrite a crash + restart
+// reopens the branch (branchLocked → restoreBranchSchemaMetadata), whose
+// validateMetadataAgainstCatalog fails hard with "database entity type X is
+// absent from schema metadata" — and RecoverOpenTransactions treats that
+// non-ErrBranchNotFound error as a hard startup failure instead of rolling
+// back the one affected branch.
+func TestHydrateBranchFromFiles_InferredTypesSurviveFileBackedReopen(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	ctx := context.Background()
+
+	// An empty applied schema forces every hydrated type to be inferred from
+	// the directory structure (SPEC R8).
+	if err := s.ApplySchema(ctx, &flowv1.Schema{}); err != nil {
+		t.Fatalf("ApplySchema empty: %v", err)
+	}
+	const branch = "tx1"
+	if err := s.CreateBranchDB(ctx, branch); err != nil {
+		t.Fatalf("CreateBranchDB: %v", err)
+	}
+	if err := s.ReplicateSchemaToBranch(ctx, branch); err != nil {
+		t.Fatalf("ReplicateSchemaToBranch: %v", err)
+	}
+
+	fromID := uuid.NewString()
+	toID := uuid.NewString()
+	edgeID := uuid.NewString()
+	root := t.TempDir()
+	entitiesDir := filepath.Join(root, "entities")
+	edgesDir := filepath.Join(root, "edges")
+	writeJSONFile(t, filepath.Join(entitiesDir, "Component", fromID+".json"), map[string]any{
+		"id": fromID, "type": "Component",
+	})
+	writeJSONFile(t, filepath.Join(entitiesDir, "Component", toID+".json"), map[string]any{
+		"id": toID, "type": "Component",
+	})
+	writeJSONFile(t, filepath.Join(edgesDir, "DependsOn", edgeID+".json"), map[string]any{
+		"id": edgeID, "type": "DependsOn", "from": fromID, "to": toID,
+		"properties": map[string]string{"strength": strengthValue},
+	})
+
+	if err := s.HydrateBranchFromFiles(ctx, branch, entitiesDir, edgesDir); err != nil {
+		t.Fatalf("HydrateBranchFromFiles: %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	// Reopen: the lazy branch reopen (DumpAllEntities) validates the persisted
+	// branch metadata against the branch catalog. The inferred types and the
+	// DependsOn FROM/TO pairs must be in branches/<txID>.schema.json or the
+	// reopen wedges instead of recovering the branch.
+	s2, err := Open(dir)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer closeStore(t, s2)
+	entities, err := s2.DumpAllEntities(ctx, branch)
+	if err != nil {
+		t.Fatalf("reopened branch metadata failed validation: %v", err)
+	}
+	if len(entities) != 2 {
+		t.Fatalf("reopened branch entities = %d, want 2", len(entities))
+	}
+	got, err := s2.GetEdge(ctx, edgeID, branch)
+	if err != nil {
+		t.Fatalf("branch edge lost across reopen: %v", err)
+	}
+	if got.FromEntityID != fromID || got.ToEntityID != toID {
+		t.Fatalf("edge endpoints after reopen = %q -> %q, want %q -> %q",
+			got.FromEntityID, got.ToEntityID, fromID, toID)
+	}
+	if got.Properties["strength"] != strengthValue {
+		t.Fatalf("edge strength after reopen = %q, want %q", got.Properties["strength"], strengthValue)
 	}
 }
 
