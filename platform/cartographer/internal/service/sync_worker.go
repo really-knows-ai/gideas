@@ -295,6 +295,27 @@ func (w *SyncWorker) runSyncCycle() {
 
 // doSyncCycle performs the actual sync work.
 func (w *SyncWorker) doSyncCycle() cycleResult {
+	// ponytail: w.remoteURL is an independent copy of the server's remote
+	// gate — Sync() keys on s.remoteURL, BeginTransaction on
+	// s.syncWorker != nil && s.remoteURL != "", CommitTransaction on
+	// s.syncWorker != nil (cartographer_server.go) — with no cross-reference
+	// keeping the two in sync, so a wiring divergence is silently masked here:
+	// the cycle returns success without fetching or pushing. Consequences:
+	// Sync() reports success without fetching (SPEC R10's "one full cycle"
+	// promise), and commit(WithAck()) returns success while pushNeeded stays
+	// set forever — the flag is only cleared by a successful push, and a cycle
+	// that never attempts one never clears it, so the divergence is invisible
+	// to the operator. This empty-remoteURL worker is a test-only construction
+	// today (cmd/main.go derives both fields from the single REMOTE_URL env
+	// var and creates the worker only when it is non-empty, with SetRemote
+	// failing startup on an invalid URL), and tests rely on the no-op cycle
+	// (TestSyncWorkerInterval's startup cycle); the gitstore's ErrNoRemote
+	// fetch path (fetchAndRehydrate) is the sibling silent-success seam when a
+	// non-empty w.remoteURL worker has no gitstore remote. Upgrade path:
+	// assert at wiring time that NewSyncWorker's remoteURL matches the
+	// server's, derive both from one source, or fail loudly — return a
+	// classified error — when a woken cycle has no remote instead of silently
+	// succeeding.
 	if w.remoteURL == "" {
 		return cycleResult{}
 	}
