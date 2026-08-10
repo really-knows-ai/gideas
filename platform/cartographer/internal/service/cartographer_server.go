@@ -56,8 +56,7 @@ type CartographerServer struct {
 	writeLock       sync.Mutex
 	beforeWriteLock func() // test barrier; nil in production
 
-	schemaApplied atomic.Bool
-	dbReady       atomic.Bool
+	dbReady atomic.Bool
 
 	readSecretFn func(ctx context.Context, name string) (map[string]string, error)
 	remoteURL    string
@@ -1594,6 +1593,15 @@ func (s *CartographerServer) CommitTransaction(
 	defer unlockTx()
 	mainHeadAtLastSync := state.MainHeadAtLastSync
 	if state.MergeCompleted {
+		// The fast-forward merge already landed on main before the previous
+		// attempt failed at state persistence or cleanup, so the merge is
+		// durable locally even though this retry only finishes the cleanup.
+		// Flag it for push regardless of this attempt's cleanup outcome (SPEC
+		// R10: commit() sets the push-needed flag) — a cleanup failure must not
+		// leave a locally-merged commit silently un-pushed.
+		if s.syncWorker != nil {
+			s.syncWorker.SetPushNeeded()
+		}
 		if err := s.cleanupTransaction(ctx, state); err != nil {
 			return nil, mapGitError(err)
 		}
@@ -2251,7 +2259,6 @@ func (s *CartographerServer) ApplySchema(
 	if err := s.store.ApplySchema(ctx, req.Schema); err != nil {
 		return nil, mapStoreError(err)
 	}
-	s.schemaApplied.Store(true)
 	return &flowv1.ApplySchemaResponse{}, nil
 }
 
@@ -2264,6 +2271,23 @@ func (s *CartographerServer) WipeGraph(
 	lockErr := s.withGitLock(func() error {
 		if s.txManager.HasActive() {
 			wipeErr = errWipeGraphOpenTransactions()
+			return nil
+		}
+		// Restore the working tree to main before the git rm/commit. The tree
+		// can legitimately be checked out on a transaction branch after a
+		// failed commit (reconcileFailedCommitGitLocked, RefreshTransaction),
+		// and the HasActive guard above excludes expired transactions, so a
+		// wipe issued in the GC grace window after a tx expiry would otherwise
+		// commit the deletion to the transaction branch and leave main's file
+		// history un-wiped. RestoreMain + CleanUntracked make the tree exactly
+		// main; both are no-ops when the tree already is main (mirrors the
+		// sync cycle's pre-re-hydration sequence).
+		if err := s.gitstore.RestoreMain(ctx); err != nil {
+			wipeErr = fmt.Errorf("restore main before wipe: %w", err)
+			return nil
+		}
+		if err := s.gitstore.CleanUntracked(ctx); err != nil {
+			wipeErr = fmt.Errorf("clean untracked before wipe: %w", err)
 			return nil
 		}
 		if err := s.gitstore.GitRm(ctx, "entities"); err != nil {

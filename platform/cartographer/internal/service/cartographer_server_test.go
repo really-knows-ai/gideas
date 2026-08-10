@@ -1285,6 +1285,114 @@ func TestWipeGraph_ExpiredTxDoesNotBlock(t *testing.T) {
 	}
 }
 
+// TestWipeGraph_TreeOnTxBranchWipeLandsOnMain pins the wipe-on-main invariant
+// when the git working tree is on a transaction branch: a failed commit leaves
+// the tree checked out on the transaction branch
+// (reconcileFailedCommitGitLocked), and an expired-but-not-yet-garbage-collected
+// transaction is not considered active by HasActive (SPEC R2 error-table row
+// "WipeGraph called while open transactions exist": "A timed-out transaction
+// (deadline passed) is not considered open for this guard"). A wipe issued in
+// that grace window must restore main before the git rm/commit so the deletion
+// lands on main's history — otherwise the next sync-cycle RestoreMain brings
+// the pre-wipe files back and stale data silently survives the wipe.
+func TestWipeGraph_TreeOnTxBranchWipeLandsOnMain(t *testing.T) {
+	base, err := ladybug.OpenInMemory()
+	if err != nil {
+		t.Fatalf("OpenInMemory: %v", err)
+	}
+	t.Cleanup(func() { _ = base.Close() })
+	ladybugPath := t.TempDir()
+	gs, err := gitstore.New(ladybugPath)
+	if err != nil {
+		t.Fatalf("gitstore.New: %v", err)
+	}
+	failingGit := &mergeFailingGitStore{GitStore: gs}
+	opPub, _ := generateTestKey()
+	srv := NewCartographerServer(
+		base, failingGit, opPub, initTestKey(), nil, "", 30*time.Second,
+		"test-ns", 1*time.Minute, 100000, WithLadybugPath(ladybugPath),
+	)
+	srv.MarkDBReady()
+	// Replace the tx manager with a fake clock so the transaction can be
+	// expired deterministically without running the GC loop.
+	fc := newFakeClock(time.Now())
+	srv.txManager = NewTransactionManager(7*24*time.Hour, 100000, WithClock(fc))
+	ctx := testCtx()
+	applyTestSchema(ctx, t, base)
+	// Establish a non-empty main: a committed entity whose pre-wipe file must
+	// not survive a wipe that lands on the transaction branch.
+	begin, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
+	if err != nil {
+		t.Fatalf("BeginTransaction: %v", err)
+	}
+	if _, err = srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
+		EntityType: "Component", Properties: map[string]string{"name": "pre-wipe"},
+		TransactionId: begin.TransactionId,
+	}); err != nil {
+		t.Fatalf("CreateEntity: %v", err)
+	}
+	if _, err = srv.CommitTransaction(ctx, &flowv1.CommitTransactionRequest{
+		TransactionId: begin.TransactionId,
+	}); err != nil {
+		t.Fatalf("first CommitTransaction: %v", err)
+	}
+	// A second transaction whose commit fails at the fast-forward merge leaves
+	// the working tree checked out on the transaction branch with its commit
+	// recorded (reconcileFailedCommitGitLocked).
+	failingGit.failMerge = true
+	begin2, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
+	if err != nil {
+		t.Fatalf("BeginTransaction: %v", err)
+	}
+	if _, err = srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
+		EntityType: "Component", Properties: map[string]string{"name": "stale"},
+		TransactionId: begin2.TransactionId,
+	}); err != nil {
+		t.Fatalf("CreateEntity: %v", err)
+	}
+	if _, err = srv.CommitTransaction(ctx, &flowv1.CommitTransactionRequest{
+		TransactionId: begin2.TransactionId,
+	}); err == nil {
+		t.Fatal("expected the simulated merge failure")
+	}
+	// Expire the transaction without GC: it is still registered (the tree is
+	// still on its branch) but no longer blocks the wipe guard.
+	fc.Advance(2 * time.Minute)
+	if srv.txManager.HasActive() {
+		t.Fatal("expired transaction must not be reported as active")
+	}
+	if _, err = srv.WipeGraph(ctx, &flowv1.WipeGraphRequest{}); err != nil {
+		t.Fatalf("WipeGraph: %v", err)
+	}
+	// The wipe must have landed on main: restore main (as the next sync cycle
+	// does) and assert the pre-wipe files do not survive.
+	if err := gs.WithGitLock(func() error {
+		if err := gs.RestoreMain(ctx); err != nil {
+			return err
+		}
+		if err := gs.CleanUntracked(ctx); err != nil {
+			return err
+		}
+		types, err := gs.ListEntityTypes(ctx)
+		if err != nil {
+			return err
+		}
+		if len(types) != 0 {
+			return fmt.Errorf("entity files survived the wipe on main: %v", types)
+		}
+		edgeTypes, err := gs.ListEdgeTypes(ctx)
+		if err != nil {
+			return err
+		}
+		if len(edgeTypes) != 0 {
+			return fmt.Errorf("edge files survived the wipe on main: %v", edgeTypes)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // =========================================================================
 // 3. Read-path tests
 // =========================================================================
@@ -2775,6 +2883,7 @@ func TestSyncWorkerPushFailureLeavesFlagSet(t *testing.T) {
 				pushDone: make(chan struct{}),
 			}
 			sw := NewSyncWorker("https://example.com/repo.git", pushGit, base, RealClock{})
+			sw.backoffFn = func(int) time.Duration { return 0 }
 			sw.SetPushNeeded()
 			sw.runSyncCycle()
 			if !sw.pushNeeded.Load() {
@@ -4743,6 +4852,80 @@ func TestCommitTransaction_RetryAfterMergeCompletedOnlyCleansUp(t *testing.T) {
 		return nil
 	}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestCommitTransaction_MergePersistFailureSetsPushNeededOnRetry pins the SPEC
+// R10 "commit() returns immediately and sets the push-needed flag" contract
+// across the merge-then-persist-failure retry: when the fast-forward merge
+// lands on main but the MergeCompleted state write fails, the first attempt
+// returns an error without flagging the push; the retry (MergeCompleted path)
+// must flag the locally-merged commit for push even though it only finishes the
+// cleanup. Without the flag the locally-merged commit stays un-pushed until an
+// unrelated later commit sets it.
+func TestCommitTransaction_MergePersistFailureSetsPushNeededOnRetry(t *testing.T) {
+	base, err := ladybug.OpenInMemory()
+	if err != nil {
+		t.Fatalf("OpenInMemory: %v", err)
+	}
+	t.Cleanup(func() { _ = base.Close() })
+	// Fail the one MergeCompleted state write (the "persist completed merge"
+	// step); the earlier commit-created / re-hydration writes pass through.
+	failingStore := &transactionStateFailingStore{
+		Store: base,
+		fail:  func(state store.BranchTransactionState) bool { return state.MergeCompleted },
+	}
+	ladybugPath := t.TempDir()
+	gs, err := gitstore.New(ladybugPath)
+	if err != nil {
+		t.Fatalf("gitstore.New: %v", err)
+	}
+	opPub, _ := generateTestKey()
+	srv := NewCartographerServer(
+		failingStore, gs, opPub, initTestKey(), nil, "", 30*time.Second,
+		"test-ns", 30*time.Minute, 100000, WithLadybugPath(ladybugPath),
+	)
+	srv.MarkDBReady()
+	// Wire a (non-running) SyncWorker so the push flag is observable. No
+	// remote URL is configured, so BeginTransaction's implicit sync is skipped.
+	sw := NewSyncWorker("", gs, base, RealClock{})
+	srv.syncWorker = sw
+	ctx := testCtx()
+	applyTestSchema(ctx, t, base)
+	begin, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
+	if err != nil {
+		t.Fatalf("BeginTransaction: %v", err)
+	}
+	created, err := srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
+		EntityType: "Component", Properties: map[string]string{"name": "merged"},
+		TransactionId: begin.TransactionId,
+	})
+	if err != nil {
+		t.Fatalf("CreateEntity: %v", err)
+	}
+	// First attempt: the git fast-forward merge lands on main, but persisting
+	// MergeCompleted fails, so CommitTransaction returns an error before the
+	// normal-path SetPushNeeded call.
+	if _, err = srv.CommitTransaction(ctx, &flowv1.CommitTransactionRequest{
+		TransactionId: begin.TransactionId,
+	}); err == nil || !strings.Contains(err.Error(), "state write failure") {
+		t.Fatalf("CommitTransaction error=%v", err)
+	}
+	if sw.pushNeeded.Load() {
+		t.Fatal("push flag set on the failed first attempt before any retry")
+	}
+	// Retry: the MergeCompleted path finishes the cleanup and must flag the
+	// locally-merged commit for push.
+	if _, err = srv.CommitTransaction(ctx, &flowv1.CommitTransactionRequest{
+		TransactionId: begin.TransactionId,
+	}); err != nil {
+		t.Fatalf("retry CommitTransaction: %v", err)
+	}
+	if !sw.pushNeeded.Load() {
+		t.Fatal("locally-merged commit never flagged for push after the retry")
+	}
+	if _, err = base.GetEntity(ctx, created.EntityId, "main"); err != nil {
+		t.Fatalf("merged entity missing from main: %v", err)
 	}
 }
 
