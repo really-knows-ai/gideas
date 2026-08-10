@@ -8316,6 +8316,45 @@ func TestInvalidateBranchState_RejectPathTraversalTxID(t *testing.T) {
 	}
 }
 
+// Closed/failed stores must surface ErrDatabaseNotReady from the branch-state
+// entry points rather than serving stale in-memory state or mutating the state
+// file (learnings rule: a store primitive must fail loudly on a closed/failed
+// store, never silently return state or perform I/O).
+func TestBranchState_ClosedOrFailedStoreReturnsNotReady(t *testing.T) {
+	t.Run("closed store", func(t *testing.T) {
+		s, err := OpenInMemory()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.Close(); err != nil {
+			t.Fatal(err)
+		}
+		ctx := context.Background()
+		if _, err := s.LoadBranchTransactionState(ctx, "tx-state"); !errors.Is(err, store.ErrDatabaseNotReady) {
+			t.Fatalf("LoadBranchTransactionState on closed store: expected ErrDatabaseNotReady, got %v", err)
+		}
+		if err := s.InvalidateBranchState(ctx, "tx-state"); !errors.Is(err, store.ErrDatabaseNotReady) {
+			t.Fatalf("InvalidateBranchState on closed store: expected ErrDatabaseNotReady, got %v", err)
+		}
+	})
+	t.Run("failed store", func(t *testing.T) {
+		s, err := OpenInMemory()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer closeStore(t, s)
+		db := s.(*ladybugDB)
+		db.failed = true
+		ctx := context.Background()
+		if _, err := s.LoadBranchTransactionState(ctx, "tx-state"); !errors.Is(err, store.ErrDatabaseNotReady) {
+			t.Fatalf("LoadBranchTransactionState on failed store: expected ErrDatabaseNotReady, got %v", err)
+		}
+		if err := s.InvalidateBranchState(ctx, "tx-state"); !errors.Is(err, store.ErrDatabaseNotReady) {
+			t.Fatalf("InvalidateBranchState on failed store: expected ErrDatabaseNotReady, got %v", err)
+		}
+	})
+}
+
 // Learnings rule "Sentinel errors over zero-value returns": a failed store must
 // surface ErrDatabaseNotReady from ListMainEntityTypes rather than silently
 // reporting an empty type list with a nil error.

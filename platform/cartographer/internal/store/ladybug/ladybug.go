@@ -152,6 +152,23 @@ func Open(path string) (store.Store, error) {
 // destroy data that was never corrupt, so those opens must fail/classify
 // instead of recovering. If the file is readable, the database engine could
 // not parse it — genuine corruption — and the SPEC R8 recovery path applies.
+//
+// ponytail: the readability probe is a classification heuristic, not a
+// corruption diagnosis, and it has a genuine data-loss ceiling: a
+// readable-but-not-corrupt main.lbug that the engine fails to open for a
+// transient/operational reason — another process holding the file, a library
+// version skew between the binary that wrote it and this build — is classified
+// as a corruption candidate. Open then removes the file irreversibly (it is
+// deleted before the re-open and never backed up) and the R8 recovery
+// re-hydration reconstructs only graph state that was committed to git, so any
+// engine state not yet reflected in the git tree (an in-flight write, a
+// partially-applied schema) is lost with the file. Deployment risk: a pod
+// restart racing a write, or a version-skewed rollback opening a PVC written
+// by a newer build, silently triggers the destructive path instead of failing
+// loudly. Upgrade path: gate the deletion on an engine-level corruption
+// verdict — request an explicit error detail/status from the library (or
+// attempt a read-only open before deleting) — rather than a file-accessibility
+// proxy.
 func corruptionCandidates(dbPath string) bool {
 	// A missing file is not a corruption candidate: OpenDatabase creates a
 	// fresh database for a missing path, so a failure with no file present is
