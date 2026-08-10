@@ -753,7 +753,25 @@ func createNodeTableOnConn(conn *lbug.Connection, name string,
 	}
 	// ponytail: embedding column and vector index are bootstrapped lazily
 	// on first CreateEntity with an embedding; no FLOAT[n] column or index
-	// is created at table creation time.
+	// is created at table creation time. Consequences until that first
+	// bootstrap write: (1) a pre-bootstrap CreateEntity that omits the
+	// embedding fails with ErrVectorBootstrap (SPEC R7/error-table row
+	// "Vector dimension bootstrap failed") — the first entity for a
+	// vector-indexed type must carry an embedding; (2) the type's vector
+	// search silently returns empty — searchIndexedType skips any type
+	// whose dimension is still 0, so SearchNeighbors over the type (or a
+	// wildcard search covering it) reports no results and no error, which
+	// can mask "no embeddings written yet" as "no neighbors found"; and
+	// (3) the FLOAT[n] dimension is permanently locked at the first
+	// bootstrap — a later embedding of a different dimension is rejected
+	// with ErrEmbeddingDimension, and re-dimensioning a bootstrapped type
+	// is possible only through a destructive schema change (drop the type,
+	// wipe, re-apply). Deployment risk: clients that never write embeddings
+	// to a vector-enabled type observe the type as permanently empty to
+	// search while the bootstrap contract silently degrades their writes
+	// to FAILED_PRECONDITION. The laziness is SPEC-mandated (R7/ApplySchema:
+	// the dimension is unknowable until the first embedding), so this is a
+	// documented ceiling, not a divergence.
 	ddl := fmt.Sprintf("CREATE NODE TABLE IF NOT EXISTS %s (%s);", quoteID(name), strings.Join(cols, ", "))
 	r, err := conn.Query(ddl)
 	if err != nil {
