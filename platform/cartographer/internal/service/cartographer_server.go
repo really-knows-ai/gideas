@@ -1443,28 +1443,16 @@ func (s *CartographerServer) BeginTransaction(
 	defer s.txAdmission.RUnlock()
 	txID := s.newIDFn()
 	// Implicit sync before branch creation: if a remote is configured, wake
-	// the sync worker so the branch starts from the latest remote state.
-	// ponytail: the wait is hard-capped at a fixed 30-second budget so a slow
-	// remote cannot tie up the request path unboundedly. The cap truncates any
-	// caller deadline longer than 30s (context.WithTimeout derives
-	// min(parent deadline, 30s)), so a slow cycle surfaces DEADLINE_EXCEEDED
-	// from WakeAndWait even when the caller was willing to wait longer. Here
-	// the failure is only logged and the transaction still begins from the
-	// current local main head: the consequence is a possibly-stale branch
-	// snapshot that later fails the commit-time divergence check
-	// (errCommitNotUpToDate) once the periodic cycle advances main —
-	// recoverable via RefreshTransaction, but the begin silently proceeded
-	// past a sync the caller asked to await. Deployment risk: the wait runs
-	// under txAdmission.RLock, so a slow or unreachable remote (recoverable
-	// network errors are retried inside the cycle with backoff) stalls every
-	// BeginTransaction by up to 30s and blocks WipeGraph (which needs the
-	// write lock) behind it. Upgrade path: derive the budget from the caller
-	// context when it is shorter than the ceiling, and/or make the ceiling a
-	// configurable server knob.
+	// the sync worker so the branch starts from the latest remote state (SPEC
+	// R10: "waits for one full cycle (fetch → merge → re-hydrate → push)
+	// before creating the branch"). The caller's own context deadline bounds
+	// the wait — a slow-but-eventually-successful cycle is awaited in full,
+	// and the begin proceeds early only when the cycle fails or the caller's
+	// deadline fires (sync errors are non-blocking). A caller without a
+	// deadline waits at most one cycle, which is internally bounded by the
+	// worker's per-operation git deadlines (DefaultGitOperationTimeout).
 	if s.syncWorker != nil && s.remoteURL != "" {
-		syncCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		defer cancel()
-		if syncErr := s.syncWorker.WakeAndWait(syncCtx); syncErr != nil {
+		if syncErr := s.syncWorker.WakeAndWait(ctx); syncErr != nil {
 			slog.Warn("begin tx: sync worker cycle failed, proceeding", "error", syncErr)
 		}
 	}
@@ -1828,27 +1816,17 @@ func (s *CartographerServer) CommitTransaction(
 		return nil, mapStoreError(err)
 	}
 	// Notify the sync worker that a commit needs pushing.
-	// ponytail: the WithAck wait is hard-capped at a fixed 30-second budget
-	// so a slow remote cannot tie up the request path unboundedly. The cap
-	// truncates any caller deadline longer than 30s (context.WithTimeout
-	// derives min(parent deadline, 30s)), so a slow cycle surfaces
-	// DEADLINE_EXCEEDED from WakeAndWait and CommitTransaction reports failure
-	// even though the caller was willing to wait longer. Deployment risk: the
-	// commit (git merge, main re-hydration, cleanup) and SetPushNeeded have
-	// already completed before the wait, so a timed-out ack returns an error
-	// for a commit that is actually durable — the push flag stays set and the
-	// periodic cycle delivers the push later, and a client retry is safe (the
-	// MergeCompleted path finishes cleanup and returns success), but the
-	// ambiguity is real. The wait also holds the transaction lifecycle lock,
-	// serializing other RPCs on the same transaction for up to 30s. Upgrade
-	// path: derive the budget from the caller context when it is shorter than
-	// the ceiling, and/or make the ceiling a configurable server knob.
+	// SPEC R10 (SPEC:615-622): WithAck blocks until the sync cycle completes;
+	// the caller's own context deadline bounds the wait, so a caller that
+	// hits the context deadline receives DEADLINE_EXCEEDED and the push flag
+	// stays set (mapGitError preserves the context error's code). A caller
+	// without a deadline waits at most one cycle, which is internally bounded
+	// by the worker's per-operation git deadlines
+	// (DefaultGitOperationTimeout).
 	if s.syncWorker != nil {
 		s.syncWorker.SetPushNeeded()
 		if req.GetAck() {
-			syncCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-			defer cancel()
-			if syncErr := s.syncWorker.WakeAndWait(syncCtx); syncErr != nil {
+			if syncErr := s.syncWorker.WakeAndWait(ctx); syncErr != nil {
 				return nil, mapGitError(syncErr)
 			}
 		}
