@@ -45,7 +45,6 @@ type Store interface {
 	ApplySchema(ctx context.Context, schema *flowv1.Schema) error
 	TableExists(entityType string) bool
 	ListMainEntityTypes() ([]string, error)
-	ValidateSchema(ctx context.Context, schema *flowv1.Schema) error
 	EntityTypeNames() []string
 	EdgeTypeNames() []string
 	EntityType(name string) (*EntityTypeDef, bool)
