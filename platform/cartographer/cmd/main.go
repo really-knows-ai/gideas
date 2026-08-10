@@ -33,6 +33,7 @@ import (
 	"google.golang.org/grpc/health"
 	"google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/reflection"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -200,32 +201,26 @@ func main() {
 	if remoteURL != "" {
 		resolveAuthFn := buildResolveAuthFn(remoteAuthSecretRef, readSecretFn, remoteURL)
 		if err := gs.SetRemote(context.Background(), remoteURL, resolveAuthFn); err != nil {
-			// ponytail: a misconfigured remote (unsupported or erroneous URL
-			// scheme, parse failure, or missing host) is warn-logged but not
-			// fatal at startup. SetRemote validates the URL before storing it
-			// (remote.go validateRemoteURL), so after this failure g.remoteURL
-			// stays empty even though REMOTE_URL is set — and the sync worker
-			// is still created below because it keys off the env var, not
-			// g.remoteURL. The misconfiguration therefore degrades silently:
-			// the first cycle's fetch returns ErrNoRemote ("no remote
-			// configured"), which the fetch path treats as a benign no-op, and
-			// a pending catch-up push surfaces FAILED_PRECONDITION "no remote
-			// configured" via mapGitError (errors.go) on the WithAck/Commit
-			// surface — never INVALID_ARGUMENT. ErrUnsupportedURLScheme is
-			// unreachable in the sync cycle: the scheme was already validated
-			// here, and resolveAuth folds any resolver error (including
-			// buildResolveAuthFn's unsupported-scheme default branch) into
-			// ErrAuthConfigMissing. The one loud signal is the pullOnInit=true
-			// + secretRef startup path, whose pre-flight re-parses the URL and
-			// exits the process on an unsupported scheme (tryRemotePullOnInit).
-			// Upgrade path: make the fatal behavior unconditional — fail
-			// startup (os.Exit) on SetRemote error whenever remoteURL is
-			// explicitly set; revisit if silent degradation for optional
-			// remotes becomes a product requirement.
-			slog.Warn("Failed to configure remote", "error", err)
-		} else {
-			slog.Info("Remote configured", "url", remoteURL)
+			// SPEC error-table row 987 ("Unsupported remote URL scheme" →
+			// INVALID_ARGUMENT) and the R1 remote scheme set: a URL SetRemote
+			// rejects (unsupported scheme, parse failure, no host —
+			// validateRemoteURL, remote.go) is a deployment misconfiguration,
+			// so fail startup loudly rather than degrade silently. The
+			// previous warn-and-continue path left g.remoteURL empty while the
+			// sync worker was still created (keyed on the REMOTE_URL env var),
+			// so the first cycle surfaced ErrNoRemote — a benign no-op on
+			// fetch, FAILED_PRECONDITION "no remote configured" via mapGitError
+			// on the WithAck/Commit surface — never the SPEC's INVALID_ARGUMENT
+			// — and startup outcomes diverged by REMOTE_AUTH_SECRET_REF (the
+			// pullOnInit pre-flight in tryRemotePullOnInit already fails
+			// startup on this same invalid-URL class, SPEC fail-startup clause,
+			// SPEC.md:122). Failing here unifies both paths: a misconfigured
+			// remote always aborts startup, and the worker runs only against a
+			// validated remote.
+			slog.Error("Failed to configure remote; aborting startup", "url", remoteURL, "error", err)
+			os.Exit(1)
 		}
+		slog.Info("Remote configured", "url", remoteURL)
 	}
 
 	// -----------------------------------------------------------------------
@@ -280,7 +275,7 @@ func main() {
 	// worker before the first cycle runs.
 	var initCatchUpPush bool
 	if remotePullOnInit && remoteURL != "" {
-		catchUpPush, err := tryRemotePullOnInit(gs, remoteURL, remoteAuthSecretRef, readSecretFn, auditPub,
+		catchUpPush, err := tryRemotePullOnInit(gs, remoteURL, remoteAuthSecretRef, podNamespace, readSecretFn, auditPub,
 			// SPEC R10 Init: after clone-on-init seeds the git working tree,
 			// re-hydrate main from the cloned file-per-element representation so
 			// the graph is not empty. With the transaction-only write model there
@@ -542,10 +537,14 @@ func startupCatchUpPushNeeded(ctx context.Context, gs gitstore.GitStore) bool {
 // the caller (main) sets the worker's push flag from this before the first
 // cycle runs. The push itself is deliberately NOT performed here: routing it
 // through the worker's cycle keeps the R10 error-table retry contract.
+// podNamespace stamps the clone-failure telemetry event (FlowNamespace),
+// matching the server's publishTelemetry and the sync worker's publishFailure
+// emitters so all three events in this binary carry the same flow attribution.
 func tryRemotePullOnInit(
 	gs gitstore.GitStore,
 	remoteURL string,
 	remoteAuthSecretRef string,
+	podNamespace string,
 	readSecretFn func(ctx context.Context, name string) (map[string]string, error),
 	auditPub *eventbus.AsyncPublisher,
 	rehydrate func() error,
@@ -623,13 +622,21 @@ func tryRemotePullOnInit(
 		}); err != nil {
 			slog.Warn("Initial clone failed (non-blocking)", "error", err)
 			if auditPub != nil {
+				// The event is stamped with the pod's flow namespace and a
+				// timestamp, matching the server's publishTelemetry
+				// (cartographer_server.go) and the sync worker's publishFailure
+				// (sync_worker.go): the AsyncPublisher forwards requests
+				// verbatim, so the event must carry its own attribution or it
+				// is stored un-attributable to a flow.
 				auditPub.Submit(&flowv1.PublishRequest{
 					Channel: "telemetry",
 					Event: &flowv1.FlowEvent{
-						EventId:    fmt.Sprintf("cartographer-clone-%d", time.Now().UnixNano()),
-						EventType:  "cartographer.clone_failed",
-						NodeId:     "cartographer",
-						Attributes: map[string]string{"error": err.Error(), "url": remoteURL},
+						EventId:       fmt.Sprintf("cartographer-clone-%d", time.Now().UnixNano()),
+						EventType:     "cartographer.clone_failed",
+						FlowNamespace: podNamespace,
+						NodeId:        "cartographer",
+						Timestamp:     timestamppb.Now(),
+						Attributes:    map[string]string{"error": err.Error(), "url": remoteURL},
 					},
 				})
 			}

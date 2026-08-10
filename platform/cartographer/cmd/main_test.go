@@ -211,7 +211,7 @@ func TestNewHealthServerServing(t *testing.T) {
 
 func TestTryRemotePullOnInitAnonymous(t *testing.T) {
 	gs := &initPullGitStore{isEmpty: true}
-	catchUp, err := tryRemotePullOnInit(gs, "https://public.example/repo.git", "", nil, nil, nil)
+	catchUp, err := tryRemotePullOnInit(gs, "https://public.example/repo.git", "", "", nil, nil, nil)
 	if err != nil {
 		t.Fatalf("tryRemotePullOnInit: %v", err)
 	}
@@ -226,7 +226,7 @@ func TestTryRemotePullOnInitAnonymous(t *testing.T) {
 func TestTryRemotePullOnInitConfiguredSecretFailure(t *testing.T) {
 	gs := &initPullGitStore{isEmpty: true}
 	secretErr := errors.New("secret unavailable")
-	_, err := tryRemotePullOnInit(gs, "https://private.example/repo.git", "remote-auth",
+	_, err := tryRemotePullOnInit(gs, "https://private.example/repo.git", "remote-auth", "",
 		func(context.Context, string) (map[string]string, error) { return nil, secretErr }, nil, nil)
 	if !errors.Is(err, secretErr) {
 		t.Fatalf("tryRemotePullOnInit error = %v, want wrapped secret error", err)
@@ -242,7 +242,7 @@ func TestTryRemotePullOnInitConfiguredSecretFailure(t *testing.T) {
 // gitstore.ErrAuthConfigMissing before any git operation is attempted.
 func TestTryRemotePullOnInitSSHEmptyKeyFailsClosed(t *testing.T) {
 	gs := &initPullGitStore{isEmpty: true}
-	_, err := tryRemotePullOnInit(gs, "ssh://git@github.com/org/repo.git", "remote-auth",
+	_, err := tryRemotePullOnInit(gs, "ssh://git@github.com/org/repo.git", "remote-auth", "",
 		func(context.Context, string) (map[string]string, error) {
 			return map[string]string{"ssh-privatekey": ""}, nil
 		}, nil, nil)
@@ -260,7 +260,7 @@ func TestTryRemotePullOnInitSSHEmptyKeyFailsClosed(t *testing.T) {
 // support returns gitstore.ErrUnsupportedURLScheme before any git operation.
 func TestTryRemotePullOnInitUnsupportedSchemeFailsClosed(t *testing.T) {
 	gs := &initPullGitStore{isEmpty: true}
-	_, err := tryRemotePullOnInit(gs, "ftp://example.com/repo.git", "remote-auth",
+	_, err := tryRemotePullOnInit(gs, "ftp://example.com/repo.git", "remote-auth", "",
 		func(context.Context, string) (map[string]string, error) {
 			return map[string]string{"username": "user", "password": "pass"}, nil
 		}, nil, nil)
@@ -279,7 +279,7 @@ func TestTryRemotePullOnInitUnsupportedSchemeFailsClosed(t *testing.T) {
 // clone — the remote proceeds anonymously.
 func TestTryRemotePullOnInitFileSchemeAnonymous(t *testing.T) {
 	gs := &initPullGitStore{isEmpty: true}
-	catchUp, err := tryRemotePullOnInit(gs, "file:///tmp/repo.git", "remote-auth",
+	catchUp, err := tryRemotePullOnInit(gs, "file:///tmp/repo.git", "remote-auth", "",
 		func(context.Context, string) (map[string]string, error) {
 			return map[string]string{"password": "unrelated"}, nil
 		}, nil, nil)
@@ -296,7 +296,7 @@ func TestTryRemotePullOnInitFileSchemeAnonymous(t *testing.T) {
 	// reader must not block a file:// remote (SPEC.md:91-100 defines auth keys
 	// only for ssh:// and https://).
 	failGS := &initPullGitStore{isEmpty: true}
-	catchUp, err = tryRemotePullOnInit(failGS, "file:///tmp/repo.git", "remote-auth",
+	catchUp, err = tryRemotePullOnInit(failGS, "file:///tmp/repo.git", "remote-auth", "",
 		func(context.Context, string) (map[string]string, error) {
 			return nil, errors.New("secret unavailable")
 		}, nil, nil)
@@ -317,7 +317,7 @@ func TestTryRemotePullOnInitFileSchemeAnonymous(t *testing.T) {
 // gitstore.ErrAuthConfigMissing before any git operation is attempted.
 func TestTryRemotePullOnInitHTTPSMissingPasswordFailsClosed(t *testing.T) {
 	gs := &initPullGitStore{isEmpty: true}
-	_, err := tryRemotePullOnInit(gs, "https://private.example/repo.git", "remote-auth",
+	_, err := tryRemotePullOnInit(gs, "https://private.example/repo.git", "remote-auth", "",
 		func(context.Context, string) (map[string]string, error) {
 			return map[string]string{"username": "user"}, nil
 		}, nil, nil)
@@ -347,7 +347,7 @@ func TestTryRemotePullOnInitParseURLFailureFailsClosed(t *testing.T) {
 	if _, err := url.Parse(malformedURL); err == nil {
 		t.Fatalf("test fixture %q unexpectedly parses; pick a URL url.Parse rejects", malformedURL)
 	}
-	_, err := tryRemotePullOnInit(gs, malformedURL, "remote-auth",
+	_, err := tryRemotePullOnInit(gs, malformedURL, "remote-auth", "",
 		func(context.Context, string) (map[string]string, error) {
 			return map[string]string{"password": "pass"}, nil
 		}, nil, nil)
@@ -369,7 +369,7 @@ func TestTryRemotePullOnInitParseURLFailureFailsClosed(t *testing.T) {
 // fails closed with gitstore.ErrAuthConfigMissing before any git operation.
 func TestTryRemotePullOnInitNilReadSecretFailsClosed(t *testing.T) {
 	gs := &initPullGitStore{isEmpty: true}
-	_, err := tryRemotePullOnInit(gs, "https://private.example/repo.git", "remote-auth", nil, nil, nil)
+	_, err := tryRemotePullOnInit(gs, "https://private.example/repo.git", "remote-auth", "", nil, nil, nil)
 	if !errors.Is(err, gitstore.ErrAuthConfigMissing) {
 		t.Fatalf("nil-readSecretFn pre-flight error = %v, want ErrAuthConfigMissing", err)
 	}
@@ -380,7 +380,7 @@ func TestTryRemotePullOnInitNilReadSecretFailsClosed(t *testing.T) {
 
 func TestTryRemotePullOnInitPrivateRemoteAuthFailureIsNonBlocking(t *testing.T) {
 	gs := &initPullGitStore{isEmpty: true, cloneErr: gitstore.ErrAuthFailed}
-	catchUp, err := tryRemotePullOnInit(gs, "https://private.example/repo.git", "remote-auth",
+	catchUp, err := tryRemotePullOnInit(gs, "https://private.example/repo.git", "remote-auth", "",
 		func(context.Context, string) (map[string]string, error) {
 			return map[string]string{"password": "expired"}, nil
 		}, nil, nil)
@@ -400,7 +400,7 @@ func TestTryRemotePullOnInitPrivateRemoteAuthFailureIsNonBlocking(t *testing.T) 
 func TestTryRemotePullOnInitCloneRehydrates(t *testing.T) {
 	gs := &scenarioGitStore{initPullGitStore: initPullGitStore{isEmpty: true}}
 	rehydrated := false
-	catchUp, err := tryRemotePullOnInit(gs, "https://public.example/repo.git", "", nil, nil,
+	catchUp, err := tryRemotePullOnInit(gs, "https://public.example/repo.git", "", "", nil, nil,
 		func() error { rehydrated = true; return nil })
 	if err != nil {
 		t.Fatalf("tryRemotePullOnInit: %v", err)
@@ -424,7 +424,7 @@ func TestTryRemotePullOnInitCloneRehydrates(t *testing.T) {
 // propagated to main, which aborts startup (mirroring the recovery path).
 func TestTryRemotePullOnInitRehydrateFailureFailsStartup(t *testing.T) {
 	gs := &initPullGitStore{isEmpty: true}
-	_, err := tryRemotePullOnInit(gs, "https://public.example/repo.git", "", nil, nil,
+	_, err := tryRemotePullOnInit(gs, "https://public.example/repo.git", "", "", nil, nil,
 		func() error { return errors.New("rehydrate boom") })
 	if err == nil {
 		t.Fatal("expected re-hydration failure to be surfaced (fatal at startup), got nil")
@@ -447,7 +447,7 @@ func TestTryRemotePullOnInitRehydrateFailureFailsStartup(t *testing.T) {
 // applies the R10 error-table retry contract to the push).
 func TestTryRemotePullOnInitCatchUpPush(t *testing.T) {
 	gs := &scenarioGitStore{initPullGitStore: initPullGitStore{isEmpty: false}}
-	catchUp, err := tryRemotePullOnInit(gs, "https://public.example/repo.git", "", nil, nil, nil)
+	catchUp, err := tryRemotePullOnInit(gs, "https://public.example/repo.git", "", "", nil, nil, nil)
 	if err != nil {
 		t.Fatalf("tryRemotePullOnInit: %v", err)
 	}
@@ -475,7 +475,7 @@ func TestTryRemotePullOnInitCatchUpPush(t *testing.T) {
 func TestTryRemotePullOnInitCatchUpPushSecretFailureFailsStartup(t *testing.T) {
 	gs := &initPullGitStore{isEmpty: false}
 	secretErr := errors.New("secret unavailable")
-	catchUp, err := tryRemotePullOnInit(gs, "https://private.example/repo.git", "remote-auth",
+	catchUp, err := tryRemotePullOnInit(gs, "https://private.example/repo.git", "remote-auth", "",
 		func(context.Context, string) (map[string]string, error) { return nil, secretErr }, nil, nil)
 	if !errors.Is(err, secretErr) {
 		t.Fatalf("tryRemotePullOnInit error = %v, want wrapped secret error (fail startup)", err)
@@ -497,7 +497,7 @@ func TestTryRemotePullOnInitCatchUpPushSecretFailureFailsStartup(t *testing.T) {
 // reports the catch-up push for the sync worker's first cycle.
 func TestTryRemotePullOnInitCatchUpPushValidSecretPushes(t *testing.T) {
 	gs := &initPullGitStore{isEmpty: false}
-	catchUp, err := tryRemotePullOnInit(gs, "https://private.example/repo.git", "remote-auth",
+	catchUp, err := tryRemotePullOnInit(gs, "https://private.example/repo.git", "remote-auth", "",
 		func(context.Context, string) (map[string]string, error) {
 			return map[string]string{"password": "valid-pass"}, nil
 		}, nil, nil)
@@ -521,7 +521,7 @@ func TestTryRemotePullOnInitCatchUpPushValidSecretPushes(t *testing.T) {
 // and it does not call os.Exit.
 func TestTryRemotePullOnInitStateCheckFailureNonBlocking(t *testing.T) {
 	gs := &initPullGitStore{isEmpty: true, initStateErr: errors.New("state check boom")}
-	catchUp, err := tryRemotePullOnInit(gs, "https://public.example/repo.git", "", nil, nil, nil)
+	catchUp, err := tryRemotePullOnInit(gs, "https://public.example/repo.git", "", "", nil, nil, nil)
 	if err != nil {
 		t.Fatalf("IsEmpty() failure blocked startup: %v", err)
 	}
@@ -942,11 +942,14 @@ func waitForTelemetry(t *testing.T, spy *telemetrySpy, eventType string) *flowv1
 // TestTryRemotePullOnInitCloneFailurePublishesTelemetry verifies SPEC R1: a
 // startup clone failure publishes a "cartographer.clone_failed" telemetry
 // event on the Event Bus (via the async publisher) while startup stays
-// non-blocking.
+// non-blocking. The event must carry the pod's flow namespace and a timestamp,
+// matching the server's publishTelemetry and the sync worker's publishFailure
+// emitters (the AsyncPublisher forwards requests verbatim, so an event without
+// its own attribution is stored un-attributable to a flow).
 func TestTryRemotePullOnInitCloneFailurePublishesTelemetry(t *testing.T) {
 	gs := &initPullGitStore{isEmpty: true, cloneErr: errors.New("clone boom")}
 	spy, pub := newTestAuditPub(t)
-	catchUp, err := tryRemotePullOnInit(gs, "https://private.example/repo.git", "remote-auth",
+	catchUp, err := tryRemotePullOnInit(gs, "https://private.example/repo.git", "remote-auth", "test-ns",
 		func(context.Context, string) (map[string]string, error) {
 			return map[string]string{"password": "expired"}, nil
 		}, pub, nil)
@@ -962,6 +965,14 @@ func TestTryRemotePullOnInitCloneFailurePublishesTelemetry(t *testing.T) {
 	req := waitForTelemetry(t, spy, "cartographer.clone_failed")
 	if req.GetChannel() != "telemetry" {
 		t.Fatalf("telemetry channel = %q, want %q", req.GetChannel(), "telemetry")
+	}
+	if got := req.GetEvent().GetFlowNamespace(); got != "test-ns" {
+		t.Fatalf("telemetry flow namespace = %q, want %q", got, "test-ns")
+	}
+	if ts := req.GetEvent().GetTimestamp(); ts == nil {
+		t.Fatal("telemetry event has no Timestamp, want one (matching the server/sync-worker emitters)")
+	} else if ts.AsTime().Before(time.Now().Add(-time.Minute)) {
+		t.Fatalf("telemetry timestamp %v is not recent", ts.AsTime())
 	}
 	if got := req.GetEvent().GetAttributes()["url"]; got != "https://private.example/repo.git" {
 		t.Fatalf("telemetry url attribute = %q, want the remote URL", got)
@@ -979,7 +990,7 @@ func TestTryRemotePullOnInitCloneFailurePublishesTelemetry(t *testing.T) {
 func TestTryRemotePullOnInitCatchUpPushEmitsNoTelemetry(t *testing.T) {
 	gs := &initPullGitStore{isEmpty: false}
 	spy, pub := newTestAuditPub(t)
-	catchUp, err := tryRemotePullOnInit(gs, "https://public.example/repo.git", "", nil, pub, nil)
+	catchUp, err := tryRemotePullOnInit(gs, "https://public.example/repo.git", "", "", nil, pub, nil)
 	if err != nil {
 		t.Fatalf("tryRemotePullOnInit: %v", err)
 	}

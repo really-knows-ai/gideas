@@ -549,11 +549,11 @@ func classifySyncError(err error) syncClassification {
 	// cycle can never succeed; it must fail the cycle immediately so Sync()
 	// surfaces the mapped status. In production the unsupported-scheme error
 	// is unreachable in this cycle — SetRemote validates the scheme once at
-	// startup and resolveAuth folds any resolver error (including
-	// buildResolveAuthFn's unsupported-scheme default branch) into
-	// ErrAuthConfigMissing — so a broken remote URL instead surfaces as
-	// ErrNoRemote (FAILED_PRECONDITION "no remote configured", errors.go);
-	// the branch is kept as the test-injectable mapping for the SPEC row.
+	// startup (main fails startup on a rejected URL, cmd/main.go) and
+	// resolveAuth folds any resolver error (including buildResolveAuthFn's
+	// unsupported-scheme default branch) into ErrAuthConfigMissing — so a
+	// broken remote URL never reaches this cycle; the branch is kept as the
+	// test-injectable mapping for the SPEC row.
 	if errors.Is(err, gitstore.ErrAuthFailed) ||
 		errors.Is(err, gitstore.ErrAuthConfigMissing) ||
 		errors.Is(err, gitstore.ErrUnsupportedURLScheme) ||
