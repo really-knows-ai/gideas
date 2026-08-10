@@ -601,7 +601,7 @@ func TestValidateSchema(t *testing.T) {
 			}},
 		},
 	}
-	if err := s.ValidateSchema(context.Background(), valid); err != nil {
+	if err := s.(*ladybugDB).ValidateSchema(context.Background(), valid); err != nil {
 		t.Errorf("expected valid schema to pass: %v", err)
 	}
 
@@ -611,7 +611,7 @@ func TestValidateSchema(t *testing.T) {
 			{Name: ""},
 		},
 	}
-	if err := s.ValidateSchema(context.Background(), invalid); err == nil {
+	if err := s.(*ladybugDB).ValidateSchema(context.Background(), invalid); err == nil {
 		t.Error("expected error for empty entity type name")
 	}
 }
