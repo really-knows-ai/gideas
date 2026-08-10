@@ -284,13 +284,16 @@ func TestValidate_EntityPropertyEmbeddingOKWhenNotIndexed(t *testing.T) {
 	}
 }
 
-// An edge property named "from" is rejected, but by the reserved-word check,
-// not the implicit-column collision branch: "FROM" is in reservedWords, so
-// the collision check's `p.Name == "from"` disjunct is unreachable (dropped
-// from validateEdgeType) and a property named "from" surfaces
-// ErrReservedWord — also pinned by TestValidate_ReservedWordNewlyAdded and
-// TestValidate_ReservedWordCaseInsensitive. Both rows are INVALID_ARGUMENT at
-// the wire (SPEC R1 error-table rows "Name is a LadybugDB reserved word" and
+// An edge property named "from" is rejected — in practice by the
+// reserved-word check (FROM is in reservedWords, and that check runs before
+// the collision branch), not the implicit-column collision branch. The
+// collision branch's `p.Name == "from"` disjunct is retained so the SPEC R1
+// implicit-column-collision guarantee ("Edge properties entries must not use
+// the names id, from, to, type") is self-contained and survives any future
+// trim of FROM from reservedWords. A property named "from" surfaces
+// ErrReservedWord today — also pinned by TestValidate_ReservedWordNewlyAdded
+// and TestValidate_ReservedWordCaseInsensitive. Both rows are INVALID_ARGUMENT
+// at the wire (SPEC R1 error-table rows "Name is a LadybugDB reserved word" and
 // implicit-column collision).
 func TestValidate_EdgePropertyCollidesWithFrom(t *testing.T) {
 	s := &flowv1.Schema{
@@ -490,15 +493,21 @@ func TestValidate_EmptySchema(t *testing.T) {
 	}
 }
 
-// A nil schema (unset proto3 message field — an ApplySchemaRequest without a
-// schema is forwarded unguarded to Validate by the handler) is equivalent to
-// an empty schema: SPEC:86 permits empty or omitted entityTypes/edgeTypes
-// arrays, so a fully omitted schema must validate, not panic. Nil
-// EntityTypes/EdgeTypes fields on a non-nil schema must likewise be treated
-// as empty lists.
+// A nil schema (an unset proto3 message field — an ApplySchemaRequest without
+// a schema is forwarded unguarded to Validate by the handler) is a malformed
+// request, not an empty schema: SPEC:86 permits empty or omitted
+// entityTypes/edgeTypes arrays *within* a schema message, but a fully omitted
+// schema would be dereferenced by the store (diffSchemaAgainstCatalog →
+// collectFromToPairs read s.EntityTypes) after validation and panic, so
+// Validate must reject it with ErrNilSchema (→ INVALID_ARGUMENT at the gRPC
+// boundary via the service's isSchemaError). Nil EntityTypes/EdgeTypes fields
+// on a non-nil schema are still treated as empty lists.
 func TestValidate_NilSchema(t *testing.T) {
-	if err := Validate(nil); err != nil {
-		t.Fatalf("expected nil error for nil schema, got: %v", err)
+	err := Validate(nil)
+	if err == nil {
+		t.Fatal("expected ErrNilSchema for nil schema, got nil")
+	} else if !errors.Is(err, ErrNilSchema) {
+		t.Fatalf("expected ErrNilSchema for nil schema, got: %v", err)
 	}
 
 	// Nil EntityTypes / EdgeTypes fields treated as empty lists.

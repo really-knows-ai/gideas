@@ -37,18 +37,21 @@ const UntypedTableName = "_untyped"
 //  3. Per property within a type, in declaration order: property name format,
 //     duplicate property names, reserved-word status, implicit-column
 //     collision (entity: id/embedding when vector index enabled; edge:
-//     id/to/type — "from" is caught by the reserved-word check above, so it
-//     never reaches the collision branch), and property type must be "string"
+//     id/from/to/type), and property type must be "string"
 //  4. Rule validation (undeclared references, empty lists), after each entity
 //     type's properties pass
 func Validate(schema *flowv1.Schema) error {
-	// An omitted schema (nil proto3 message field — e.g. an
-	// ApplySchemaRequest without a schema, forwarded unguarded by the handler)
-	// is equivalent to an empty schema: SPEC:86 permits an empty or omitted
-	// entityTypes/edgeTypes array, so a fully omitted schema is valid too.
-	// Guard before any field access so Validate never panics on a nil pointer.
+	// An omitted schema (nil proto3 message field — an ApplySchemaRequest
+	// whose schema field is unset) is a malformed request, not an empty
+	// schema. SPEC:86 permits an empty or omitted entityTypes/edgeTypes array
+	// *within* a schema message, but a fully absent schema cannot be applied:
+	// the store dereferences it (diffSchemaAgainstCatalog and
+	// collectFromToPairs read s.EntityTypes) after Validate returns, so
+	// accepting nil here would hand the store a nil pointer that panics
+	// (surfacing as gRPC INTERNAL). Reject it with ErrNilSchema, which the
+	// service's isSchemaError maps to INVALID_ARGUMENT.
 	if schema == nil {
-		return nil
+		return ErrNilSchema
 	}
 
 	// 1. Type-name format, then duplicate detection (format first so an
@@ -198,11 +201,16 @@ func validateEdgeType(et *flowv1.EdgeType) error {
 			return fmt.Errorf("%w: property %q in edge type %q is a reserved word", ErrReservedWord, p.Name, et.Name)
 		}
 
-		// 3. Implicit-column collision (edges). "from" is deliberately absent:
-		// it is caught by the reserved-word check above (FROM is in
-		// reservedWords), so the collision branch is unreachable for it — a
-		// property named "from" surfaces ErrReservedWord.
-		if p.Name == "id" || p.Name == "to" || p.Name == "type" {
+		// 3. Implicit-column collision (edges): id/from/to/type are the rel
+		// table's structural identifier and endpoint columns (SPEC R1
+		// "Implicit-column collision (edges)"). "from" is included here — not
+		// left to the reserved-word check above — so the collision guarantee
+		// is self-contained and survives any future trim of FROM from
+		// reservedWords (a property named "from" would otherwise silently
+		// alias the rel table's source column). Today the reserved-word check
+		// fires first for "from", so the observable sentinel is
+		// ErrReservedWord; both rows are INVALID_ARGUMENT at the wire.
+		if p.Name == "id" || p.Name == "from" || p.Name == "to" || p.Name == "type" {
 			return fmt.Errorf("%w: property %q in edge type %q collides with reserved column",
 				ErrImplicitColumnCollision, p.Name, et.Name)
 		}

@@ -12,4 +12,5 @@ var (
 	ErrEmptyRuleList           = schemaerrors.ErrEmptyRuleList
 	ErrUndeclaredTypeRef       = schemaerrors.ErrUndeclaredTypeRef
 	ErrNilElement              = schemaerrors.ErrNilElement
+	ErrNilSchema               = schemaerrors.ErrNilSchema
 )
