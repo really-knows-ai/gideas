@@ -4724,11 +4724,40 @@ func remoteHEAD(t *testing.T, bareDir string) plumbing.Hash {
 	return remoteRef.Hash()
 }
 
+// copyDir recursively copies the directory tree at src into dst, preserving
+// file permissions. Used to derive a repo-local copy from a seed repo so the
+// copied repository is byte-identical to the seed (see
+// TestFetchAndMerge_BootstrapFromInitOnly).
+func copyDir(t *testing.T, src, dst string) {
+	t.Helper()
+	if err := filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(dst, rel)
+		if info.IsDir() {
+			return os.MkdirAll(target, 0755)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(target, data, info.Mode())
+	}); err != nil {
+		t.Fatalf("copy %s to %s: %v", src, dst, err)
+	}
+}
+
 // TestFetchAndMerge_BootstrapFromInitOnly exercises the SPEC R10
-// clone-vs-pull bootstrap path: an init-only local repo (created by New())
-// pulls from a remote that shares the same init commit and has additional
-// history. FetchAndMerge must fast-forward local main from the init commit
-// to the remote's HEAD without returning ErrPullDiverged.
+// clone-vs-pull bootstrap path: an init-only local repo (created by New()
+// over a copy of the seed's repo, so its init commit is the seed's init
+// commit) pulls from a remote that shares the same init commit and has
+// additional history. FetchAndMerge must fast-forward local main from the
+// init commit to the remote's HEAD without returning ErrPullDiverged.
 func TestFetchAndMerge_BootstrapFromInitOnly(t *testing.T) {
 	tmpDir := t.TempDir()
 	bareDir := filepath.Join(tmpDir, "remote.git")
@@ -4783,9 +4812,16 @@ func TestFetchAndMerge_BootstrapFromInitOnly(t *testing.T) {
 		t.Fatalf("push: %v", err)
 	}
 
-	// Create a fresh local repo via New() — this produces the same "init"
-	// commit as the seed, so local main IS an ancestor of remote main.
+	// Derive the local repo from the seed rather than minting a fresh init
+	// commit via New(): New()'s init commit embeds the current time (go-git
+	// encodes whole seconds), so a second-boundary crossing between the seed
+	// and local creation would produce a different init commit hash, breaking
+	// the "local main IS an ancestor of remote main" premise with
+	// ErrPullDiverged. Copying the seed's graph-repo makes local main the
+	// seed's init commit by construction (New opens an existing repo when
+	// .git already exists, so no new init commit is created).
 	localDir := filepath.Join(tmpDir, "local")
+	copyDir(t, filepath.Join(seedDir, "graph-repo"), filepath.Join(localDir, "graph-repo"))
 	localStore, err := New(localDir)
 	if err != nil {
 		t.Fatalf("New local: %v", err)

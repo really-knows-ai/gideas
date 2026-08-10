@@ -28,7 +28,7 @@ import (
 // FetchAndMerge and CloneSingleBranch thread it into FetchContext, PushRemote
 // into PushContext (remote.go) — so caller cancellation and deadlines abort a
 // hung remote and surface the context error (the sync worker's per-operation
-// git deadline, SPEC R10 / SPEC:978, depends on this). All other store I/O is
+// git deadline, SPEC R10 / SPEC:981, depends on this). All other store I/O is
 // not ctx-aware: go-billy filesystem operations (stat, open, write, Close) and
 // the go-git worktree operations (add, commit, checkout, clean, remove, log)
 // take no context, so a hung CSI/NFS filesystem (a blocked stat, open, write,
