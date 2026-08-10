@@ -59,6 +59,45 @@ func TestValidate_DuplicateEdgeTypeName(t *testing.T) {
 	}
 	if err := Validate(s); err == nil {
 		t.Fatal("expected ErrDuplicateTypeName, got nil")
+	} else if !errors.Is(err, ErrDuplicateTypeName) {
+		t.Fatalf("expected ErrDuplicateTypeName, got: %v", err)
+	}
+}
+
+// Format validation runs before duplicate detection (validate.go), so two
+// identically-named but invalid types or properties surface ErrInvalidName —
+// the structural defect — not ErrDuplicateTypeName/ErrDuplicatePropertyName.
+// Both are INVALID_ARGUMENT at the wire; the ordering only fixes the
+// diagnostic.
+func TestValidate_InvalidNameBeforeDuplicateDetection(t *testing.T) {
+	// Two empty-named entity types: the invalid name, not the duplicate, is
+	// the defect reported.
+	s := &flowv1.Schema{
+		EntityTypes: []*flowv1.EntityType{
+			{Name: ""},
+			{Name: ""},
+		},
+	}
+	if err := Validate(s); err == nil {
+		t.Fatal("expected ErrInvalidName, got nil")
+	} else if !errors.Is(err, ErrInvalidName) {
+		t.Fatalf("expected ErrInvalidName for two empty-named entity types, got: %v", err)
+	}
+
+	// Two empty-named properties in one entity type: same ordering.
+	s = &flowv1.Schema{
+		EntityTypes: []*flowv1.EntityType{{
+			Name: "Component",
+			Properties: []*flowv1.Property{
+				{Name: "", Type: "string"},
+				{Name: "", Type: "string"},
+			},
+		}},
+	}
+	if err := Validate(s); err == nil {
+		t.Fatal("expected ErrInvalidName, got nil")
+	} else if !errors.Is(err, ErrInvalidName) {
+		t.Fatalf("expected ErrInvalidName for two empty-named properties, got: %v", err)
 	}
 }
 
@@ -245,6 +284,14 @@ func TestValidate_EntityPropertyEmbeddingOKWhenNotIndexed(t *testing.T) {
 	}
 }
 
+// An edge property named "from" is rejected, but by the reserved-word check,
+// not the implicit-column collision branch: "FROM" is in reservedWords, so
+// the collision check's `p.Name == "from"` disjunct is unreachable (dropped
+// from validateEdgeType) and a property named "from" surfaces
+// ErrReservedWord — also pinned by TestValidate_ReservedWordNewlyAdded and
+// TestValidate_ReservedWordCaseInsensitive. Both rows are INVALID_ARGUMENT at
+// the wire (SPEC R1 error-table rows "Name is a LadybugDB reserved word" and
+// implicit-column collision).
 func TestValidate_EdgePropertyCollidesWithFrom(t *testing.T) {
 	s := &flowv1.Schema{
 		EdgeTypes: []*flowv1.EdgeType{
@@ -257,7 +304,9 @@ func TestValidate_EdgePropertyCollidesWithFrom(t *testing.T) {
 		},
 	}
 	if err := Validate(s); err == nil {
-		t.Fatal("expected ErrImplicitColumnCollision, got nil")
+		t.Fatal("expected ErrReservedWord for edge property \"from\", got nil")
+	} else if !errors.Is(err, ErrReservedWord) {
+		t.Fatalf("expected ErrReservedWord for edge property \"from\", got: %v", err)
 	}
 }
 
@@ -591,12 +640,15 @@ func TestValidate_ReservedWordCaseInsensitive(t *testing.T) {
 // TestValidate_ReservedWordNewlyAdded verifies that keywords added to close
 // the gap between the hand-maintained list and the engine's reserved words
 // are now rejected at validation time (SPEC R1, error-table row "Name is a
-// LadybugDB reserved word" → INVALID_ARGUMENT), not at table-creation time
-// (FAILED_PRECONDITION).
+// LadybugDB reserved word" → INVALID_ARGUMENT). The engine never rejects such
+// names at table-creation time — the store's DDL is backtick-quoted via
+// quoteID and the engine accepts backtick-quoted reserved words — so
+// validation is the only guard; a word absent from reservedWords is applied
+// silently.
 func TestValidate_ReservedWordNewlyAdded(t *testing.T) {
 	newlyAdded := []string{
 		"CONSTRAINT", "COUNT", "CYPHER", "EXPLAIN", "FILTER",
-		"FROM", "NODE", "NONE", "PROFILE", "REDUCE", "SHOW", "UNIQUE",
+		"FOR", "FROM", "NODE", "NONE", "PROFILE", "REDUCE", "SHOW", "UNIQUE",
 	}
 	for _, kw := range newlyAdded {
 		t.Run("entity type/"+kw, func(t *testing.T) {
