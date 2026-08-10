@@ -84,19 +84,24 @@ This determines which quality gate applies (see Hard Rules).
 ### 3. Dispatch one implementer per file group (parallel, isolated worktrees)
 
 For each file group, dispatch one `@implementer` subagent.  **Code-file
-groups run IN PARALLEL**, each in its own isolated git worktree, so they
-never clash on the shared working tree.  **Plan-file groups run SERIALLY**
-in the main working tree — plan files live under `plans/`, which is
-gitignored by design and therefore does not exist in any branch or
+groups run IN PARALLEL by default**, each in its own isolated git worktree,
+so they never clash on the shared working tree.  **Plan-file groups run
+SERIALLY** in the main working tree — plan files live under `plans/`,
+which is gitignored by design and therefore does not exist in any branch or
 worktree, so there is no worktree to isolate them in and nothing to merge.
+
+**Use your judgement:** if code-file groups touch the same module or have interdependent changes, serialise some or all of them to
+avoid merge conflicts.  Worktree isolation prevents filesystem clashes but
+does not prevent semantic conflicts — serialising reduces merge-phase churn.
 
 Before dispatching, determine each group's file category (from Step 2):
 
 - **code groups** — primary file is tracked source (not under `plans/`).
   Dispatch in parallel; each implementer works in its own worktree.
 - **plan groups** — primary file under `plans/` (gitignored).  Dispatch
-  serially; the implementer works in the main working tree and does not
-  commit (the change is not tracked).
+  in parallel; the implementer works in the main working tree and does not
+  commit (the change is not tracked).  Plan files are partitioned by file
+  so groups never edit the same file.
 
 Derive a **group slug** from each group's primary file: lowercase the
 relative path and replace every non-alphanumeric character with `-`
@@ -221,11 +226,9 @@ clashing on the shared working tree.
 - Report the quality gate outcome after your last item.
 ```
 
-#### 3b. Plan-group implementer prompt (serial, main working tree)
+#### 3b. Plan-group implementer prompt (parallel, main working tree)
 
-Handle plan-group implementers one at a time, waiting for each to complete
-before dispatching the next — they share the main working tree.  Each
-receives this prompt:
+Handle plan-group implementers in parallel.  Each receives this prompt:
 
 ```
 You are responsible for fixing all review items assigned to <FILE>.
@@ -289,8 +292,8 @@ not tracked).
 - Report the quality gate outcome after your last item.
 ```
 
-Wait for all code-group implementers (parallel) and all plan-group
-implementers (serial) to complete before proceeding to the merge phase.
+Wait for all code-group implementers and all plan-group
+implementers to complete before proceeding to the merge phase.
 
 ### 4. Merge the worktree branches back into main
 
@@ -449,9 +452,11 @@ wont-fix (claim wrong, spec contradicts, or fixing causes harm).
 ## Hard Rules
 
 - Fix exactly the items in the review.  Do not fix things not listed.
-- **Code groups run in parallel, each in an isolated worktree.**  Dispatch
-  every code-group implementer up front and wait for all to complete.
-  Plan groups run serially in the main working tree.
+- **Code groups default to parallel, each in an isolated worktree.**  Dispatch
+  every code-group implementer up front and wait for all to complete, unless
+  groups touch the same module or have interdependent changes — in that case,
+  serialise them to avoid merge conflicts.  Plan groups dispatch in parallel
+  (they are partitioned by file, so never conflict on the same document).
 - **Every code group works on its own branch and worktree.**  Never share a
   worktree between groups.  Derive a unique branch/worktree per group slug
   (appending `-02`, `-03`, … on collision) and branch off the base branch.
@@ -504,9 +509,10 @@ wont-fix (claim wrong, spec contradicts, or fixing causes harm).
 - **Ignoring Prior learnings.**  If a learning says "use section headings
   not line numbers" and the implementer fixes a cross-reference by updating
   the line number, that fix will be rejected on the next review pass.
-- **Running code groups serially (or plan groups in parallel).**  Code
+- **Running all code groups serially without reason.**  Code
   groups are the reason worktrees exist — running them one-at-a-time wastes
-  the isolation.  Plan groups share the main tree and must not overlap.
+  the isolation.  Serialise only when groups touch the same module or have
+  interdependent changes.
 - **Sharing a worktree between groups.**  Two implementers in the same
   worktree re-create the stampede the design eliminates.  One group, one
   branch, one worktree.
