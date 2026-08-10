@@ -657,6 +657,36 @@ func (db *ladybugDB) HydrateBranchFromFiles(ctx context.Context, txID, entitiesD
 	if err := db.loadEdgesFromDirOnConn(br.conn, edgesDir, br.edgeTypeDefs); err != nil {
 		return err
 	}
+	// Persist the branch schema metadata AFTER hydration. ReplicateSchemaToBranch
+	// writes branches/<txID>.schema.json before hydration runs, so any types and
+	// FROM/TO pairs inferred from the directory structure (SPEC R8) here are absent
+	// from that record. Without this rewrite, a crash + restart reopens the branch
+	// via branchLocked → restoreBranchSchemaMetadata, whose
+	// validateMetadataAgainstCatalog fails hard ("database entity type X is absent
+	// from schema metadata") on the inferred types, and RecoverOpenTransactions
+	// treats that non-ErrBranchNotFound error as a hard startup failure instead of
+	// rolling back the one affected branch. The pairs come from the branch rel
+	// tables' actual endpoints (mirroring RehydrateMainFromFiles'
+	// rebuildEdgePairsLocked), so rule-less inferred edge types round-trip the
+	// catalog comparison on reopen. The block runs only after every load succeeds:
+	// a failed hydration leaves the persisted record untouched.
+	if db.path != "" {
+		pairs, perr := connectionEdgePairs(br.conn, br.edgeTypeDefs)
+		if perr != nil {
+			br.failed = true
+			return fmt.Errorf("capture relationship endpoints: %w", perr)
+		}
+		metadata := metadataFromDefinitions(br.entityTypeDefs, br.edgeTypeDefs, pairs)
+		metadata, err = captureVectorState(br.conn, metadata)
+		if err != nil {
+			br.failed = true
+			return fmt.Errorf("capture branch vector state: %w", err)
+		}
+		if err := db.writeMetadata(db.branchMetadataPath(txID), metadata); err != nil {
+			br.failed = true
+			return fmt.Errorf("persist branch schema metadata: %w", err)
+		}
+	}
 	return nil
 }
 
@@ -921,11 +951,21 @@ func insertEdgeOnConn(conn *lbug.Connection, edgeType string, pairs []fromToPair
 	// CreateEdge).
 	fromLabel, err := nodeLabelOnConn(conn, edge.FromEntityID)
 	if err != nil {
+		// Only a genuine "not found" maps to ErrSourceOrTargetNotFound; a real
+		// DB failure (Prepare/Execute) must propagate as an operational error
+		// instead of being masked as NOT_FOUND (mirrors CreateEdge's probe
+		// classification in crud.go).
+		if !errors.Is(err, store.ErrEntityNotFound) {
+			return fmt.Errorf("resolve edge %q from endpoint entity %q: %w", edge.Id, edge.FromEntityID, err)
+		}
 		return fmt.Errorf("%w: edge %q from endpoint entity %q not found",
 			store.ErrSourceOrTargetNotFound, edge.Id, edge.FromEntityID)
 	}
 	toLabel, err := nodeLabelOnConn(conn, edge.ToEntityID)
 	if err != nil {
+		if !errors.Is(err, store.ErrEntityNotFound) {
+			return fmt.Errorf("resolve edge %q to endpoint entity %q: %w", edge.Id, edge.ToEntityID, err)
+		}
 		return fmt.Errorf("%w: edge %q to endpoint entity %q not found",
 			store.ErrSourceOrTargetNotFound, edge.Id, edge.ToEntityID)
 	}
@@ -1176,7 +1216,7 @@ func nodeLabelOnConn(conn *lbug.Connection, id string) (string, error) {
 	}
 	defer result.Close()
 	if !result.HasNext() {
-		return "", fmt.Errorf("endpoint entity %q not found", id)
+		return "", fmt.Errorf("%w: endpoint entity %q not found", store.ErrEntityNotFound, id)
 	}
 	tuple, err := result.Next()
 	if err != nil {

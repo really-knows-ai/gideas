@@ -434,13 +434,23 @@ func (db *ladybugDB) CreateEdge(
 		}
 	}
 
-	// Verify source/target entities exist and get their types.
+	// Verify source/target entities exist and get their types. Only a genuine
+	// "entity not found" from the probe maps to ErrSourceOrTargetNotFound (SPEC
+	// error table: "Source or target entity not found on CreateEdge" →
+	// NOT_FOUND); a real DB failure (Prepare/Execute) must propagate as an
+	// operational error instead of being masked as a client-visible NOT_FOUND.
 	src, err := findEntityByID(conn, typeDefs.entityTypeDefs, fromID)
 	if err != nil {
+		if !errors.Is(err, store.ErrEntityNotFound) {
+			return nil, fmt.Errorf("resolve source entity %q: %w", fromID, err)
+		}
 		return nil, fmt.Errorf("%w: source entity %q not found", store.ErrSourceOrTargetNotFound, fromID)
 	}
 	tgt, err := findEntityByID(conn, typeDefs.entityTypeDefs, toID)
 	if err != nil {
+		if !errors.Is(err, store.ErrEntityNotFound) {
+			return nil, fmt.Errorf("resolve target entity %q: %w", toID, err)
+		}
 		return nil, fmt.Errorf("%w: target entity %q not found", store.ErrSourceOrTargetNotFound, toID)
 	}
 
