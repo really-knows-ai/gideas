@@ -147,23 +147,20 @@ func (db *ladybugDB) ExtractEntityTypes(ctx context.Context, cypher string) ([]s
 // runs syntax validation (Prepare) before this point, so it only classifies
 // the pattern structure of a statement already known to parse.
 //
-// ponytail: The analyzer handles the common labelled-node shapes — named and
-// anonymous nodes, multi-label nodes, inline property maps, and relationship
-// patterns — but cannot classify exotic constructs: backtick-quoted labels
-// (`(n:\`Label With Space\`)`), parameterised labels (`(n:$label)`), dynamic
-// labels, or labels embedded in parenthesised expressions the matcher cannot
-// balance. Each miss under-approximates the referenced set and yields the
-// wildcard fallback (an empty slice), which is fail-closed for a per-type
-// holder (availability: PERMISSION_DENIED) — but a partial extraction that
-// includes SOME labels and misses others lets a caller holding only the
-// extracted subset execute a query that also touches a missed type, widening
-// access relative to the every-referenced-type rule (SPEC R3). This
-// under-approximation risk is bounded by the analyzer's coverage of common
-// shapes and is the SPEC-mandated best-effort trade-off ("Extraction is
-// best-effort and never an error"; SPEC:251). Upgrade path: a server-side cgo
-// binding of a real Cypher parser (e.g. libcypher-parser) exposing the
-// statement AST would make extraction exact; per the SPEC discussion this is
-// deferred while the regex-state-machine coverage is sufficient.
+// Fail-closed on unclassifiable labels: when a node pattern carries a label
+// form the analyzer cannot classify — backtick-quoted labels (`(n:`Label With
+// Space`)`), parameterised labels (`(n:$label)`), dynamic labels, or labels in
+// patterns the matcher cannot balance — the extraction is abandoned and
+// returns nil, so the caller falls back to the READ:graph/entity/* wildcard
+// check (SPEC:260 "must never widen access beyond the wildcard fallback"). A
+// partial extraction that returned only the classifiable labels would let a
+// caller holding that subset execute a query that also touches a missed type,
+// widening access relative to the every-referenced-type rule (SPEC R3); the
+// wildcard check is strictly stronger than any per-type subset. Upgrade path:
+// a server-side cgo binding of a real Cypher parser (e.g. libcypher-parser)
+// exposing the statement AST would make extraction exact; per the SPEC
+// discussion this is deferred while the regex-state-machine coverage is
+// sufficient.
 func extractEntityTypeLabels(cypher string) []string {
 	s := stripCommentsAndStrings(cypher)
 	seen := make(map[string]struct{})
@@ -193,8 +190,19 @@ func extractEntityTypeLabels(cypher string) []string {
 		}
 		for part := range strings.SplitSeq(rest, ":") {
 			label := strings.TrimSpace(part)
+			if label == "" {
+				continue // artifact of the ':' split (leading/trailing separator)
+			}
 			if !isCypherIdentifier(label) {
-				continue
+				// Fail closed: an unclassifiable label form (backtick-quoted,
+				// parameterised, or dynamic labels) means the statement's
+				// referenced-type set cannot be derived exactly. Returning a
+				// partial subset would let a caller holding only the extracted
+				// types execute a query that also touches a missed type,
+				// widening access beyond the every-referenced-type rule
+				// (SPEC R3). Returning nil sends the caller to the
+				// READ:graph/entity/* wildcard check — the SPEC:260 bound.
+				return nil
 			}
 			if _, dup := seen[label]; dup {
 				continue

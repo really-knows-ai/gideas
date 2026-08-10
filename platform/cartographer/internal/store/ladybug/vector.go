@@ -150,14 +150,18 @@ func (db *ladybugDB) WipeSchema(ctx context.Context) error {
 		// residual-index hazard where the drop fails while the subsequent
 		// DROP TABLE succeeds — leaving an index pointing at a vanished table
 		// that would collide with a later ApplySchema of the same-named type.
-		if vectorIndexExists(db.conn, name) {
+		if ok, err := vectorIndexExists(db.conn, name); err != nil {
+			return fmt.Errorf("check vector index for %q: %w", name, err)
+		} else if ok {
 			r, err := db.conn.Query(fmt.Sprintf("CALL DROP_VECTOR_INDEX('%s', '%s_vec');", name, name))
 			if err != nil {
 				return fmt.Errorf("drop vector index for %q: %w", name, err)
 			}
 			r.Close()
 		}
-		if ftsIndexExists(db.conn, name) {
+		if ok, err := ftsIndexExists(db.conn, name); err != nil {
+			return fmt.Errorf("check FTS index for %q: %w", name, err)
+		} else if ok {
 			r, err := db.conn.Query(fmt.Sprintf("CALL DROP_FTS_INDEX('%s', '%s_fts');", name, name))
 			if err != nil {
 				return fmt.Errorf("drop FTS index for %q: %w", name, err)
