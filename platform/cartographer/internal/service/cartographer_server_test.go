@@ -5046,6 +5046,56 @@ func TestExportGraph_GraphML(t *testing.T) {
 	}
 }
 
+// TestSerializeGraph_GraphMLDeterministic pins the serializer determinism
+// contract: GraphML <data> elements inside each node/edge are emitted in sorted
+// property-key order (the same order as the <key> declarations), so repeated
+// serialisation of the same graph is byte-identical. Map-iteration order is
+// randomised by the runtime, so this test fails without the sort.
+func TestSerializeGraph_GraphMLDeterministic(t *testing.T) {
+	entities := []store.Entity{
+		{Id: "e1", Type: "Component", Properties: map[string]string{"z": "1", "a": "2", "m": "3"}},
+	}
+	edges := []store.Edge{
+		{
+			Id:           "ed1",
+			Type:         "DEPENDS_ON",
+			FromEntityID: "e1",
+			ToEntityID:   "e2",
+			Properties:   map[string]string{"w": "5", "k": "x", "q": "y"},
+		},
+	}
+	want := `<?xml version="1.0" encoding="UTF-8"?>
+<graphml xmlns="http://graphml.graphdrawing.org/xmlns">
+  <key id="a" for="node" attr.name="a" attr.type="string"/>
+  <key id="m" for="node" attr.name="m" attr.type="string"/>
+  <key id="z" for="node" attr.name="z" attr.type="string"/>
+  <key id="k" for="edge" attr.name="k" attr.type="string"/>
+  <key id="q" for="edge" attr.name="q" attr.type="string"/>
+  <key id="w" for="edge" attr.name="w" attr.type="string"/>
+  <graph id="G" edgedefault="directed">
+    <node id="e1"><data key="a">2</data><data key="m">3</data><data key="z">1</data></node>
+    <edge id="ed1" source="e1" target="e2"><data key="k">x</data><data key="q">y</data><data key="w">5</data></edge>
+  </graph>
+</graphml>
+`
+	first, err := serializeGraph(ExportFormatGraphML, entities, edges)
+	if err != nil {
+		t.Fatalf("serializeGraph: %v", err)
+	}
+	if got := string(first); got != want {
+		t.Fatalf("GraphML output mismatch\nwant: %s\ngot:  %s", want, got)
+	}
+	for i := range 9 {
+		got, err := serializeGraph(ExportFormatGraphML, entities, edges)
+		if err != nil {
+			t.Fatalf("serializeGraph iteration %d: %v", i, err)
+		}
+		if string(got) != string(first) {
+			t.Fatalf("GraphML serialisation is non-deterministic (iteration %d differs):\nfirst: %s\niter:  %s", i, first, got)
+		}
+	}
+}
+
 // =========================================================================
 // 9. Missing error-condition tests
 // =========================================================================

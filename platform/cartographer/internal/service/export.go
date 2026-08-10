@@ -148,14 +148,16 @@ func serializeGraphML(entities []store.Entity, edges []store.Edge) ([]byte, erro
 	buf.WriteString(`  <graph id="G" edgedefault="directed">` + "\n")
 	for _, e := range entities {
 		fmt.Fprintf(&buf, `    <node id="%s">`, e.Id)
-		for k, v := range e.Properties {
+		for _, k := range sortedKeys(e.Properties) {
+			v := e.Properties[k]
 			fmt.Fprintf(&buf, `<data key="%s">%s</data>`, html.EscapeString(k), html.EscapeString(v))
 		}
 		buf.WriteString("</node>\n")
 	}
 	for _, e := range edges {
 		fmt.Fprintf(&buf, `    <edge id="%s" source="%s" target="%s">`, e.Id, e.FromEntityID, e.ToEntityID)
-		for k, v := range e.Properties {
+		for _, k := range sortedKeys(e.Properties) {
+			v := e.Properties[k]
 			fmt.Fprintf(&buf, `<data key="%s">%s</data>`, html.EscapeString(k), html.EscapeString(v))
 		}
 		buf.WriteString("</edge>\n")
@@ -163,4 +165,16 @@ func serializeGraphML(entities []store.Entity, edges []store.Edge) ([]byte, erro
 	buf.WriteString("  </graph>\n")
 	buf.WriteString("</graphml>\n")
 	return buf.Bytes(), nil
+}
+
+// sortedKeys returns the map's keys in sorted order. The <key> declarations and
+// every <data> element are emitted in this order, keeping GraphML serialisation
+// deterministic (map-iteration order is randomised by the runtime).
+func sortedKeys(m map[string]string) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
