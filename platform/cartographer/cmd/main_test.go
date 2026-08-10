@@ -6,6 +6,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/pem"
 	"errors"
 	"net"
@@ -50,6 +51,7 @@ type initPullGitStore struct {
 	isEmpty      bool
 	cloneCalls   int
 	cloneErr     error
+	cloneCtx     context.Context // the context CloneSingleBranch was invoked with
 	pushCalls    int
 	pushErr      error
 	initStateErr error
@@ -57,8 +59,9 @@ type initPullGitStore struct {
 
 func (g *initPullGitStore) IsEmpty(context.Context) (bool, error) { return g.isEmpty, g.initStateErr }
 func (g *initPullGitStore) WithGitLock(fn func() error) error     { return fn() }
-func (g *initPullGitStore) CloneSingleBranch(context.Context, string, string) error {
+func (g *initPullGitStore) CloneSingleBranch(ctx context.Context, _ string, _ string) error {
 	g.cloneCalls++
+	g.cloneCtx = ctx
 	return g.cloneErr
 }
 func (g *initPullGitStore) PushRemote(context.Context) error {
@@ -113,20 +116,35 @@ func TestParseBoolEnv(t *testing.T) {
 		{"0", true, false},
 		{"t", false, true},
 		{"F", true, false},
-		// empty and unparseable values fall back to the default, never panic.
+		// empty and unset values fall back to the default, never panic.
 		{"", true, true},
-		{"bogus", true, true},
 	}
 	for _, tc := range cases {
 		t.Setenv("REMOTE_PULL_ON_INIT", tc.val)
-		if got := parseBoolEnv("REMOTE_PULL_ON_INIT", tc.def); got != tc.want {
-			t.Errorf("parseBoolEnv(%q, %v) = %v, want %v", tc.val, tc.def, got, tc.want)
+		got, err := parseBoolEnv(tc.def)
+		if err != nil {
+			t.Errorf("parseBoolEnv(%v) unexpected error: %v", tc.def, err)
+			continue
+		}
+		if got != tc.want {
+			t.Errorf("parseBoolEnv(%v) = %v, want %v", tc.def, got, tc.want)
 		}
 	}
 	// Unset env falls back to default.
 	t.Setenv("REMOTE_PULL_ON_INIT", "")
-	if got := parseBoolEnv("REMOTE_PULL_ON_INIT", false); got {
+	got, err := parseBoolEnv(false)
+	if err != nil {
+		t.Fatalf("parseBoolEnv on unset var: %v", err)
+	}
+	if got {
 		t.Error("parseBoolEnv on unset var = true, want false")
+	}
+	// An unparseable value returns an error (SPEC R5 fail-fast, mirroring
+	// parseDurationEnv): the caller exits the process rather than silently
+	// running with the default pull-on-init setting.
+	t.Setenv("REMOTE_PULL_ON_INIT", "bogus")
+	if _, err := parseBoolEnv(true); err == nil {
+		t.Error("parseBoolEnv on invalid value = nil error, want error (fail-fast exit)")
 	}
 }
 
@@ -220,6 +238,36 @@ func TestTryRemotePullOnInitAnonymous(t *testing.T) {
 	}
 	if gs.cloneCalls != 1 {
 		t.Fatalf("anonymous clone calls = %d, want 1", gs.cloneCalls)
+	}
+}
+
+// TestTryRemotePullOnInitCloneBounded pins the clone-on-init deadline: the
+// clone is a git operation, so it carries the same per-operation deadline the
+// sync worker applies to every git op (service.DefaultGitOperationTimeout) —
+// a hung remote aborts the clone with a context deadline instead of blocking
+// startup forever (clone failures are then logged and non-blocking per SPEC
+// R10 Init).
+func TestTryRemotePullOnInitCloneBounded(t *testing.T) {
+	gs := &initPullGitStore{isEmpty: true}
+	if _, err := tryRemotePullOnInit(gs, "https://public.example/repo.git", "", "", nil, nil, nil); err != nil {
+		t.Fatalf("tryRemotePullOnInit: %v", err)
+	}
+	if gs.cloneCalls != 1 {
+		t.Fatalf("clone calls = %d, want 1", gs.cloneCalls)
+	}
+	if gs.cloneCtx == nil {
+		t.Fatal("expected the clone to receive a context")
+	}
+	deadline, ok := gs.cloneCtx.Deadline()
+	if !ok {
+		t.Fatal("expected the clone-on-init context to carry a deadline (bounded clone), got none")
+	}
+	wantDeadline := time.Now().Add(service.DefaultGitOperationTimeout)
+	if deadline.Before(time.Now()) {
+		t.Fatalf("clone deadline %v is already in the past", deadline)
+	}
+	if delta := wantDeadline.Sub(deadline); delta > 5*time.Second {
+		t.Fatalf("clone deadline %v is more than 5s before the expected %v (wrong timeout?)", deadline, wantDeadline)
 	}
 }
 
@@ -1025,7 +1073,11 @@ func TestParseVerificationKeyMissingEnv(t *testing.T) {
 }
 
 func TestParseVerificationKeyInvalidLength(t *testing.T) {
-	t.Setenv("OPERATOR_VERIFICATION_KEY", "too-short")
+	// Valid base64 that decodes to the wrong length: the value is
+	// well-formed base64 of a 5-byte key, so the decode succeeds and the
+	// length check must reject it (a raw "too-short" string would now fail the
+	// base64 decode first, exercising the wrong branch).
+	t.Setenv("OPERATOR_VERIFICATION_KEY", base64.StdEncoding.EncodeToString([]byte("short")))
 	got, err := parseVerificationKey("OPERATOR_VERIFICATION_KEY")
 	if err == nil {
 		t.Fatal("expected error for malformed verification key, got nil")
@@ -1036,9 +1088,11 @@ func TestParseVerificationKeyInvalidLength(t *testing.T) {
 }
 
 func TestParseVerificationKeyValid(t *testing.T) {
-	// A raw 32-byte key with no NUL bytes (env vars cannot hold NUL on POSIX).
+	// The operator provisions the public key base64-encoded in the Secret's
+	// `key` field (reconcileSecrets, operator foundrygraph_keys.go), so the env
+	// var holds the base64 of the raw 32-byte key.
 	key := bytes.Repeat([]byte{'a'}, ed25519.PublicKeySize)
-	t.Setenv("OPERATOR_VERIFICATION_KEY", string(key))
+	t.Setenv("OPERATOR_VERIFICATION_KEY", base64.StdEncoding.EncodeToString(key))
 	got, err := parseVerificationKey("OPERATOR_VERIFICATION_KEY")
 	if err != nil {
 		t.Fatalf("parseVerificationKey: %v", err)
@@ -1050,7 +1104,46 @@ func TestParseVerificationKeyValid(t *testing.T) {
 		t.Fatalf("key length = %d, want %d", len(got), ed25519.PublicKeySize)
 	}
 	if !bytes.Equal(got, ed25519.PublicKey(key)) {
-		t.Fatal("parsed key does not match the raw env bytes")
+		t.Fatal("parsed key does not match the raw key bytes")
+	}
+}
+
+// TestParseVerificationKeyNULByte pins the fix for the verification-key NUL
+// truncation defect: ~12% of random Ed25519 public keys contain a NUL byte,
+// which POSIX env vars cannot hold (execve truncates the value at the first
+// NUL), so a raw key would be silently truncated and every verification would
+// fail closed (CrashLoopBackOff). The operator therefore base64-encodes the key
+// into the Secret, and the base64 of a key containing a NUL byte must decode
+// back to the full 32 bytes.
+func TestParseVerificationKeyNULByte(t *testing.T) {
+	key := make([]byte, ed25519.PublicKeySize)
+	key[0] = 0x00 // NUL as the first byte — the value execve would truncate to empty
+	key[15] = 0x42
+	t.Setenv("OPERATOR_VERIFICATION_KEY", base64.StdEncoding.EncodeToString(key))
+	got, err := parseVerificationKey("OPERATOR_VERIFICATION_KEY")
+	if err != nil {
+		t.Fatalf("parseVerificationKey on base64 of NUL-bearing key: %v", err)
+	}
+	if len(got) != ed25519.PublicKeySize {
+		t.Fatalf("key length = %d, want %d (NUL byte must not truncate)", len(got), ed25519.PublicKeySize)
+	}
+	if !bytes.Equal(got, ed25519.PublicKey(key)) {
+		t.Fatal("NUL-bearing key does not round-trip through base64 decode")
+	}
+}
+
+// TestParseVerificationKeyInvalidEncoding verifies that a verification-key env
+// value that is not valid base64 fails fast (SPEC R5 fail-closed guard): the
+// operator now provisions base64-encoded keys, so an un-decodable value is a
+// deployment misconfiguration and must not be silently accepted or mangled.
+func TestParseVerificationKeyInvalidEncoding(t *testing.T) {
+	t.Setenv("OPERATOR_VERIFICATION_KEY", "this is not base64!!!")
+	got, err := parseVerificationKey("OPERATOR_VERIFICATION_KEY")
+	if err == nil {
+		t.Fatal("expected error for non-base64 verification key env, got nil")
+	}
+	if got != nil {
+		t.Fatalf("expected nil key on malformed encoding, got %v", got)
 	}
 }
 

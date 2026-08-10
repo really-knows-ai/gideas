@@ -20,6 +20,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"encoding/base64"
 	"errors"
 	"strings"
 	"testing"
@@ -96,12 +97,17 @@ func TestReconcileSecretsCreatesPerNamespaceKeys(t *testing.T) {
 		t.Fatalf("reconcileSecrets: %v", err)
 	}
 
-	// The per-namespace key Secrets must have been created.
+	// The per-namespace key Secrets must have been created. The public `key`
+	// values are base64-encoded for env-var transport (a raw Ed25519 key can
+	// contain a NUL byte, which POSIX env vars cannot hold), so the assertions
+	// compare against the base64 of the operator-namespace raw bytes; the
+	// sidecar `private-key` is copied through raw (nothing consumes it from an
+	// env var today).
 	var sd corev1.Secret
 	if err := fakeCli.Get(ctx, types.NamespacedName{Name: sidecarKeySecretName, Namespace: targetNS}, &sd); err != nil {
 		t.Fatalf("expected sidecar key Secret in namespace %q: %v", targetNS, err)
 	}
-	if string(sd.Data["key"]) != "sd-pub" || string(sd.Data["private-key"]) != "sd-priv" {
+	if string(sd.Data["key"]) != base64.StdEncoding.EncodeToString([]byte("sd-pub")) || string(sd.Data["private-key"]) != "sd-priv" {
 		t.Errorf("sidecar key Secret data mismatch: %v", sd.Data)
 	}
 
@@ -109,7 +115,7 @@ func TestReconcileSecretsCreatesPerNamespaceKeys(t *testing.T) {
 	if err := fakeCli.Get(ctx, types.NamespacedName{Name: operatorKeySecretName, Namespace: targetNS}, &op); err != nil {
 		t.Fatalf("expected operator key Secret in namespace %q: %v", targetNS, err)
 	}
-	if string(op.Data["key"]) != "op-pub" {
+	if string(op.Data["key"]) != base64.StdEncoding.EncodeToString([]byte("op-pub")) {
 		t.Errorf("operator key Secret data mismatch: %v", op.Data)
 	}
 }
@@ -156,7 +162,7 @@ func TestReconcileSecretsIdempotentWhenPresent(t *testing.T) {
 	if err := fakeCli.Get(ctx, types.NamespacedName{Name: operatorKeySecretName, Namespace: targetNS}, &got); err != nil {
 		t.Fatalf("get operator Secret: %v", err)
 	}
-	if string(got.Data["key"]) != "op-current" {
+	if string(got.Data["key"]) != base64.StdEncoding.EncodeToString([]byte("op-current")) {
 		t.Errorf("operator key should be converged to the current operator public key, got %q", got.Data["key"])
 	}
 }
@@ -217,7 +223,7 @@ func TestReconcileSecretsPropagatesKeyRotation(t *testing.T) {
 	if err := fakeCli.Get(ctx, types.NamespacedName{Name: operatorKeySecretName, Namespace: targetNS}, &perNS); err != nil {
 		t.Fatalf("get per-namespace operator key Secret: %v", err)
 	}
-	if string(perNS.Data["key"]) != "rotated-pub" {
+	if string(perNS.Data["key"]) != base64.StdEncoding.EncodeToString([]byte("rotated-pub")) {
 		t.Errorf("expected per-namespace operator key reconciled to rotated public key, got %q", perNS.Data["key"])
 	}
 }

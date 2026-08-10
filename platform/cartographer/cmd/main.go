@@ -4,6 +4,7 @@ package main
 import (
 	"context"
 	"crypto/ed25519"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -50,7 +51,11 @@ func main() {
 	cartographerPort := getEnv("CARTOGRAPHER_PORT", "50051")
 	remoteURL := os.Getenv("REMOTE_URL")
 	remoteAuthSecretRef := os.Getenv("REMOTE_AUTH_SECRET_REF")
-	remotePullOnInit := parseBoolEnv("REMOTE_PULL_ON_INIT", false)
+	// SPEC R5 fail-fast env guard: an unparseable boolean is fatal. The
+	// fail-fast decision (return an error) is factored into parseBoolEnv so it
+	// is unit-testable without os.Exit; loadPullOnInit owns the process exit,
+	// mirroring loadVerificationKey below.
+	remotePullOnInit := loadPullOnInit()
 	podNamespace := getEnv("POD_NAMESPACE", "default")
 	eventBusAddress := os.Getenv("EVENT_BUS_ADDRESS")
 
@@ -217,23 +222,34 @@ func main() {
 			// SPEC error-table row 987 ("Unsupported remote URL scheme" →
 			// INVALID_ARGUMENT) and the R1 remote scheme set: a URL SetRemote
 			// rejects (unsupported scheme, parse failure, no host —
-			// validateRemoteURL, remote.go) is a deployment misconfiguration,
-			// so fail startup loudly rather than degrade silently. The
-			// previous warn-and-continue path left g.remoteURL empty while the
-			// sync worker was still created (keyed on the REMOTE_URL env var),
-			// so the first cycle surfaced ErrNoRemote — a benign no-op on
-			// fetch, FAILED_PRECONDITION "no remote configured" via mapGitError
-			// on the WithAck/Commit surface — never the SPEC's INVALID_ARGUMENT
-			// — and startup outcomes diverged by REMOTE_AUTH_SECRET_REF (the
-			// pullOnInit pre-flight in tryRemotePullOnInit already fails
-			// startup on this same invalid-URL class, SPEC fail-startup clause,
-			// SPEC.md:122). Failing here unifies both paths: a misconfigured
-			// remote always aborts startup, and the worker runs only against a
-			// validated remote.
-			slog.Error("Failed to configure remote; aborting startup", "url", remoteURL, "error", err)
-			os.Exit(1)
+			// validateRemoteURL, remote.go) is a deployment misconfiguration.
+			// The fail-startup clause is scoped to pullOnInit: true (SPEC.md:122:
+			// "An empty Secret or one missing the expected key causes the
+			// Cartographer to fail startup if pullOnInit is true" — the same
+			// clause tryRemotePullOnInit's pre-flight implements), and R10 Init
+			// (SPEC.md:636-641) logs clone/init failures and does not block
+			// startup. So: with pullOnInit=true a rejected remote aborts startup
+			// loudly (a misconfigured remote that the pod is supposed to clone on
+			// init is a deployment error worth surfacing immediately); with
+			// pullOnInit=false (the default) the remote is only used by the sync
+			// worker's runtime cycles, whose errors are logged and non-blocking —
+			// so a rejected URL degrades to that same logged, non-blocking class
+			// instead of crash-looping. In both cases the worker is still created
+			// (keyed on REMOTE_URL); with a rejected remote its first cycle
+			// surfaces ErrNoRemote — a benign, logged no-op (sync_worker.go
+			// fetchAndRehydrate) — and WithAck/Commit fail with
+			// FAILED_PRECONDITION "no remote configured" via mapGitError, the
+			// same runtime surface a pullOnInit=false misconfiguration produces
+			// today.
+			if remotePullOnInit {
+				slog.Error("Failed to configure remote; aborting startup", "url", remoteURL, "error", err)
+				os.Exit(1)
+			}
+			slog.Warn("Failed to configure remote (non-fatal: pullOnInit=false); remote sync degraded",
+				"url", remoteURL, "error", err)
+		} else {
+			slog.Info("Remote configured", "url", remoteURL)
 		}
-		slog.Info("Remote configured", "url", remoteURL)
 	}
 
 	// -----------------------------------------------------------------------
@@ -630,8 +646,17 @@ func tryRemotePullOnInit(
 	}
 	if empty {
 		slog.Info("Pulling from remote on init", "url", remoteURL)
+		// SPEC R10 / SPEC:978: the sync worker bounds every git operation by
+		// the configurable per-operation deadline (gitOp, default
+		// service.DefaultGitOperationTimeout, five minutes). The clone-on-init
+		// path is a git operation too, so it carries the same deadline: a hung
+		// remote aborts the clone with a context error instead of blocking
+		// startup forever (the failure is then logged and non-blocking per SPEC
+		// R10 Init — clone failures never fail startup).
+		cloneCtx, cancel := context.WithTimeout(context.Background(), service.DefaultGitOperationTimeout)
+		defer cancel()
 		if err := gs.WithGitLock(func() error {
-			return gs.CloneSingleBranch(context.Background(), remoteURL, "main")
+			return gs.CloneSingleBranch(cloneCtx, remoteURL, "main")
 		}); err != nil {
 			slog.Warn("Initial clone failed (non-blocking)", "error", err)
 			if auditPub != nil {
@@ -823,22 +848,43 @@ func waitForShutdown(
 		// ponytail: the 30s GracefulStop budget is hardcoded and coupled to the
 		// Deployment's `terminationGracePeriodSeconds: 100` (deployment.yaml).
 		// GracefulStop is allowed at most this long; immediately after this
-		// select the durability teardown runs (StopGC, dbStore.Close, git
-		// RestoreMain/CleanUntracked) and *consumes the same process budget* —
-		// it has roughly 100s - 30s = ~70s left before kubelet SIGKILLs the pod.
-		// Failure mode: if the teardown (a slow dbStore.Close flushing the branch
-		// connections + main handle, or a slow git lock acquisition + RestoreMain
-		// + CleanUntracked) exceeds that leftover ~70s window, the process is
-		// SIGKILLed mid-teardown and git is left on a stranded transaction branch
-		// that the next startup's R8 re-hydration must reconcile. If deployment.yaml's grace
-		// period is ever lowered below this 30s budget, a slow drain consumes the
-		// whole window and the durability steps never run at all. Ceiling: the
-		// budget number lives only on each side (code 30s / manifest 100s) with no
-		// single source of truth or guard that one stays below the other — the 70s
-		// headroom silently shrinks whenever one is changed without the other.
-		// Upgrade path: derive both from one shared constant, or make the teardown
-		// independently bounded and surface (log) when it approaches the grace
-		// window so operators can size terminationGracePeriodSeconds from evidence.
+		// select the remaining shutdown steps run and *consume the same process
+		// budget* — the pod has roughly 100s - 30s = ~70s left before kubelet
+		// SIGKILLs it.
+		//
+		// The first of those steps is syncW.Stop() (the next statement in
+		// waitForShutdown), and it is the ONE step in this teardown that is NOT
+		// bounded by any deadline:
+		// Stop() signals the worker and blocks until its loop exits, and the
+		// worker's final cycle on shutdown is a full sync cycle (fetch → merge →
+		// re-hydrate → push; sync_worker.go run/runSyncCycle). Each git
+		// operation in that cycle carries the worker's per-operation deadline
+		// (gitOp, DefaultGitOperationTimeout = 5m), and both the fetch and push
+		// legs retry up to 3 attempts with backoff — so with a hung remote,
+		// Stop() can block for tens of minutes (fetch ≤3 × 5m + push ≤3 × 5m +
+		// backoff), far past the ~100s window. kubelet then SIGKILLs the pod
+		// mid-Stop: the final cycle is abandoned (worst case, a pending push
+		// never delivered — recovered by the next startup's catch-up push) and,
+		// critically, the durability teardown below (dbStore.Close, git
+		// RestoreMain/CleanUntracked) never runs at all, so git can be left on a
+		// stranded transaction branch that the next startup's R8 re-hydration
+		// must reconcile. In the common case the worker's cycle is fast
+		// (sub-second when the remote is healthy and idle), so this only
+		// manifests when the remote is hung at shutdown time.
+		//
+		// Ceiling: the budget number lives only on each side (code 30s /
+		// manifest 100s) with no single source of truth or guard that one stays
+		// below the other — the 70s headroom silently shrinks whenever one is
+		// changed without the other — and the final sync cycle's duration is
+		// bounded only by the per-operation gitOp deadlines multiplied by the
+		// fetch/push retry counts, which are invisible here.
+		// Upgrade path: derive both from one shared constant, and bound the
+		// final cycle the same way the budget's other steps are bounded — e.g.
+		// run syncW.Stop() under a select with a bounded timer (or give the
+		// worker a StopWithTimeout) so the durability teardown always starts
+		// within the leftover window, and surface (log) when the teardown
+		// approaches the grace window so operators can size
+		// terminationGracePeriodSeconds from evidence.
 		grpcServer.Stop()
 	}
 
@@ -915,21 +961,36 @@ func newHealthServer() *health.Server {
 	return srv
 }
 
-// parseBoolEnv parses a boolean environment variable case-insensitively via
-// strconv.ParseBool (accepts "true"/"false"/"1"/"0"/"t"/"f"), falling back to
-// defaultVal on empty or unparseable values instead of silently dropping
-// pull-on-init at startup.
-func parseBoolEnv(key string, defaultVal bool) bool {
-	v := strings.TrimSpace(os.Getenv(key))
+// loadPullOnInit reads the REMOTE_PULL_ON_INIT knob (default false), failing
+// fast on an unparseable value (SPEC R5 fail-fast env guard). The fail-fast
+// decision (return an error) is factored into parseBoolEnv so it is
+// unit-testable without os.Exit; this wrapper owns the process exit, mirroring
+// loadVerificationKey.
+func loadPullOnInit() bool {
+	v, err := parseBoolEnv(false)
+	if err != nil {
+		slog.Error("invalid REMOTE_PULL_ON_INIT", "error", err)
+		os.Exit(1)
+	}
+	return v
+}
+
+// parseBoolEnv parses the REMOTE_PULL_ON_INIT boolean environment variable
+// case-insensitively via strconv.ParseBool (accepts "true"/"false"/"1"/"0"/"t"/"f"),
+// falling back to defaultVal on an empty/unset value. An unparseable value
+// returns an error (SPEC R5 fail-fast, mirroring parseDurationEnv): the caller
+// exits the process rather than silently running with a wrong pull-on-init
+// setting.
+func parseBoolEnv(defaultVal bool) (bool, error) {
+	v := strings.TrimSpace(os.Getenv("REMOTE_PULL_ON_INIT"))
 	if v == "" {
-		return defaultVal
+		return defaultVal, nil
 	}
 	b, err := strconv.ParseBool(v)
 	if err != nil {
-		slog.Warn("Invalid boolean env var (falling back to default)", "var", key, "value", v, "error", err)
-		return defaultVal
+		return false, fmt.Errorf("invalid boolean value %q for REMOTE_PULL_ON_INIT: %w", v, err)
 	}
-	return b
+	return b, nil
 }
 
 // parseDurationEnv parses a duration environment variable via
@@ -957,20 +1018,28 @@ func loadVerificationKey(envVar string) ed25519.PublicKey {
 	return key
 }
 
-// parseVerificationKey returns the editor verification public key from a
+// parseVerificationKey returns the editor verification public key from an
 // environment variable, or an error if it is absent or malformed. The operator
-// provisions the public key as raw 32-byte Ed25519 bytes in the Secret's `key`
-// field (see operator foundrygraph_keys.go), so the env var holds the raw key —
-// no base64 decoding.
+// provisions the public key base64-encoded in the Secret's `key` field (see
+// operator foundrygraph_keys.go reconcileSecrets): the per-namespace Secret is
+// consumed by the Cartographer through a secretKeyRef env var, and POSIX execve
+// truncates env values at the first NUL byte — ~12% of random Ed25519 public
+// keys contain a NUL byte, so a raw 32-byte key would be silently truncated and
+// fail closed on every verification. The env var therefore holds the base64
+// encoding of the raw key, which is decoded here.
 func parseVerificationKey(envVar string) (ed25519.PublicKey, error) {
-	keyBytes := os.Getenv(envVar)
-	if keyBytes == "" {
+	b64 := os.Getenv(envVar)
+	if b64 == "" {
 		return nil, fmt.Errorf("missing required environment variable %s", envVar)
+	}
+	keyBytes, err := base64.StdEncoding.DecodeString(b64)
+	if err != nil {
+		return nil, fmt.Errorf("invalid verification key encoding (expected base64): %w", err)
 	}
 	if len(keyBytes) != ed25519.PublicKeySize {
 		return nil, fmt.Errorf("invalid verification key length: expected %d, got %d", ed25519.PublicKeySize, len(keyBytes))
 	}
-	return ed25519.PublicKey([]byte(keyBytes)), nil
+	return ed25519.PublicKey(keyBytes), nil
 }
 
 // newReadSecretFn builds the SPEC R1 (SPEC.md:103) Secret reader: the Cartographer

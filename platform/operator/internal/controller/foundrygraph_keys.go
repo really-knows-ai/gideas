@@ -20,6 +20,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/base64"
 	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
@@ -147,6 +148,25 @@ func InitializeSidecarSigningKey(ctx context.Context, c client.Client, operatorN
 // key — otherwise the proxy signs with the new private key while the Cartographer
 // verifies against a stale public key, failing closed on every request. So this
 // reconciles (CreateOrUpdate) rather than create-only.
+//
+// The per-namespace public `key` values are base64-encoded for env-var transport:
+// Kubernetes env vars from secretKeyRef cannot hold NUL bytes (POSIX execve truncates
+// the value at the first NUL), and ~12% of random Ed25519 public keys contain a NUL
+// byte, so a raw 32-byte key would be silently truncated and fail closed on every
+// verification (CrashLoopBackOff at startup). The Cartographer's parseVerificationKey
+// base64-decodes the env var (cartographer/cmd/main.go).
+// ponytail: only the per-namespace public `key` fields are base64-encoded here. The
+// per-namespace sidecar `private-key` field is copied through raw — nothing consumes
+// it today (the Cartographer reads only `key`; the proxy signs from the operator-
+// namespace signing Secret returned in-memory by InitializeOperatorSigningKey, not
+// from this per-namespace copy), so a future consumer that reads `private-key` from
+// an env var hits the same NUL-truncation seam this encoding fixes for `key`.
+// Pre-existing per-namespace Secrets created before this encoding hold raw 32-byte
+// keys until the next reconcile re-encodes them (CreateOrUpdate converges the data
+// field), but a pod already running keeps the old env value until it restarts, so a
+// roll-out mid-migration can briefly carry stale raw bytes. Upgrade path: base64-
+// encode `private-key` too once a consumer reads it via env, or have consumers read
+// the Secrets as mounted files (byte-exact) instead of env vars.
 func (r *FoundryGraphReconciler) reconcileSecrets(ctx context.Context, fg *flowv1.FoundryGraph) error {
 	log := logf.FromContext(ctx)
 
@@ -171,7 +191,13 @@ func (r *FoundryGraphReconciler) reconcileSecrets(ctx context.Context, fg *flowv
 	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, sidecarSecret, func() error {
 		sidecarSecret.Labels = labels
 		sidecarSecret.Data = map[string][]byte{
-			"key":         operatorSidecar.Data["key"],
+			// The per-namespace public `key` is base64-encoded so the
+			// Cartographer can read it from a secretKeyRef env var: POSIX
+			// execve truncates env values at the first NUL byte, and ~12% of
+			// random Ed25519 public keys contain a NUL byte — a raw 32-byte
+			// key would be silently truncated and every verification request
+			// would fail closed (CrashLoopBackOff at startup).
+			"key":         []byte(base64.StdEncoding.EncodeToString(operatorSidecar.Data["key"])),
 			"private-key": operatorSidecar.Data["private-key"],
 		}
 		return nil
@@ -198,7 +224,10 @@ func (r *FoundryGraphReconciler) reconcileSecrets(ctx context.Context, fg *flowv
 	result, err := controllerutil.CreateOrUpdate(ctx, r.Client, operatorSecret, func() error {
 		operatorSecret.Labels = labels
 		operatorSecret.Data = map[string][]byte{
-			"key": operatorSigningSecret.Data["key"],
+			// Base64-encoded public key, matching the sidecar Secret above
+			// (the Cartographer base64-decodes it from the env var — see
+			// parseVerificationKey in cartographer/cmd/main.go).
+			"key": []byte(base64.StdEncoding.EncodeToString(operatorSigningSecret.Data["key"])),
 		}
 		return nil
 	})
