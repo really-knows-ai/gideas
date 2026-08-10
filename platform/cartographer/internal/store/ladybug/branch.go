@@ -1338,6 +1338,18 @@ func (db *ladybugDB) loadEntitiesFromDir(dir string, entDefs map[string]*store.E
 				return fmt.Errorf("%w: entity file %q is missing required key 'id'",
 					store.ErrInvalidEntityDir, filepath.Join(typeDir, f.Name()))
 			}
+			// The raw filename base must equal the embedded id — the sibling
+			// gitstore read path's invariant (ReadAllEntityFiles rejects a file
+			// whose embedded id conflicts with its filename). A well-formed
+			// file is <id>.json whose embedded id equals the filename base
+			// (writeEntityFile); a corrupt/hand-edited file such as
+			// wrongname.json containing a canonical id would otherwise load
+			// silently under an id never written to that path — resurrecting a
+			// previously deleted element on re-hydration. Fail loudly instead.
+			if base := strings.TrimSuffix(f.Name(), ".json"); base != je.ID {
+				return fmt.Errorf("%w: entity file %s embedded id %s conflicts with filename",
+					store.ErrInvalidEntityDir, f.Name(), je.ID)
+			}
 			// The directory-mismatch guard runs BEFORE the embedding-bootstrap
 			// DDL: a corrupt/hand-edited file declaring a type that differs from
 			// its directory must be rejected before ensureEmbeddingLoadSchema
@@ -1438,6 +1450,18 @@ func (db *ladybugDB) loadEdgesFromDir(dir string, edgeDefs map[string]*store.Edg
 				return fmt.Errorf("%w: edge file %q is missing required key 'id'",
 					store.ErrInvalidEdgeDir, filepath.Join(typeDir, f.Name()))
 			}
+			// The raw filename base must equal the embedded id — the sibling
+			// gitstore read path's invariant (ReadAllEdgeFiles rejects a file
+			// whose embedded id conflicts with its filename). A well-formed
+			// file is <id>.json whose embedded id equals the filename base
+			// (writeEdgeFile); a corrupt/hand-edited file such as wrongname.json
+			// containing a canonical id would otherwise load silently under an
+			// id never written to that path — resurrecting a previously deleted
+			// element on re-hydration. Fail loudly instead.
+			if base := strings.TrimSuffix(f.Name(), ".json"); base != je.ID {
+				return fmt.Errorf("%w: edge file %s embedded id %s conflicts with filename",
+					store.ErrInvalidEdgeDir, f.Name(), je.ID)
+			}
 			if je.Type != typeName {
 				return fmt.Errorf("%w: edge file %q declares type %q but is stored under directory %q",
 					store.ErrInvalidEdgeDir, filepath.Join(typeDir, f.Name()), je.Type, typeName)
@@ -1521,6 +1545,18 @@ func (db *ladybugDB) loadEntitiesFromDirOnConn(conn *lbug.Connection, dir string
 			if je.ID == "" {
 				return fmt.Errorf("%w: entity file %q is missing required key 'id'",
 					store.ErrInvalidEntityDir, filepath.Join(typeDir, f.Name()))
+			}
+			// The raw filename base must equal the embedded id — the sibling
+			// gitstore read path's invariant (ReadAllEntityFiles rejects a file
+			// whose embedded id conflicts with its filename). A well-formed
+			// file is <id>.json whose embedded id equals the filename base
+			// (writeEntityFile); a corrupt/hand-edited file such as
+			// wrongname.json containing a canonical id would otherwise load
+			// silently under an id never written to that path — resurrecting a
+			// previously deleted element on re-hydration. Fail loudly instead.
+			if base := strings.TrimSuffix(f.Name(), ".json"); base != je.ID {
+				return fmt.Errorf("%w: entity file %s embedded id %s conflicts with filename",
+					store.ErrInvalidEntityDir, f.Name(), je.ID)
 			}
 			// The directory-mismatch guard runs BEFORE the embedding-bootstrap
 			// DDL: a corrupt/hand-edited file declaring a type that differs from
@@ -1622,6 +1658,18 @@ func (db *ladybugDB) loadEdgesFromDirOnConn(conn *lbug.Connection, dir string,
 			if je.ID == "" {
 				return fmt.Errorf("%w: edge file %q is missing required key 'id'",
 					store.ErrInvalidEdgeDir, filepath.Join(typeDir, f.Name()))
+			}
+			// The raw filename base must equal the embedded id — the sibling
+			// gitstore read path's invariant (ReadAllEdgeFiles rejects a file
+			// whose embedded id conflicts with its filename). A well-formed
+			// file is <id>.json whose embedded id equals the filename base
+			// (writeEdgeFile); a corrupt/hand-edited file such as wrongname.json
+			// containing a canonical id would otherwise load silently under an
+			// id never written to that path — resurrecting a previously deleted
+			// element on re-hydration. Fail loudly instead.
+			if base := strings.TrimSuffix(f.Name(), ".json"); base != je.ID {
+				return fmt.Errorf("%w: edge file %s embedded id %s conflicts with filename",
+					store.ErrInvalidEdgeDir, f.Name(), je.ID)
 			}
 			if je.Type != typeName {
 				return fmt.Errorf("%w: edge file %q declares type %q but is stored under directory %q",

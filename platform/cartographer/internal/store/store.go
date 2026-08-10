@@ -117,7 +117,7 @@ type Store interface {
 	RehydrateFromBranch(ctx context.Context, txID string) error
 	RehydrateMainFromFiles(ctx context.Context, entitiesDir, edgesDir string) error
 	HydrateBranchFromFiles(ctx context.Context, txID, entitiesDir, edgesDir string) error
-	IsVectorIndexBootstrapped(ctx context.Context, entityType, branch string) bool
+	IsVectorIndexBootstrapped(ctx context.Context, entityType, branch string) (bool, error)
 	GetEstablishedDimension(ctx context.Context, entityType, branch string) (int, error)
 
 	// Wipe
