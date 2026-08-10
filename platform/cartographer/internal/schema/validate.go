@@ -28,12 +28,17 @@ const UntypedTableName = "_untyped"
 
 // Validate validates the given schema and returns the first validation error found.
 // Validation runs in this order:
-//  1. Duplicate type names (entity types, then edge types)
-//  2. Per type, in list order: the type name's format and reserved-word status
-//  3. Per property within a type, in declaration order: duplicate property
-//     names, property name format, reserved-word status, implicit-column
+//  1. Per type name, in declaration order: format validation, then duplicate
+//     detection (entity types, then edge types). Format runs first so two
+//     identically-named invalid types (e.g. two empty names) surface
+//     ErrInvalidName — the structural defect — not ErrDuplicateTypeName.
+//  2. Per type, in list order: the type name's reserved-word status and the
+//     internal-placeholder name check
+//  3. Per property within a type, in declaration order: property name format,
+//     duplicate property names, reserved-word status, implicit-column
 //     collision (entity: id/embedding when vector index enabled; edge:
-//     id/from/to/type), and property type must be "string"
+//     id/to/type — "from" is caught by the reserved-word check above, so it
+//     never reaches the collision branch), and property type must be "string"
 //  4. Rule validation (undeclared references, empty lists), after each entity
 //     type's properties pass
 func Validate(schema *flowv1.Schema) error {
@@ -46,11 +51,15 @@ func Validate(schema *flowv1.Schema) error {
 		return nil
 	}
 
-	// 1. Duplicate type names
+	// 1. Type-name format, then duplicate detection (format first so an
+	// invalid name is reported before the duplicate diagnostic).
 	entityTypeNames := make(map[string]bool, len(schema.EntityTypes))
 	for i, et := range schema.EntityTypes {
 		if et == nil {
 			return fmt.Errorf("%w: entity type %d is nil", ErrNilElement, i)
+		}
+		if err := validateName(et.Name); err != nil {
+			return err
 		}
 		if entityTypeNames[et.Name] {
 			return fmt.Errorf("%w: %q", ErrDuplicateTypeName, et.Name)
@@ -58,10 +67,14 @@ func Validate(schema *flowv1.Schema) error {
 		entityTypeNames[et.Name] = true
 	}
 
+	// 1. Edge type names: format, then duplicate detection.
 	edgeTypeNames := make(map[string]bool, len(schema.EdgeTypes))
 	for i, et := range schema.EdgeTypes {
 		if et == nil {
 			return fmt.Errorf("%w: edge type %d is nil", ErrNilElement, i)
+		}
+		if err := validateName(et.Name); err != nil {
+			return err
 		}
 		if edgeTypeNames[et.Name] {
 			return fmt.Errorf("%w: %q", ErrDuplicateTypeName, et.Name)
@@ -105,21 +118,21 @@ func validateEntityType(et *flowv1.EntityType, entityTypeNames, edgeTypeNames ma
 		return fmt.Errorf("%w: %q is the reserved internal placeholder", ErrReservedWord, et.Name)
 	}
 
-	// 3. Duplicate property names within this type
+	// 3. Property name format, then duplicate detection within this type
+	// (format first so an invalid name is reported before the duplicate
+	// diagnostic).
 	propNames := make(map[string]bool, len(et.Properties))
 	for i, p := range et.Properties {
 		if p == nil {
 			return fmt.Errorf("%w: property %d in entity type %q is nil", ErrNilElement, i, et.Name)
 		}
+		if err := validateName(p.Name); err != nil {
+			return fmt.Errorf("%w: property %q in entity type %q", err, p.Name, et.Name)
+		}
 		if propNames[p.Name] {
 			return fmt.Errorf("%w: duplicate property %q in entity type %q", ErrDuplicatePropertyName, p.Name, et.Name)
 		}
 		propNames[p.Name] = true
-
-		// 3. Property name format
-		if err := validateName(p.Name); err != nil {
-			return fmt.Errorf("%w: property %q in entity type %q", err, p.Name, et.Name)
-		}
 
 		// 3. Reserved word check for property name
 		if reservedWords[strings.ToUpper(p.Name)] {
@@ -164,29 +177,32 @@ func validateEdgeType(et *flowv1.EdgeType) error {
 		return fmt.Errorf("%w: %q is the reserved internal placeholder", ErrReservedWord, et.Name)
 	}
 
-	// 3. Duplicate property names within this type
+	// 3. Property name format, then duplicate detection within this type
+	// (format first so an invalid name is reported before the duplicate
+	// diagnostic).
 	propNames := make(map[string]bool, len(et.Properties))
 	for i, p := range et.Properties {
 		if p == nil {
 			return fmt.Errorf("%w: property %d in edge type %q is nil", ErrNilElement, i, et.Name)
+		}
+		if err := validateName(p.Name); err != nil {
+			return fmt.Errorf("%w: property %q in edge type %q", err, p.Name, et.Name)
 		}
 		if propNames[p.Name] {
 			return fmt.Errorf("%w: duplicate property %q in edge type %q", ErrDuplicatePropertyName, p.Name, et.Name)
 		}
 		propNames[p.Name] = true
 
-		// 3. Property name format
-		if err := validateName(p.Name); err != nil {
-			return fmt.Errorf("%w: property %q in edge type %q", err, p.Name, et.Name)
-		}
-
 		// 3. Reserved word check for property name
 		if reservedWords[strings.ToUpper(p.Name)] {
 			return fmt.Errorf("%w: property %q in edge type %q is a reserved word", ErrReservedWord, p.Name, et.Name)
 		}
 
-		// 3. Implicit-column collision (edges)
-		if p.Name == "id" || p.Name == "from" || p.Name == "to" || p.Name == "type" {
+		// 3. Implicit-column collision (edges). "from" is deliberately absent:
+		// it is caught by the reserved-word check above (FROM is in
+		// reservedWords), so the collision branch is unreachable for it — a
+		// property named "from" surfaces ErrReservedWord.
+		if p.Name == "id" || p.Name == "to" || p.Name == "type" {
 			return fmt.Errorf("%w: property %q in edge type %q collides with reserved column",
 				ErrImplicitColumnCollision, p.Name, et.Name)
 		}
