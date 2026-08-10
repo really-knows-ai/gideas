@@ -5,18 +5,23 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/foundry/flow/cartographer/internal/uuidutil"
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
-	"github.com/google/uuid"
 )
 
 // CreateBranch creates a branch from main with the given txID.
-// Validates txID as a UUID v4. Returns ErrBranchAlreadyExists if the
-// branch already exists, ErrInvalidUUID if txID is not a valid UUID v4.
+// Validates txID as a canonical RFC4122 §3 UUID v4 (SPEC:978 error-table row
+// "Invalid transaction ID format" — non-canonical spellings are rejected).
+// Returns ErrBranchAlreadyExists if the branch already exists, ErrInvalidUUID
+// if txID is not a valid canonical UUID v4.
 func (g *gitStore) CreateBranch(ctx context.Context, txID string) error {
-	u, err := uuid.Parse(txID)
-	if err != nil || u.Version() != 4 {
+	// The same canonical-form gate the entity/edge write paths use
+	// (uuidutil.Validate): the txID is persisted as the branch name, so a
+	// non-canonical spelling of a valid UUID (uppercase hex, no-hyphen,
+	// braced, urn:uuid:) must be rejected rather than accepted by uuid.Parse.
+	if err := uuidutil.Validate(txID); err != nil {
 		return ErrInvalidUUID
 	}
 
@@ -118,6 +123,13 @@ func (g *gitStore) BranchExists(ctx context.Context, txID string) (bool, error) 
 
 // DeleteBranch deletes the branch with the given txID from both config
 // and the reference store.
+//
+// PRECONDITION: the named branch must not be the currently checked-out
+// branch. Deleting the branch that HEAD points at removes its ref while HEAD
+// still symbolically references it, leaving a dangling HEAD. The production
+// caller (transaction teardown) restores main first — RestoreMain — before
+// deleting the transaction branch (see cartographer_server.go
+// finishTransactionCleanup).
 func (g *gitStore) DeleteBranch(ctx context.Context, txID string) error {
 	// Remove the branch reference from storage
 	refName := plumbing.ReferenceName("refs/heads/" + txID)
