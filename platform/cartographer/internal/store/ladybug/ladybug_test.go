@@ -160,7 +160,9 @@ func TestRehydrateMainFromFilesReplacesEntitiesAndEdgesAndPreservesVectorState(t
 	); err != nil || dimension != 2 {
 		t.Fatalf("vector dimension changed: dimension=%d error=%v", dimension, err)
 	}
-	if !s.IsVectorIndexBootstrapped(context.Background(), "Component", "main") {
+	if ok, err := s.IsVectorIndexBootstrapped(context.Background(), "Component", "main"); err != nil {
+		t.Fatalf("IsVectorIndexBootstrapped: %v", err)
+	} else if !ok {
 		t.Fatal("vector index was not preserved")
 	}
 }
@@ -3171,7 +3173,9 @@ func TestRehydrateFromBranch_PromotedVectorMetadataSurvivesReopen(t *testing.T) 
 	}}}); err != nil {
 		t.Fatalf("ApplySchema: %v", err)
 	}
-	if database.IsVectorIndexBootstrapped(context.Background(), "Vector", "") {
+	if ok, err := database.IsVectorIndexBootstrapped(context.Background(), "Vector", ""); err != nil {
+		t.Fatalf("IsVectorIndexBootstrapped: %v", err)
+	} else if ok {
 		t.Fatal("expected Vector not bootstrapped on main before branch write")
 	}
 
@@ -3194,7 +3198,9 @@ func TestRehydrateFromBranch_PromotedVectorMetadataSurvivesReopen(t *testing.T) 
 	if err := database.RehydrateFromBranch(context.Background(), branch); err != nil {
 		t.Fatalf("RehydrateFromBranch: %v", err)
 	}
-	if !database.IsVectorIndexBootstrapped(context.Background(), "Vector", "") {
+	if ok, err := database.IsVectorIndexBootstrapped(context.Background(), "Vector", ""); err != nil {
+		t.Fatalf("IsVectorIndexBootstrapped: %v", err)
+	} else if !ok {
 		t.Fatal("expected vector index promoted to main after rehydrate")
 	}
 
@@ -4130,7 +4136,9 @@ func TestVectorIndex_Bootstrap(t *testing.T) {
 	defer closeStore(t, s)
 	applyTestSchema(t, s)
 
-	if s.IsVectorIndexBootstrapped(context.Background(), "VectorType", "") {
+	if ok, err := s.IsVectorIndexBootstrapped(context.Background(), "VectorType", ""); err != nil {
+		t.Fatalf("IsVectorIndexBootstrapped: %v", err)
+	} else if ok {
 		t.Error("expected not bootstrapped before first entity")
 	}
 
@@ -4140,8 +4148,56 @@ func TestVectorIndex_Bootstrap(t *testing.T) {
 		t.Fatalf("CreateEntity: %v", err)
 	}
 
-	if !s.IsVectorIndexBootstrapped(context.Background(), "VectorType", "") {
+	if ok, err := s.IsVectorIndexBootstrapped(context.Background(), "VectorType", ""); err != nil {
+		t.Fatalf("IsVectorIndexBootstrapped: %v", err)
+	} else if !ok {
 		t.Error("expected bootstrapped after first entity with embedding")
+	}
+}
+
+// IsVectorIndexBootstrapped must surface a genuine catalog-read failure as a
+// non-nil, wrapped error rather than swallowing it into "not bootstrapped": a
+// caller that treats a nil error as authoritative vector state would silently
+// lose the bootstrap signal on a transient catalog failure (LEARNINGS:
+// storage-layer silent divergence — sibling scans vectorIndexesOnConn and
+// collectVectorIndexes fail loudly for the same reason). Regression: every
+// failure — lock acquisition, getEmbeddingDimension, and the show_indexes
+// query/row/parse — returned false with no error channel. The injected failure
+// here is a real getEmbeddingDimension error: a phantom vector-enabled entity
+// type whose table carries an `embedding` column of a non-FLOAT type is
+// anomalous for a vector-enabled type (crud.go getEmbeddingDimension), driving
+// the error out of the public method instead of the "not bootstrapped" state.
+func TestIsVectorIndexBootstrapped_PropagatesReadFailure(t *testing.T) {
+	s, err := OpenInMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeStore(t, s)
+	applyTestSchema(t, s)
+
+	db := s.(*ladybugDB)
+	res, err := db.conn.Query("CREATE NODE TABLE BadVec (id STRING PRIMARY KEY, embedding DOUBLE);")
+	if err != nil {
+		t.Fatalf("create phantom table: %v", err)
+	}
+	res.Close()
+	// Replace the defs (rather than adding) so the probe can never succeed
+	// against a real type.
+	db.mu.Lock()
+	db.entityTypeDefs = map[string]*store.EntityTypeDef{
+		"BadVec": {Name: "BadVec", EnableVectorIndex: true},
+	}
+	db.mu.Unlock()
+
+	ok, err := s.IsVectorIndexBootstrapped(context.Background(), "BadVec", "")
+	if err == nil {
+		t.Fatal("expected the embedding-dimension read failure to surface")
+	}
+	if ok {
+		t.Fatal("a failing catalog read must not report the index as bootstrapped")
+	}
+	if !strings.Contains(err.Error(), "anomalous embedding column type") {
+		t.Fatalf("expected the wrapped anomalous-column error, got %v", err)
 	}
 }
 
@@ -4186,7 +4242,10 @@ func TestRehydrateMainFromFiles_EntitiesDirOnly_ReturnsError(t *testing.T) {
 		t.Fatal(err)
 	}
 	data := `{"id":"00000000-0000-4000-a000-000000000001","type":"Component","properties":{"name":"test"}}`
-	if err := os.WriteFile(filepath.Join(compDir, "comp1.json"), []byte(data), 0644); err != nil {
+	if err := os.WriteFile(
+		filepath.Join(compDir, "00000000-0000-4000-a000-000000000001.json"),
+		[]byte(data), 0644,
+	); err != nil {
 		t.Fatal(err)
 	}
 
@@ -4231,7 +4290,10 @@ func TestHydrateBranchFromFiles_EntitiesDirOnly_ReturnsError(t *testing.T) {
 		t.Fatal(err)
 	}
 	data := `{"id":"00000000-0000-4000-a000-000000000001","type":"Component","properties":{"name":"test"}}`
-	if err := os.WriteFile(filepath.Join(compDir, "comp1.json"), []byte(data), 0644); err != nil {
+	if err := os.WriteFile(
+		filepath.Join(compDir, "00000000-0000-4000-a000-000000000001.json"),
+		[]byte(data), 0644,
+	); err != nil {
 		t.Fatal(err)
 	}
 
@@ -4972,7 +5034,9 @@ func TestRehydrateMainFromFiles_InferredTypePromotesEnableVectorIndex(t *testing
 	if !def.EnableVectorIndex {
 		t.Error("expected EnableVectorIndex to be promoted to true for re-hydrated type with embedding")
 	}
-	if !s.IsVectorIndexBootstrapped(context.Background(), "Document", "main") {
+	if ok, err := s.IsVectorIndexBootstrapped(context.Background(), "Document", "main"); err != nil {
+		t.Fatalf("IsVectorIndexBootstrapped: %v", err)
+	} else if !ok {
 		t.Error("expected vector index to be bootstrapped for re-hydrated type with embedding")
 	}
 }
@@ -6060,7 +6124,9 @@ func TestApplySchema_EnableVectorIndexFalseToTrue_NonDestructive(t *testing.T) {
 		map[string]string{"title": "doc"}, []float32{1, 2, 3}, "main"); err != nil {
 		t.Fatalf("CreateEntity on non-vector type should accept (and discard) an embedding: %v", err)
 	}
-	if s.IsVectorIndexBootstrapped(context.Background(), "Document", "main") {
+	if ok, err := s.IsVectorIndexBootstrapped(context.Background(), "Document", "main"); err != nil {
+		t.Fatalf("IsVectorIndexBootstrapped: %v", err)
+	} else if ok {
 		t.Fatal("vector index must not be bootstrapped while EnableVectorIndex is false")
 	}
 
@@ -6074,7 +6140,9 @@ func TestApplySchema_EnableVectorIndexFalseToTrue_NonDestructive(t *testing.T) {
 	if err := s.ApplySchema(ctx, enabled); err != nil {
 		t.Fatalf("false→true ApplySchema must be non-destructive, got %v", err)
 	}
-	if s.IsVectorIndexBootstrapped(context.Background(), "Document", "main") {
+	if ok, err := s.IsVectorIndexBootstrapped(context.Background(), "Document", "main"); err != nil {
+		t.Fatalf("IsVectorIndexBootstrapped: %v", err)
+	} else if ok {
 		t.Fatal("the false→true transition must stay lazy — no entity written yet")
 	}
 
@@ -6083,7 +6151,9 @@ func TestApplySchema_EnableVectorIndexFalseToTrue_NonDestructive(t *testing.T) {
 		map[string]string{"title": "vec"}, []float32{1, 2, 3}, "main"); err != nil {
 		t.Fatalf("CreateEntity with embedding after enable: %v", err)
 	}
-	if !s.IsVectorIndexBootstrapped(context.Background(), "Document", "main") {
+	if ok, err := s.IsVectorIndexBootstrapped(context.Background(), "Document", "main"); err != nil {
+		t.Fatalf("IsVectorIndexBootstrapped: %v", err)
+	} else if !ok {
 		t.Fatal("expected vector index bootstrapped after first embedding write")
 	}
 	if dim, derr := s.GetEstablishedDimension(context.Background(), "Document", "main"); derr != nil || dim != 3 {
@@ -6099,7 +6169,9 @@ func TestApplySchema_EnableVectorIndexFalseToTrue_NonDestructive(t *testing.T) {
 		t.Fatalf("reopen: %v", err)
 	}
 	defer closeStore(t, s2)
-	if !s2.IsVectorIndexBootstrapped(context.Background(), "Document", "main") {
+	if ok, err := s2.IsVectorIndexBootstrapped(context.Background(), "Document", "main"); err != nil {
+		t.Fatalf("IsVectorIndexBootstrapped: %v", err)
+	} else if !ok {
 		t.Fatal("lazy vector index was not restored on reopen")
 	}
 	if dim, derr := s2.GetEstablishedDimension(context.Background(), "Document", "main"); derr != nil || dim != 3 {
@@ -6871,7 +6943,9 @@ func TestUpdateEntity_EmbeddingBootstrap(t *testing.T) {
 	defer closeStore(t, s)
 	applyTestSchema(t, s)
 
-	if s.IsVectorIndexBootstrapped(context.Background(), "VectorType", "") {
+	if ok, err := s.IsVectorIndexBootstrapped(context.Background(), "VectorType", ""); err != nil {
+		t.Fatalf("IsVectorIndexBootstrapped: %v", err)
+	} else if ok {
 		t.Fatal("expected VectorType not bootstrapped before rehydration")
 	}
 
@@ -6891,7 +6965,9 @@ func TestUpdateEntity_EmbeddingBootstrap(t *testing.T) {
 	if err := s.RehydrateMainFromFiles(context.Background(), entitiesDir, edgesDir); err != nil {
 		t.Fatalf("RehydrateMainFromFiles: %v", err)
 	}
-	if s.IsVectorIndexBootstrapped(context.Background(), "VectorType", "") {
+	if ok, err := s.IsVectorIndexBootstrapped(context.Background(), "VectorType", ""); err != nil {
+		t.Fatalf("IsVectorIndexBootstrapped: %v", err)
+	} else if ok {
 		t.Fatal("rehydration must not bootstrap the vector index")
 	}
 
@@ -6902,7 +6978,9 @@ func TestUpdateEntity_EmbeddingBootstrap(t *testing.T) {
 	if !errors.Is(err, store.ErrEmbeddingUpdateUnsupported) {
 		t.Fatalf("expected ErrEmbeddingUpdateUnsupported, got %v", err)
 	}
-	if !s.IsVectorIndexBootstrapped(context.Background(), "VectorType", "") {
+	if ok, err := s.IsVectorIndexBootstrapped(context.Background(), "VectorType", ""); err != nil {
+		t.Fatalf("IsVectorIndexBootstrapped: %v", err)
+	} else if !ok {
 		t.Fatalf("expected vector index bootstrapped after first embedding update (update err: %v)", err)
 	}
 	if dim, derr := s.GetEstablishedDimension(context.Background(), "VectorType", ""); derr != nil || dim != 3 {
@@ -6934,7 +7012,9 @@ func TestUpdateEntity_EmbeddingMatchingDimensionUnsupported(t *testing.T) {
 	if err != nil {
 		t.Fatalf("bootstrap CreateEntity: %v", err)
 	}
-	if !s.IsVectorIndexBootstrapped(context.Background(), "VectorType", "") {
+	if ok, err := s.IsVectorIndexBootstrapped(context.Background(), "VectorType", ""); err != nil {
+		t.Fatalf("IsVectorIndexBootstrapped: %v", err)
+	} else if !ok {
 		t.Fatal("expected VectorType bootstrapped after create")
 	}
 
@@ -6998,7 +7078,9 @@ func TestBranch_DropBranchDB_LeavesMainUnbootstrapped(t *testing.T) {
 	applyTestSchema(t, s)
 	ctx := context.Background()
 
-	if s.IsVectorIndexBootstrapped(context.Background(), "VectorType", "") {
+	if ok, err := s.IsVectorIndexBootstrapped(context.Background(), "VectorType", ""); err != nil {
+		t.Fatalf("IsVectorIndexBootstrapped: %v", err)
+	} else if ok {
 		t.Fatal("expected VectorType not bootstrapped on main before branch")
 	}
 
@@ -7015,7 +7097,9 @@ func TestBranch_DropBranchDB_LeavesMainUnbootstrapped(t *testing.T) {
 		map[string]string{"name": "v"}, []float32{1, 2, 3}, branch); err != nil {
 		t.Fatalf("CreateEntity on branch: %v", err)
 	}
-	if !s.IsVectorIndexBootstrapped(context.Background(), "VectorType", branch) {
+	if ok, err := s.IsVectorIndexBootstrapped(context.Background(), "VectorType", branch); err != nil {
+		t.Fatalf("IsVectorIndexBootstrapped: %v", err)
+	} else if !ok {
 		t.Fatal("expected VectorType bootstrapped on branch")
 	}
 
@@ -7025,7 +7109,9 @@ func TestBranch_DropBranchDB_LeavesMainUnbootstrapped(t *testing.T) {
 	}
 
 	// Main must remain un-bootstrapped (SPEC R7 branch scope).
-	if s.IsVectorIndexBootstrapped(context.Background(), "VectorType", "") {
+	if ok, err := s.IsVectorIndexBootstrapped(context.Background(), "VectorType", ""); err != nil {
+		t.Fatalf("IsVectorIndexBootstrapped: %v", err)
+	} else if ok {
 		t.Fatal("main must not be bootstrapped after branch rollback")
 	}
 	dim, err := s.GetEstablishedDimension(context.Background(), "VectorType", "")
@@ -7107,7 +7193,9 @@ func TestRehydrateFromBranch_PromotesEmbeddingDimensionToMain(t *testing.T) {
 		t.Fatalf("ReplicateSchemaToBranch: %v", err)
 	}
 
-	if s.IsVectorIndexBootstrapped(context.Background(), "VectorType", "") {
+	if ok, err := s.IsVectorIndexBootstrapped(context.Background(), "VectorType", ""); err != nil {
+		t.Fatalf("IsVectorIndexBootstrapped: %v", err)
+	} else if ok {
 		t.Fatal("expected VectorType not bootstrapped on main before commit")
 	}
 
@@ -7123,7 +7211,9 @@ func TestRehydrateFromBranch_PromotesEmbeddingDimensionToMain(t *testing.T) {
 		t.Fatalf("RehydrateFromBranch promotes embedding schema to main: %v", err)
 	}
 
-	if !s.IsVectorIndexBootstrapped(context.Background(), "VectorType", "") {
+	if ok, err := s.IsVectorIndexBootstrapped(context.Background(), "VectorType", ""); err != nil {
+		t.Fatalf("IsVectorIndexBootstrapped: %v", err)
+	} else if !ok {
 		t.Fatal("expected vector index promoted to main after RehydrateFromBranch")
 	}
 	if dim, derr := s.GetEstablishedDimension(context.Background(), "VectorType", ""); derr != nil || dim != 3 {
@@ -7168,7 +7258,9 @@ func TestRehydrateMainFromFiles_RejectsTypeDirectoryMismatch(t *testing.T) {
 	// The guard must have rejected the file before the embedding bootstrap ran:
 	// VectorType must not have gained an embedding column / vector index as a
 	// side effect of the rejected file.
-	if s.IsVectorIndexBootstrapped(ctx, "VectorType", "") {
+	if ok, err := s.IsVectorIndexBootstrapped(ctx, "VectorType", ""); err != nil {
+		t.Fatalf("IsVectorIndexBootstrapped: %v", err)
+	} else if ok {
 		t.Fatal("embedding bootstrap DDL must not run before the type/directory mismatch guard")
 	}
 }
@@ -7208,7 +7300,9 @@ func TestHydrateBranchFromFiles_RejectsTypeDirectoryMismatch(t *testing.T) {
 	} else if !errors.Is(err, store.ErrInvalidEntityDir) {
 		t.Fatalf("expected ErrInvalidEntityDir, got %v", err)
 	}
-	if s.IsVectorIndexBootstrapped(ctx, "VectorType", "tx1") {
+	if ok, err := s.IsVectorIndexBootstrapped(ctx, "VectorType", "tx1"); err != nil {
+		t.Fatalf("IsVectorIndexBootstrapped: %v", err)
+	} else if ok {
 		t.Fatal("embedding bootstrap DDL must not run before the type/directory mismatch guard")
 	}
 }
@@ -7244,7 +7338,9 @@ func TestSearchNeighbors_VectorPrepareFailureSurfacesError(t *testing.T) {
 		map[string]string{"name": "v"}, []float32{1, 2, 3}, ""); err != nil {
 		t.Fatalf("bootstrap vector type: %v", err)
 	}
-	if !s.IsVectorIndexBootstrapped(context.Background(), "VectorType", "") {
+	if ok, err := s.IsVectorIndexBootstrapped(context.Background(), "VectorType", ""); err != nil {
+		t.Fatalf("IsVectorIndexBootstrapped: %v", err)
+	} else if !ok {
 		t.Fatal("expected VectorType vector index bootstrapped")
 	}
 
@@ -7529,8 +7625,9 @@ func TestRehydrateMainFromFiles_EdgeWithMissingEndpointFailsLoudly(t *testing.T)
 	writeJSONFile(t, filepath.Join(entitiesDir, "Component", fromID+".json"), map[string]any{
 		"id": fromID, "type": "Component",
 	})
-	writeJSONFile(t, filepath.Join(edgesDir, "DependsOn", uuid.NewString()+".json"), map[string]any{
-		"id": uuid.NewString(), "type": "DependsOn", "from": fromID, "to": uuid.NewString(),
+	edgeID := uuid.NewString()
+	writeJSONFile(t, filepath.Join(edgesDir, "DependsOn", edgeID+".json"), map[string]any{
+		"id": edgeID, "type": "DependsOn", "from": fromID, "to": uuid.NewString(),
 	})
 
 	err = s.RehydrateMainFromFiles(ctx, entitiesDir, edgesDir)
@@ -7592,8 +7689,9 @@ func TestRehydrateFiles_WrongLabelEndpointFailsLoudly(t *testing.T) {
 			writeJSONFile(t, filepath.Join(entitiesDir, "Component", toID+".json"), map[string]any{
 				"id": toID, "type": "Component",
 			})
-			writeJSONFile(t, filepath.Join(edgesDir, "DependsOn", uuid.NewString()+".json"), map[string]any{
-				"id": uuid.NewString(), "type": "DependsOn", "from": fromID, "to": toID,
+			edgeID := uuid.NewString()
+			writeJSONFile(t, filepath.Join(edgesDir, "DependsOn", edgeID+".json"), map[string]any{
+				"id": edgeID, "type": "DependsOn", "from": fromID, "to": toID,
 			})
 
 			var loadErr error
@@ -7677,8 +7775,9 @@ func TestRehydrateFiles_CrossPairEndpointFailsLoudly(t *testing.T) {
 			writeJSONFile(t, filepath.Join(entitiesDir, "Alpha", toID+".json"), map[string]any{
 				"id": toID, "type": "Alpha",
 			})
-			writeJSONFile(t, filepath.Join(edgesDir, "CONNECTS", uuid.NewString()+".json"), map[string]any{
-				"id": uuid.NewString(), "type": "CONNECTS", "from": fromID, "to": toID,
+			edgeID := uuid.NewString()
+			writeJSONFile(t, filepath.Join(edgesDir, "CONNECTS", edgeID+".json"), map[string]any{
+				"id": edgeID, "type": "CONNECTS", "from": fromID, "to": toID,
 			})
 
 			var loadErr error
@@ -8182,11 +8281,14 @@ func TestRehydrateFiles_CrossTypeDuplicateIDFailsLoudly(t *testing.T) {
 			if err := os.MkdirAll(edgesDir, 0o755); err != nil {
 				t.Fatal(err)
 			}
-			// Same ID under two different type directories.
-			writeJSONFile(t, filepath.Join(entitiesDir, "Component", "a.json"), map[string]any{
+			// Same ID under two different type directories. Filenames are the
+			// canonical <id>.json (as the gitstore write path writes them) so
+			// the cross-type duplicate-ID guard is reached — a filename/id
+			// mismatch would be rejected by the id↔filename guard instead.
+			writeJSONFile(t, filepath.Join(entitiesDir, "Component", dupID+".json"), map[string]any{
 				"id": dupID, "type": "Component",
 			})
-			writeJSONFile(t, filepath.Join(entitiesDir, "Document", "b.json"), map[string]any{
+			writeJSONFile(t, filepath.Join(entitiesDir, "Document", dupID+".json"), map[string]any{
 				"id": dupID, "type": "Document",
 			})
 
@@ -8201,6 +8303,82 @@ func TestRehydrateFiles_CrossTypeDuplicateIDFailsLoudly(t *testing.T) {
 			}
 			if !errors.Is(loadErr, store.ErrEntityAlreadyExists) {
 				t.Fatalf("expected ErrEntityAlreadyExists, got %v", loadErr)
+			}
+		})
+	}
+}
+
+// The raw filename base must equal the embedded id on every load path — the
+// sibling gitstore read path's invariant (ReadAllEntityFiles/ReadAllEdgeFiles
+// reject a file whose embedded id conflicts with its filename base,
+// gitstore/entity.go:105-106, edge.go:104-105). A well-formed file is <id>.json
+// whose embedded id equals the filename base (writeEntityFile/writeEdgeFile); a
+// corrupt/hand-edited file such as wrongname.json containing a canonical id
+// would otherwise load silently under an id never written to that path —
+// resurrecting a previously deleted element on re-hydration with no signal
+// (LEARNINGS: store/gitstore read-path silent divergence). Every main/branch ×
+// entity/edge load path must fail loudly with the sentinel.
+func TestRehydrateFiles_EmbeddedIDConflictsWithFilenameFailsLoudly(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		branch bool
+		edge   bool
+		want   error
+	}{
+		{"main entity", false, false, store.ErrInvalidEntityDir},
+		{"main edge", false, true, store.ErrInvalidEdgeDir},
+		{"branch entity", true, false, store.ErrInvalidEntityDir},
+		{"branch edge", true, true, store.ErrInvalidEdgeDir},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, err := OpenInMemory()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer closeStore(t, s)
+			applyTestSchema(t, s)
+			ctx := context.Background()
+
+			const branch = "tx1"
+			if tc.branch {
+				if err := s.CreateBranchDB(ctx, branch); err != nil {
+					t.Fatalf("CreateBranchDB: %v", err)
+				}
+				if err := s.ReplicateSchemaToBranch(ctx, branch); err != nil {
+					t.Fatalf("ReplicateSchemaToBranch: %v", err)
+				}
+			}
+
+			root := t.TempDir()
+			entitiesDir := filepath.Join(root, "entities")
+			edgesDir := filepath.Join(root, "edges")
+			if tc.edge {
+				// Edge file with a canonical embedded id under a filename that
+				// does not match it.
+				writeJSONFile(t, filepath.Join(edgesDir, "DependsOn", "wrongname.json"), map[string]any{
+					"id": uuid.NewString(), "type": "DependsOn",
+					"from": uuid.NewString(), "to": uuid.NewString(),
+				})
+			} else {
+				// Entity file with a canonical embedded id under a filename that
+				// does not match it.
+				writeJSONFile(t, filepath.Join(entitiesDir, "Component", "wrongname.json"), map[string]any{
+					"id": uuid.NewString(), "type": "Component",
+					"properties": map[string]string{"name": "filename-mismatch"},
+				})
+			}
+
+			var loadErr error
+			if tc.branch {
+				loadErr = s.HydrateBranchFromFiles(ctx, branch, entitiesDir, edgesDir)
+			} else {
+				loadErr = s.RehydrateMainFromFiles(ctx, entitiesDir, edgesDir)
+			}
+			if loadErr == nil {
+				t.Fatal("expected loud failure for a file whose filename conflicts with its embedded id")
+			}
+			if !errors.Is(loadErr, tc.want) {
+				t.Fatalf("expected %v, got %v", tc.want, loadErr)
 			}
 		})
 	}
@@ -8770,7 +8948,9 @@ func TestUpdateEntity_NonIndexedTypeDiscardsEmbedding(t *testing.T) {
 	if got.Embedding != nil {
 		t.Fatalf("expected non-indexed type to discard the update embedding, got %v", got.Embedding)
 	}
-	if s.IsVectorIndexBootstrapped(ctx, "Document", "") {
+	if ok, err := s.IsVectorIndexBootstrapped(ctx, "Document", ""); err != nil {
+		t.Fatalf("IsVectorIndexBootstrapped: %v", err)
+	} else if ok {
 		t.Fatal("expected Document to have no vector index after an embedding-bearing update")
 	}
 }
