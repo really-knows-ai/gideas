@@ -291,8 +291,8 @@ func TestValidate_EntityPropertyEmbeddingOKWhenNotIndexed(t *testing.T) {
 // implicit-column-collision guarantee ("Edge properties entries must not use
 // the names id, from, to, type") is self-contained and survives any future
 // trim of FROM from reservedWords. A property named "from" surfaces
-// ErrReservedWord today — also pinned by TestValidate_ReservedWordNewlyAdded
-// and TestValidate_ReservedWordCaseInsensitive. Both rows are INVALID_ARGUMENT
+// ErrReservedWord today — also pinned by TestValidate_ReservedWordNewlyAdded.
+// Both rows are INVALID_ARGUMENT
 // at the wire (SPEC R1 error-table rows "Name is a LadybugDB reserved word" and
 // implicit-column collision).
 func TestValidate_EdgePropertyCollidesWithFrom(t *testing.T) {
