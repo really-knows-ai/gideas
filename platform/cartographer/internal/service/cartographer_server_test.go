@@ -1107,6 +1107,13 @@ func TestApplySchema_ValidationErrorPaths(t *testing.T) {
 		schema *flowv1.Schema
 	}{
 		{
+			// An ApplySchemaRequest whose schema field is unset (nil) must be
+			// rejected with INVALID_ARGUMENT, not panic downstream in the
+			// store's catalog diff (which would surface as INTERNAL).
+			name:   "nil schema (omitted schema field)",
+			schema: nil,
+		},
+		{
 			name: "duplicate property name",
 			schema: &flowv1.Schema{EntityTypes: []*flowv1.EntityType{
 				{Name: "Component", Properties: []*flowv1.Property{

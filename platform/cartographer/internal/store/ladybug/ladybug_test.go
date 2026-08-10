@@ -652,6 +652,27 @@ func TestApplySchema_RejectsUntypedPlaceholderName(t *testing.T) {
 	}
 }
 
+// A nil schema (an ApplySchemaRequest whose schema field is unset, forwarded
+// by the service handler unguarded) must be rejected with the schema
+// package's ErrNilSchema sentinel (→ INVALID_ARGUMENT at the gRPC boundary via
+// mapStoreError/isSchemaError), never applied: after schema.Validate passes,
+// the catalog diff (diffSchemaAgainstCatalog → collectFromToPairs) reads
+// s.EntityTypes on the nil pointer and would panic — surfacing as gRPC
+// INTERNAL instead of the correct INVALID_ARGUMENT.
+func TestApplySchema_NilSchema_Rejected(t *testing.T) {
+	s, err := OpenInMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeStore(t, s)
+	err = s.ApplySchema(context.Background(), nil)
+	if err == nil {
+		t.Fatal("expected ApplySchema to reject a nil schema, got nil")
+	} else if !errors.Is(err, schemavalidator.ErrNilSchema) {
+		t.Fatalf("expected schemavalidator.ErrNilSchema, got: %v", err)
+	}
+}
+
 // TestUntypedPlaceholder_Lifecycle pins the SPEC R1 `_untyped` reserved-name
 // contract's happy-path lifecycle at the store layer (the name-rejection path
 // is pinned by TestApplySchema_RejectsUntypedPlaceholderName): an edgeless
