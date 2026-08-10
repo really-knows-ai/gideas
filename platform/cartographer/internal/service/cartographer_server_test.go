@@ -1575,6 +1575,29 @@ func TestFullTextSearch_Valid(t *testing.T) {
 	}
 }
 
+// TestFullTextSearch_SingleTypeSpecificCapabilityPasses pins SPEC R3
+// (SPEC:240): a caller holding only READ:graph/entity/<type> is authorised
+// for a FullTextSearch scoped to that type (the per-type branch, not the
+// wildcard fallback).
+func TestFullTextSearch_SingleTypeSpecificCapabilityPasses(t *testing.T) {
+	srv, _ := newTestServer(t)
+	ctx := narrowCtx("READ:graph/entity/Component")
+
+	applyTestSchema(ctx, t, srv.store)
+	_, _ = srv.store.CreateEntity(testCtx(), "Component", "", map[string]string{"name": "apple", "version": "1"}, nil, "")
+
+	resp, err := srv.FullTextSearch(ctx, &flowv1.FullTextSearchRequest{
+		Query:      "apple",
+		EntityType: "Component",
+	})
+	if err != nil {
+		t.Fatalf("FullTextSearch with per-type capability failed: %v", err)
+	}
+	if len(resp.Results) == 0 {
+		t.Fatal("expected at least one result")
+	}
+}
+
 func TestListEntities_UnknownType(t *testing.T) {
 	srv, _ := newTestServer(t)
 	ctx := testCtx()
@@ -1602,6 +1625,30 @@ func TestListEntities_Valid(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("ListEntities failed: %v", err)
+	}
+	if len(resp.Entities) != 2 {
+		t.Fatalf("expected 2 entities, got %d", len(resp.Entities))
+	}
+}
+
+// TestListEntities_SingleTypeSpecificCapabilityPasses pins SPEC R3
+// (SPEC:240): a caller holding only READ:graph/entity/<type> is authorised
+// for a ListEntities scoped to that type (the per-type branch, not the
+// wildcard fallback).
+func TestListEntities_SingleTypeSpecificCapabilityPasses(t *testing.T) {
+	srv, _ := newTestServer(t)
+	ctx := narrowCtx("READ:graph/entity/Component")
+
+	applyTestSchema(ctx, t, srv.store)
+	_, _ = srv.store.CreateEntity(testCtx(), "Component", "", map[string]string{"name": "a"}, nil, "")
+	_, _ = srv.store.CreateEntity(testCtx(), "Component", "", map[string]string{"name": "b"}, nil, "")
+
+	resp, err := srv.ListEntities(ctx, &flowv1.ListEntitiesRequest{
+		EntityType: "Component",
+		PageSize:   10,
+	})
+	if err != nil {
+		t.Fatalf("ListEntities with per-type capability failed: %v", err)
 	}
 	if len(resp.Entities) != 2 {
 		t.Fatalf("expected 2 entities, got %d", len(resp.Entities))
@@ -1650,6 +1697,29 @@ func TestCreateEntity_Valid(t *testing.T) {
 	}
 	if resp.EntityType != "Component" {
 		t.Fatalf("expected Component, got %q", resp.EntityType)
+	}
+}
+
+// TestCreateEntity_SingleTypeSpecificCapabilityPasses pins SPEC R3
+// (SPEC:242): a caller holding only WRITE:graph/entity/<type> (plus
+// WRITE:graph/tx to begin the transaction) is authorised for a CreateEntity
+// of that type (the per-type branch, not the wildcard fallback).
+func TestCreateEntity_SingleTypeSpecificCapabilityPasses(t *testing.T) {
+	srv, _ := newTestServer(t)
+	ctx := narrowCtx("WRITE:graph/entity/Component", "WRITE:graph/tx")
+
+	applyTestSchema(ctx, t, srv.store)
+	txID := beginTestTx(t, srv, ctx)
+	resp, err := srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
+		EntityType:    "Component",
+		Properties:    map[string]string{"name": "per-type", "version": "1.0"},
+		TransactionId: txID,
+	})
+	if err != nil {
+		t.Fatalf("CreateEntity with per-type capability failed: %v", err)
+	}
+	if resp.EntityId == "" {
+		t.Fatal("expected non-empty entity ID")
 	}
 }
 
@@ -3863,10 +3933,10 @@ func TestCommitTransaction_WithSyncWorker_AckPushFailureSurfacesMappedError(t *t
 }
 
 // TestCommitTransaction_WithSyncWorker_AckCallerDeadlineSurfacesDeadlineExceeded
-// pins the 30s-cap deadline branch of the CommitTransaction sync-worker wiring
+// pins the caller-deadline branch of the CommitTransaction sync-worker wiring
 // (SPEC R10, SPEC:621-622: "A caller that hits the context deadline receives
-// DEADLINE_EXCEEDED and the flag stays set"): a caller deadline shorter than
-// the 30s cap expires while the acked commit waits on the sync cycle, and the
+// DEADLINE_EXCEEDED and the flag stays set"): a caller deadline expires while
+// the acked commit waits on the sync cycle, and the
 // commit surfaces DEADLINE_EXCEEDED (mapGitError's context-error mapping, not
 // a raw INTERNAL), with the push flag left set for the next cycle.
 func TestCommitTransaction_WithSyncWorker_AckCallerDeadlineSurfacesDeadlineExceeded(t *testing.T) {
@@ -5135,6 +5205,45 @@ func TestSearchNeighbors_Valid(t *testing.T) {
 	}
 }
 
+// TestSearchNeighbors_SingleTypeSpecificCapabilityPasses pins SPEC R3
+// (SPEC:240): a caller holding only READ:graph/entity/<type> is authorised
+// for a SearchNeighbors scoped to that type (the per-type branch, not the
+// wildcard fallback).
+func TestSearchNeighbors_SingleTypeSpecificCapabilityPasses(t *testing.T) {
+	srv, st := newTestServer(t)
+	ctx := narrowCtx("READ:graph/entity/VectorType")
+
+	schema := &flowv1.Schema{
+		EntityTypes: []*flowv1.EntityType{
+			{
+				Name:              "VectorType",
+				EnableVectorIndex: true,
+				Properties:        []*flowv1.Property{{Name: "name", Type: "string"}},
+			},
+		},
+	}
+	if err := st.ApplySchema(ctx, schema); err != nil {
+		t.Fatalf("ApplySchema failed: %v", err)
+	}
+	// Seed data directly via the store (the caller holds no write capability).
+	_, _ = srv.store.CreateEntity(testCtx(), "VectorType", "",
+		map[string]string{"name": "a"}, []float32{1.0, 0.0, 0.0}, "")
+	_, _ = srv.store.CreateEntity(testCtx(), "VectorType", "",
+		map[string]string{"name": "b"}, []float32{0.0, 1.0, 0.0}, "")
+
+	resp, err := srv.SearchNeighbors(ctx, &flowv1.SearchNeighborsRequest{
+		Embedding:  []float32{1.0, 0.0, 0.0},
+		EntityType: "VectorType",
+		TopK:       5,
+	})
+	if err != nil {
+		t.Fatalf("SearchNeighbors with per-type capability failed: %v", err)
+	}
+	if len(resp.Results) == 0 {
+		t.Fatal("expected at least one neighbor result")
+	}
+}
+
 // TestReadWildcardOnly_TypeOmittedSearchesSucceed covers the SPEC R3 success
 // path for the type-omitted read-search branch: a caller holding ONLY
 // READ:graph/entity/* must be able to run a type-omitted (empty entityType)
@@ -5181,6 +5290,51 @@ func TestReadWildcardOnly_TypeOmittedSearchesSucceed(t *testing.T) {
 	}
 	if len(sn.Results) == 0 {
 		t.Fatal("expected at least one neighbor result")
+	}
+}
+
+// TestReadTypeSpecificOnly_TypeOmittedSearchesDenied pins SPEC R3 (SPEC:262):
+// "a per-type capability cannot authorise an all-types search" — a caller
+// holding ONLY READ:graph/entity/<type> is denied a type-omitted (empty
+// entityType) FullTextSearch and SearchNeighbors with PERMISSION_DENIED,
+// because the type-omitted branch requires READ:graph/entity/*.
+func TestReadTypeSpecificOnly_TypeOmittedSearchesDenied(t *testing.T) {
+	srv, st := newTestServer(t)
+	// Caller holds ONLY the per-type read capability (no wildcard).
+	ctx := narrowCtx("READ:graph/entity/Component")
+
+	schema := &flowv1.Schema{
+		EntityTypes: []*flowv1.EntityType{
+			{
+				Name:              "VectorType",
+				EnableVectorIndex: true,
+				Properties:        []*flowv1.Property{{Name: "name", Type: "string"}},
+			},
+			{
+				Name:       "Component",
+				Properties: []*flowv1.Property{{Name: "name", Type: "string"}},
+			},
+		},
+	}
+	if err := st.ApplySchema(ctx, schema); err != nil {
+		t.Fatalf("ApplySchema failed: %v", err)
+	}
+	_, _ = st.CreateEntity(ctx, "VectorType", "", map[string]string{"name": "alpha"}, []float32{1.0, 0, 0}, "")
+	_, _ = st.CreateEntity(ctx, "Component", "", map[string]string{"name": "beta"}, nil, "")
+
+	// FullTextSearch with EntityType omitted (wildcard branch) — denied.
+	_, err := srv.FullTextSearch(ctx, &flowv1.FullTextSearchRequest{Query: "alpha"})
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("expected PermissionDenied for per-type-only holder on type-omitted FullTextSearch, got %v", err)
+	}
+
+	// SearchNeighbors with EntityType omitted (wildcard branch) — denied.
+	_, err = srv.SearchNeighbors(ctx, &flowv1.SearchNeighborsRequest{
+		Embedding: []float32{1.0, 0.0, 0.0},
+		TopK:      5,
+	})
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("expected PermissionDenied for per-type-only holder on type-omitted SearchNeighbors, got %v", err)
 	}
 }
 
@@ -7478,6 +7632,33 @@ func TestSearchNeighbors_NaNEmbedding(t *testing.T) {
 	}
 }
 
+// TestSearchNeighbors_NaNEmbeddingNonIndexed pins SPEC R7: the NaN/Inf
+// embedding rejection applies "regardless of indexing status" — the service
+// layer rejects a NaN/Inf embedding for a non-indexed entity type before the
+// store's non-indexed-type rejection (also INVALID_ARGUMENT) could surface.
+func TestSearchNeighbors_NaNEmbeddingNonIndexed(t *testing.T) {
+	srv, _ := newTestServer(t)
+	ctx := testCtx()
+
+	// Component is a non-indexed type (enableVectorIndex not set).
+	applyTestSchema(ctx, t, srv.store)
+
+	_, err := srv.SearchNeighbors(ctx, &flowv1.SearchNeighborsRequest{
+		Embedding:  []float32{float32(math.NaN()), 0.0, 0.0},
+		EntityType: "Component",
+		TopK:       5,
+	})
+	if err == nil {
+		t.Fatal("expected error for NaN embedding on non-indexed type, got nil")
+	}
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("expected InvalidArgument, got %v (%v)", status.Code(err), err)
+	}
+	if !strings.Contains(err.Error(), "NaN") {
+		t.Fatalf("expected the NaN-embedding rejection, got %v", err)
+	}
+}
+
 func TestSearchNeighbors_EmbeddingDimensionMismatch(t *testing.T) {
 	srv, st := newTestServer(t)
 	ctx := testCtx()
@@ -7945,6 +8126,36 @@ func TestUpdateEntity_NaNEmbedding(t *testing.T) {
 	}
 	if status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("expected InvalidArgument, got %v", status.Code(err))
+	}
+}
+
+// TestUpdateEntity_NaNEmbeddingNonIndexed pins SPEC R7: the NaN/Inf embedding
+// rejection applies "regardless of indexing status" — a non-indexed entity
+// type must still reject a NaN/Inf embedding at the service layer (the store's
+// NaN guard runs unconditionally, before any EnableVectorIndex branching).
+func TestUpdateEntity_NaNEmbeddingNonIndexed(t *testing.T) {
+	srv, _ := newTestServer(t)
+	ctx := testCtx()
+
+	// Component is a non-indexed type (enableVectorIndex not set).
+	applyTestSchema(ctx, t, srv.store)
+	txID := beginTestTx(t, srv, ctx)
+	ent, _ := srv.store.CreateEntity(ctx, "Component", "", map[string]string{"name": "a"}, nil, txID)
+
+	_, err := srv.UpdateEntity(ctx, &flowv1.UpdateEntityRequest{
+		Id:            ent.Id,
+		Properties:    map[string]string{"name": "b"},
+		Embedding:     []float32{float32(math.NaN()), 0.0, 0.0},
+		TransactionId: txID,
+	})
+	if err == nil {
+		t.Fatal("expected error for NaN embedding on non-indexed type, got nil")
+	}
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("expected InvalidArgument, got %v (%v)", status.Code(err), err)
+	}
+	if !strings.Contains(err.Error(), "NaN") {
+		t.Fatalf("expected the NaN-embedding rejection, got %v", err)
 	}
 }
 
