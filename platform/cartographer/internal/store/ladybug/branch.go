@@ -256,7 +256,13 @@ func vectorIndexesOnConn(conn *lbug.Connection) (map[string]bool, error) {
 	indexes := make(map[string]bool)
 	result, err := conn.Query("CALL show_indexes() RETURN *;")
 	if err != nil {
-		return indexes, nil
+		// Propagate, never swallow: every caller (rebuildBranchSchemaCache,
+		// captureVectorState) treats a nil error as authoritative vector state,
+		// so a catalog-read failure returning (empty map, nil) would silently
+		// strip vector state from every type read on branch reopen. The
+		// callers all propagate this error already, so the read path fails
+		// loudly instead of silently marking every type non-vector.
+		return nil, err
 	}
 	defer result.Close()
 	for result.HasNext() {
@@ -473,12 +479,19 @@ func (db *ladybugDB) RehydrateFromBranch(ctx context.Context, txID string) error
 
 	// Copy all edges from branch to main.
 	for _, name := range sortedKeys(edgeDefs) {
+		// The CREATE below targets main's rel table, so main's FROM/TO endpoint
+		// clauses (SPEC R2, fixed at CREATE time) are the labels the endpoint
+		// probe must accept.
+		pairs, err := connectionPairsOnConn(db.conn, name)
+		if err != nil {
+			return fmt.Errorf("read relationship endpoints for %q: %w", name, err)
+		}
 		edges, err := listEdgesOnConn(br.conn, name)
 		if err != nil {
 			return fmt.Errorf("query branch edges for %q: %w", name, err)
 		}
 		for _, edge := range edges {
-			if err := insertEdgeOnConn(db.conn, name, &edge); err != nil {
+			if err := insertEdgeOnConn(db.conn, name, pairs, &edge); err != nil {
 				return fmt.Errorf("insert edge into main: %w", err)
 			}
 		}
@@ -858,7 +871,11 @@ func insertEntityOnConn(
 	return nil
 }
 
-func insertEdgeOnConn(conn *lbug.Connection, edgeType string, edge *store.Edge) error {
+// insertEdgeOnConn verifies both endpoints exist under the edge type's expected
+// FROM/TO endpoint labels before creating the edge, then creates it. pairs is
+// the edge type's FROM/TO endpoint set (SPEC R2: fixed at CREATE time from the
+// rel table's endpoint clauses).
+func insertEdgeOnConn(conn *lbug.Connection, edgeType string, pairs []fromToPair, edge *store.Edge) error {
 	// Verify both endpoints exist before creating the edge. The
 	// MATCH (a {id: $from}), (b {id: $to}) CREATE ... statement silently no-ops
 	// when an endpoint matches nothing — creating no edge and no error — so an
@@ -867,24 +884,48 @@ func insertEdgeOnConn(conn *lbug.Connection, edgeType string, edge *store.Edge) 
 	// on every other corruption (unparseable files, missing keys, type/directory
 	// mismatch); an absent endpoint must fail loudly too (never silently drop a
 	// row or swallow a not-exist on a read path).
+	//
+	// The probe is constrained to the edge type's expected endpoint labels: an
+	// untyped MATCH (n {id: $id}) passes when the id exists under ANY label, so
+	// an endpoint id present under a non-endpoint label would pass the probe
+	// while the subsequent CREATE silently no-ops against the rel table's
+	// endpoint clauses — the edge would be silently dropped on re-hydration.
+	// Probing each expected label makes that case fail loudly with
+	// ErrSourceOrTargetNotFound, mirroring the normal write path's typed
+	// findEntityByID + rule validation (crud.go CreateEdge).
+	fromLabels := make(map[string]bool)
+	toLabels := make(map[string]bool)
+	for _, p := range pairs {
+		fromLabels[p.From] = true
+		toLabels[p.To] = true
+	}
 	for _, endpoint := range []struct {
-		id   string
-		role string
+		id     string
+		role   string
+		labels map[string]bool
 	}{
-		{edge.FromEntityID, "from"},
-		{edge.ToEntityID, "to"},
+		{edge.FromEntityID, "from", fromLabels},
+		{edge.ToEntityID, "to", toLabels},
 	} {
-		stmt, err := conn.Prepare("MATCH (n {id: $id}) RETURN n;")
-		if err != nil {
-			return fmt.Errorf("prepare edge %s endpoint lookup: %w", endpoint.role, err)
+		found := false
+		for label := range endpoint.labels {
+			stmt, err := conn.Prepare(fmt.Sprintf("MATCH (n:%s {id: $id}) RETURN n;", quoteID(label)))
+			if err != nil {
+				return fmt.Errorf("prepare edge %s endpoint lookup: %w", endpoint.role, err)
+			}
+			result, err := conn.Execute(stmt, map[string]any{"id": endpoint.id})
+			stmt.Close()
+			if err != nil {
+				return fmt.Errorf("look up edge %s endpoint %q: %w", endpoint.role, endpoint.id, err)
+			}
+			if result.HasNext() {
+				found = true
+			}
+			result.Close()
+			if found {
+				break
+			}
 		}
-		result, err := conn.Execute(stmt, map[string]any{"id": endpoint.id})
-		stmt.Close()
-		if err != nil {
-			return fmt.Errorf("look up edge %s endpoint %q: %w", endpoint.role, endpoint.id, err)
-		}
-		found := result.HasNext()
-		result.Close()
 		if !found {
 			return fmt.Errorf("%w: edge %q %s endpoint entity %q not found",
 				store.ErrSourceOrTargetNotFound, edge.Id, endpoint.role, endpoint.id)
@@ -1233,6 +1274,8 @@ func (db *ladybugDB) loadEntitiesFromDir(dir string, entDefs map[string]*store.E
 				Type       string            `json:"type"`
 				Properties map[string]string `json:"properties"`
 				Embedding  []float32         `json:"embedding"`
+				CreatedAt  time.Time         `json:"created_at"`
+				UpdatedAt  time.Time         `json:"updated_at"`
 			}
 			if err := json.Unmarshal(data, &je); err != nil {
 				return fmt.Errorf("%w: unparseable entity file %q: %v",
@@ -1246,14 +1289,20 @@ func (db *ladybugDB) loadEntitiesFromDir(dir string, entDefs map[string]*store.E
 				return fmt.Errorf("%w: entity file %q is missing required key 'id'",
 					store.ErrInvalidEntityDir, filepath.Join(typeDir, f.Name()))
 			}
+			// The directory-mismatch guard runs BEFORE the embedding-bootstrap
+			// DDL: a corrupt/hand-edited file declaring a type that differs from
+			// its directory must be rejected before ensureEmbeddingLoadSchema
+			// locks a vector dimension on the directory-named table (SPEC R8
+			// fail-loudly — never mutate schema state for a file that is about
+			// to be rejected).
+			if je.Type != typeName {
+				return fmt.Errorf("%w: entity file %q declares type %q but is stored under directory %q",
+					store.ErrInvalidEntityDir, filepath.Join(typeDir, f.Name()), je.Type, typeName)
+			}
 			if len(je.Embedding) > 0 {
 				if err := db.ensureEmbeddingLoadSchema(db.conn, typeName, je.Embedding, entDefs); err != nil {
 					return err
 				}
-			}
-			if je.Type != typeName {
-				return fmt.Errorf("%w: entity file %q declares type %q but is stored under directory %q",
-					store.ErrInvalidEntityDir, filepath.Join(typeDir, f.Name()), je.Type, typeName)
 			}
 			props := je.Properties
 			if props == nil {
@@ -1262,7 +1311,7 @@ func (db *ladybugDB) loadEntitiesFromDir(dir string, entDefs map[string]*store.E
 			entity := &store.Entity{
 				Id: je.ID, Type: je.Type, Properties: props,
 				Embedding: je.Embedding,
-				CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+				CreatedAt: je.CreatedAt, UpdatedAt: je.UpdatedAt,
 			}
 			if err := insertEntityOnConn(db.conn, typeName, entity, entDefs); err != nil {
 				return fmt.Errorf("insert entity %q: %w", je.ID, err)
@@ -1301,6 +1350,12 @@ func (db *ladybugDB) loadEdgesFromDir(dir string, edgeDefs map[string]*store.Edg
 		if err := db.ensureEdgeLoadSchema(db.conn, typeName, typeDir, edgeDefs); err != nil {
 			return err
 		}
+		// The rel table's endpoint clauses (fixed at CREATE time, SPEC R2) are
+		// the labels insertEdgeOnConn's endpoint probe must accept.
+		pairs, err := connectionPairsOnConn(db.conn, typeName)
+		if err != nil {
+			return fmt.Errorf("read relationship endpoints for %q: %w", typeName, err)
+		}
 		files, err := db.readDir(typeDir)
 		if err != nil {
 			return fmt.Errorf("read edges dir %q: %w", typeDir, err)
@@ -1319,6 +1374,8 @@ func (db *ladybugDB) loadEdgesFromDir(dir string, edgeDefs map[string]*store.Edg
 				From       string            `json:"from"`
 				To         string            `json:"to"`
 				Properties map[string]string `json:"properties"`
+				CreatedAt  time.Time         `json:"created_at"`
+				UpdatedAt  time.Time         `json:"updated_at"`
 			}
 			if err := json.Unmarshal(data, &je); err != nil {
 				return fmt.Errorf("%w: unparseable edge file %q: %v",
@@ -1344,9 +1401,9 @@ func (db *ladybugDB) loadEdgesFromDir(dir string, edgeDefs map[string]*store.Edg
 				Id: je.ID, Type: je.Type,
 				FromEntityID: je.From, ToEntityID: je.To,
 				Properties: props,
-				CreatedAt:  time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+				CreatedAt:  je.CreatedAt, UpdatedAt: je.UpdatedAt,
 			}
-			if err := insertEdgeOnConn(db.conn, typeName, edge); err != nil {
+			if err := insertEdgeOnConn(db.conn, typeName, pairs, edge); err != nil {
 				return fmt.Errorf("insert edge %q: %w", je.ID, err)
 			}
 		}
@@ -1401,6 +1458,8 @@ func (db *ladybugDB) loadEntitiesFromDirOnConn(conn *lbug.Connection, dir string
 				Type       string            `json:"type"`
 				Properties map[string]string `json:"properties"`
 				Embedding  []float32         `json:"embedding"`
+				CreatedAt  time.Time         `json:"created_at"`
+				UpdatedAt  time.Time         `json:"updated_at"`
 			}
 			if err := json.Unmarshal(data, &je); err != nil {
 				return fmt.Errorf("%w: unparseable entity file %q: %v",
@@ -1414,14 +1473,20 @@ func (db *ladybugDB) loadEntitiesFromDirOnConn(conn *lbug.Connection, dir string
 				return fmt.Errorf("%w: entity file %q is missing required key 'id'",
 					store.ErrInvalidEntityDir, filepath.Join(typeDir, f.Name()))
 			}
+			// The directory-mismatch guard runs BEFORE the embedding-bootstrap
+			// DDL: a corrupt/hand-edited file declaring a type that differs from
+			// its directory must be rejected before ensureEmbeddingLoadSchema
+			// locks a vector dimension on the directory-named table (SPEC R8
+			// fail-loudly — never mutate schema state for a file that is about
+			// to be rejected).
+			if je.Type != typeName {
+				return fmt.Errorf("%w: entity file %q declares type %q but is stored under directory %q",
+					store.ErrInvalidEntityDir, filepath.Join(typeDir, f.Name()), je.Type, typeName)
+			}
 			if len(je.Embedding) > 0 {
 				if err := db.ensureEmbeddingLoadSchema(conn, typeName, je.Embedding, entDefs); err != nil {
 					return err
 				}
-			}
-			if je.Type != typeName {
-				return fmt.Errorf("%w: entity file %q declares type %q but is stored under directory %q",
-					store.ErrInvalidEntityDir, filepath.Join(typeDir, f.Name()), je.Type, typeName)
 			}
 			props := je.Properties
 			if props == nil {
@@ -1430,7 +1495,7 @@ func (db *ladybugDB) loadEntitiesFromDirOnConn(conn *lbug.Connection, dir string
 			entity := &store.Entity{
 				Id: je.ID, Type: je.Type, Properties: props,
 				Embedding: je.Embedding,
-				CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+				CreatedAt: je.CreatedAt, UpdatedAt: je.UpdatedAt,
 			}
 			if err := insertEntityOnConn(conn, typeName, entity, entDefs); err != nil {
 				return fmt.Errorf("insert entity %q on branch: %w", je.ID, err)
@@ -1470,6 +1535,12 @@ func (db *ladybugDB) loadEdgesFromDirOnConn(conn *lbug.Connection, dir string,
 		if err := db.ensureEdgeLoadSchema(conn, typeName, typeDir, edgeDefs); err != nil {
 			return err
 		}
+		// The rel table's endpoint clauses (fixed at CREATE time, SPEC R2) are
+		// the labels insertEdgeOnConn's endpoint probe must accept.
+		pairs, err := connectionPairsOnConn(conn, typeName)
+		if err != nil {
+			return fmt.Errorf("read relationship endpoints for %q: %w", typeName, err)
+		}
 		files, err := db.readDir(typeDir)
 		if err != nil {
 			return fmt.Errorf("read edges dir %q: %w", typeDir, err)
@@ -1488,6 +1559,8 @@ func (db *ladybugDB) loadEdgesFromDirOnConn(conn *lbug.Connection, dir string,
 				From       string            `json:"from"`
 				To         string            `json:"to"`
 				Properties map[string]string `json:"properties"`
+				CreatedAt  time.Time         `json:"created_at"`
+				UpdatedAt  time.Time         `json:"updated_at"`
 			}
 			if err := json.Unmarshal(data, &je); err != nil {
 				return fmt.Errorf("%w: unparseable edge file %q: %v",
@@ -1513,9 +1586,9 @@ func (db *ladybugDB) loadEdgesFromDirOnConn(conn *lbug.Connection, dir string,
 				Id: je.ID, Type: je.Type,
 				FromEntityID: je.From, ToEntityID: je.To,
 				Properties: props,
-				CreatedAt:  time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+				CreatedAt:  je.CreatedAt, UpdatedAt: je.UpdatedAt,
 			}
-			if err := insertEdgeOnConn(conn, typeName, edge); err != nil {
+			if err := insertEdgeOnConn(conn, typeName, pairs, edge); err != nil {
 				return fmt.Errorf("insert edge %q on branch: %w", je.ID, err)
 			}
 		}

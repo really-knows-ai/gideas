@@ -16,6 +16,7 @@ import (
 	"time"
 
 	lbug "github.com/LadybugDB/go-ladybug"
+	"github.com/foundry/flow/cartographer/internal/gitstore"
 	schemavalidator "github.com/foundry/flow/cartographer/internal/schema"
 	"github.com/foundry/flow/cartographer/internal/store"
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
@@ -6620,6 +6621,41 @@ func TestUpdateEntity_NaNOrInfEmbedding(t *testing.T) {
 	}
 }
 
+// SPEC R7: the NaN/Inf embedding rejection applies "regardless of indexing
+// status" — a non-indexed entity type accepts an embedding of any dimension but
+// must still reject NaN/Inf before the value is discarded. UpdateEntity's
+// NaN/Inf guard (crud.go) runs unconditionally, before any EnableVectorIndex
+// gate; this pins the non-indexed branch, mirroring the CreateEntity non-indexed
+// test (TestCreateEntity_NaNEmbeddingNonIndexed).
+func TestUpdateEntity_NaNOrInfEmbedding_NonIndexedType(t *testing.T) {
+	s, err := OpenInMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeStore(t, s)
+	applyTestSchema(t, s)
+
+	e, err := s.CreateEntity(context.Background(), "Document", "",
+		map[string]string{"title": "t"}, nil, "")
+	if err != nil {
+		t.Fatalf("CreateEntity: %v", err)
+	}
+
+	for _, emb := range [][]float32{
+		{float32(math.NaN()), 0},
+		{float32(math.Inf(1)), 0},
+		{float32(math.Inf(-1)), 0},
+	} {
+		_, err = s.UpdateEntity(context.Background(), e.Id, nil, emb, "")
+		if err == nil {
+			t.Fatalf("expected error for NaN/Inf embedding %v on non-indexed type", emb)
+		}
+		if !errors.Is(err, store.ErrNaNOrInfEmbedding) {
+			t.Errorf("embedding %v: expected ErrNaNOrInfEmbedding, got %v", emb, err)
+		}
+	}
+}
+
 // SPEC R7 error table: "Embedding dimension mismatch" on UpdateEntity. The
 // dimension is bootstrapped by the first CreateEntity with an embedding; a
 // subsequent update with a differing dimension must fail with
@@ -6942,19 +6978,32 @@ func TestRehydrateMainFromFiles_RejectsTypeDirectoryMismatch(t *testing.T) {
 	}
 	defer closeStore(t, s)
 	applyTestSchema(t, s)
+	ctx := context.Background()
 
 	id := uuid.NewString()
 	root := t.TempDir()
 	entitiesDir := filepath.Join(root, "entities")
 	edgesDir := filepath.Join(root, "edges")
-	// File is under the VectorType directory but declares type "Document".
+	// File is under the VectorType directory but declares type "Document". It
+	// also carries an embedding, pinning the ordering of the directory-mismatch
+	// guard against the embedding-bootstrap DDL (branch.go loadEntitiesFromDir):
+	// the guard must reject the file BEFORE ensureEmbeddingLoadSchema ALTERs the
+	// directory-named table and locks a vector dimension on it (a file about to
+	// be rejected must never mutate schema state — SPEC R8 fail-loudly).
 	writeJSONFile(t, filepath.Join(entitiesDir, "VectorType", id+".json"), map[string]any{
 		"id": id, "type": "Document", "properties": map[string]string{"name": "mismatch"},
+		"embedding": []float32{1, 2, 3},
 	})
-	if err := s.RehydrateMainFromFiles(context.Background(), entitiesDir, edgesDir); err == nil {
+	if err := s.RehydrateMainFromFiles(ctx, entitiesDir, edgesDir); err == nil {
 		t.Fatal("expected error for entity type/directory mismatch")
 	} else if !errors.Is(err, store.ErrInvalidEntityDir) {
 		t.Fatalf("expected ErrInvalidEntityDir, got %v", err)
+	}
+	// The guard must have rejected the file before the embedding bootstrap ran:
+	// VectorType must not have gained an embedding column / vector index as a
+	// side effect of the rejected file.
+	if s.IsVectorIndexBootstrapped(ctx, "VectorType", "") {
+		t.Fatal("embedding bootstrap DDL must not run before the type/directory mismatch guard")
 	}
 }
 
@@ -6966,11 +7015,12 @@ func TestHydrateBranchFromFiles_RejectsTypeDirectoryMismatch(t *testing.T) {
 	}
 	defer closeStore(t, s)
 	applyTestSchema(t, s)
+	ctx := context.Background()
 
-	if err := s.CreateBranchDB(context.Background(), "tx1"); err != nil {
+	if err := s.CreateBranchDB(ctx, "tx1"); err != nil {
 		t.Fatalf("CreateBranchDB: %v", err)
 	}
-	if err := s.ReplicateSchemaToBranch(context.Background(), "tx1"); err != nil {
+	if err := s.ReplicateSchemaToBranch(ctx, "tx1"); err != nil {
 		t.Fatalf("ReplicateSchemaToBranch: %v", err)
 	}
 
@@ -6981,13 +7031,19 @@ func TestHydrateBranchFromFiles_RejectsTypeDirectoryMismatch(t *testing.T) {
 	if err := os.MkdirAll(edgesDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	// Same ordering pin as the main path: the embedding must not bootstrap the
+	// branch VectorType table before the mismatch guard rejects the file.
 	writeJSONFile(t, filepath.Join(entitiesDir, "VectorType", id+".json"), map[string]any{
 		"id": id, "type": "Document", "properties": map[string]string{"name": "mismatch"},
+		"embedding": []float32{1, 2, 3},
 	})
-	if err := s.HydrateBranchFromFiles(context.Background(), "tx1", entitiesDir, edgesDir); err == nil {
+	if err := s.HydrateBranchFromFiles(ctx, "tx1", entitiesDir, edgesDir); err == nil {
 		t.Fatal("expected error for entity type/directory mismatch")
 	} else if !errors.Is(err, store.ErrInvalidEntityDir) {
 		t.Fatalf("expected ErrInvalidEntityDir, got %v", err)
+	}
+	if s.IsVectorIndexBootstrapped(ctx, "VectorType", "tx1") {
+		t.Fatal("embedding bootstrap DDL must not run before the type/directory mismatch guard")
 	}
 }
 
@@ -7315,6 +7371,173 @@ func TestRehydrateMainFromFiles_EdgeWithMissingEndpointFailsLoudly(t *testing.T)
 	}
 	if !errors.Is(err, store.ErrSourceOrTargetNotFound) {
 		t.Fatalf("expected ErrSourceOrTargetNotFound, got %v", err)
+	}
+}
+
+// An endpoint entity that exists under a label outside the edge type's fixed
+// FROM/TO endpoint set (SPEC R2: the endpoint clauses are fixed at rel-table
+// CREATE time) must fail loudly on the edge load path instead of silently
+// dropping the edge. The former probe MATCH (n {id: $id}) matched by id alone,
+// so an id present under a non-endpoint label passed the probe while the
+// subsequent CREATE silently no-opped against the rel table's endpoint clauses
+// — the wrong-label edge vanished on re-hydration. The label-constrained probe
+// surfaces ErrSourceOrTargetNotFound, mirroring the typed write path
+// (crud.go CreateEdge's findEntityByID + rule validation).
+func TestRehydrateFiles_WrongLabelEndpointFailsLoudly(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		branch bool
+	}{
+		{"main", false},
+		{"branch", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, err := OpenInMemory()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer closeStore(t, s)
+			applyTestSchema(t, s)
+			ctx := context.Background()
+
+			const branch = "tx1"
+			if tc.branch {
+				if err := s.CreateBranchDB(ctx, branch); err != nil {
+					t.Fatalf("CreateBranchDB: %v", err)
+				}
+				if err := s.ReplicateSchemaToBranch(ctx, branch); err != nil {
+					t.Fatalf("ReplicateSchemaToBranch: %v", err)
+				}
+			}
+
+			// The edge's from-endpoint id exists only under the Document label,
+			// outside DependsOn's FROM/TO endpoint set (Component→Component), so
+			// the id satisfies an untyped probe but not the label-constrained one.
+			fromID := uuid.NewString()
+			toID := uuid.NewString()
+			root := t.TempDir()
+			entitiesDir := filepath.Join(root, "entities")
+			edgesDir := filepath.Join(root, "edges")
+			writeJSONFile(t, filepath.Join(entitiesDir, "Document", fromID+".json"), map[string]any{
+				"id": fromID, "type": "Document",
+			})
+			writeJSONFile(t, filepath.Join(entitiesDir, "Component", toID+".json"), map[string]any{
+				"id": toID, "type": "Component",
+			})
+			writeJSONFile(t, filepath.Join(edgesDir, "DependsOn", uuid.NewString()+".json"), map[string]any{
+				"id": uuid.NewString(), "type": "DependsOn", "from": fromID, "to": toID,
+			})
+
+			var loadErr error
+			if tc.branch {
+				loadErr = s.HydrateBranchFromFiles(ctx, branch, entitiesDir, edgesDir)
+			} else {
+				loadErr = s.RehydrateMainFromFiles(ctx, entitiesDir, edgesDir)
+			}
+			if loadErr == nil {
+				t.Fatal("expected loud failure for an edge whose from-endpoint id exists only under a non-endpoint label")
+			}
+			if !errors.Is(loadErr, store.ErrSourceOrTargetNotFound) {
+				t.Fatalf("expected ErrSourceOrTargetNotFound, got %v", loadErr)
+			}
+		})
+	}
+}
+
+// The store load path must decode the created_at/updated_at fields the gitstore
+// write path persists on every entity/edge file (gitstore EntityJSON/EdgeJSON)
+// instead of fabricating time.Now() at the re-hydration moment (LEARNINGS: "a
+// read path must decode every field the write path persists (never fabricate a
+// value in place of persisted state)"). The load structs previously omitted the
+// fields, so json.Unmarshal dropped them and the load stamped "now" — persisted
+// timestamps silently shifted to the re-hydration moment. This test writes
+// entity/edge files through the gitstore write path, re-hydrates them through
+// the store load path, and asserts the persisted timestamps survive untouched.
+func TestRehydrateMainFromFiles_PersistedTimestampsSurvive(t *testing.T) {
+	s, err := OpenInMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeStore(t, s)
+	applyTestSchema(t, s)
+	ctx := context.Background()
+
+	// Write the graph through the gitstore write path, which persists
+	// created_at/updated_at on every file.
+	gs, err := gitstore.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("gitstore.New: %v", err)
+	}
+	defer func() { _ = gs.Close() }()
+
+	created := time.Date(2024, 1, 2, 3, 4, 5, 0, time.UTC)
+	updated := time.Date(2024, 6, 7, 8, 9, 10, 0, time.UTC)
+	fromID := uuid.NewString()
+	toID := uuid.NewString()
+	edgeID := uuid.NewString()
+	if err := gs.WriteEntityFiles(ctx, "Component", []gitstore.Entity{
+		{ID: fromID, Type: "Component", Properties: map[string]string{"name": "a"}, CreatedAt: created, UpdatedAt: updated},
+		{ID: toID, Type: "Component", Properties: map[string]string{"name": "b"}, CreatedAt: created, UpdatedAt: updated},
+	}); err != nil {
+		t.Fatalf("WriteEntityFiles: %v", err)
+	}
+	if err := gs.WriteEdgeFiles(ctx, "DependsOn", []gitstore.Edge{
+		{ID: edgeID, Type: "DependsOn", FromEntityID: fromID, ToEntityID: toID,
+			Properties: map[string]string{"strength": strengthValue}, CreatedAt: created, UpdatedAt: updated},
+	}); err != nil {
+		t.Fatalf("WriteEdgeFiles: %v", err)
+	}
+
+	entitiesDir, edgesDir := gs.HydrationDirs()
+	if err := s.RehydrateMainFromFiles(ctx, entitiesDir, edgesDir); err != nil {
+		t.Fatalf("RehydrateMainFromFiles: %v", err)
+	}
+
+	// The load path must have accepted the timestamp-bearing files and loaded
+	// the graph content.
+	if _, err := s.GetEntity(ctx, fromID, ""); err != nil {
+		t.Fatalf("GetEntity(from): %v", err)
+	}
+	if _, err := s.GetEntity(ctx, toID, ""); err != nil {
+		t.Fatalf("GetEntity(to): %v", err)
+	}
+	if _, err := s.GetEdge(ctx, edgeID, ""); err != nil {
+		t.Fatalf("GetEdge: %v", err)
+	}
+
+	// The persisted timestamps must survive the store round-trip unchanged:
+	// re-reading the files via the gitstore read path (the sibling read path
+	// that already decodes them) must return the exact values written, not a
+	// re-hydration-time "now".
+	entities, err := gs.ReadAllEntityFiles(ctx, "Component")
+	if err != nil {
+		t.Fatalf("ReadAllEntityFiles: %v", err)
+	}
+	if len(entities) != 2 {
+		t.Fatalf("ReadAllEntityFiles returned %d entities, want 2", len(entities))
+	}
+	for _, ent := range entities {
+		if !ent.CreatedAt.Equal(created) {
+			t.Errorf("entity %s created_at = %v, want %v", ent.ID, ent.CreatedAt, created)
+		}
+		if !ent.UpdatedAt.Equal(updated) {
+			t.Errorf("entity %s updated_at = %v, want %v", ent.ID, ent.UpdatedAt, updated)
+		}
+	}
+	edges, err := gs.ReadAllEdgeFiles(ctx, "DependsOn")
+	if err != nil {
+		t.Fatalf("ReadAllEdgeFiles: %v", err)
+	}
+	if len(edges) != 1 {
+		t.Fatalf("ReadAllEdgeFiles returned %d edges, want 1", len(edges))
+	}
+	for _, edge := range edges {
+		if !edge.CreatedAt.Equal(created) {
+			t.Errorf("edge %s created_at = %v, want %v", edge.ID, edge.CreatedAt, created)
+		}
+		if !edge.UpdatedAt.Equal(updated) {
+			t.Errorf("edge %s updated_at = %v, want %v", edge.ID, edge.UpdatedAt, updated)
+		}
 	}
 }
 
