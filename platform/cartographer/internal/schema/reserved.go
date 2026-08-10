@@ -7,8 +7,9 @@ package schema
 // compiled parser — the set cannot be extracted from the parser at runtime),
 // so a LadybugDB version bump may introduce new reserved words absent here.
 // Consequences of the ceiling: a type or property named with such a word
-// passes ApplySchema validation (INVALID_ARGUMENT) and is applied without
-// error — the store emits every table name, label, and column through
+// passes ApplySchema validation (no INVALID_ARGUMENT is returned) and is
+// applied without error — the store emits every table name, label, and column
+// through
 // quoteID backticks (createNodeTableOnConn/createRelTableOnConn in branch.go,
 // ALTER DDL in schema.go), and the engine accepts backtick-quoted reserved
 // words as identifiers (verified against v0.17.0: CREATE NODE TABLE `MATCH`
