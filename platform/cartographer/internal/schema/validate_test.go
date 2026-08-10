@@ -671,8 +671,17 @@ func TestValidate_ReservedUntypedPlaceholderName(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if err := Validate(tc.s); err == nil {
 				t.Fatal("expected ErrReservedWord, got nil")
-			} else if !errors.Is(err, ErrReservedWord) {
-				t.Fatalf("expected ErrReservedWord, got: %v", err)
+			} else {
+				if !errors.Is(err, ErrReservedWord) {
+					t.Fatalf("expected ErrReservedWord, got: %v", err)
+				}
+				// SPEC:937 has its own error-table row ("Name is the reserved
+				// internal placeholder") distinct from SPEC:936 ("Name is a
+				// LadybugDB reserved word"), so the wire message must
+				// identify the placeholder, not read as a plain reserved word.
+				if !strings.Contains(err.Error(), "reserved internal placeholder") {
+					t.Fatalf("expected placeholder-distinguishing message, got: %v", err)
+				}
 			}
 		})
 	}

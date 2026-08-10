@@ -102,7 +102,7 @@ func validateEntityType(et *flowv1.EntityType, entityTypeNames, edgeTypeNames ma
 	// type with that name would alias it and be silently skipped by the
 	// store's reopen structural check, so it is reserved like a keyword.
 	if et.Name == UntypedTableName {
-		return fmt.Errorf("%w: %q is a reserved word", ErrReservedWord, et.Name)
+		return fmt.Errorf("%w: %q is the reserved internal placeholder", ErrReservedWord, et.Name)
 	}
 
 	// 3. Duplicate property names within this type
@@ -161,7 +161,7 @@ func validateEdgeType(et *flowv1.EdgeType) error {
 	// NODE table for edgeless rel types (UntypedTableName). A user edge type
 	// with that name would collide with it, so it is reserved like a keyword.
 	if et.Name == UntypedTableName {
-		return fmt.Errorf("%w: %q is a reserved word", ErrReservedWord, et.Name)
+		return fmt.Errorf("%w: %q is the reserved internal placeholder", ErrReservedWord, et.Name)
 	}
 
 	// 3. Duplicate property names within this type
