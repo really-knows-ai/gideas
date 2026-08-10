@@ -1081,11 +1081,28 @@ func (s *CartographerServer) CreateEntity(
 	if !s.store.TableExists(req.EntityType) {
 		return nil, errUnknownEntityType(req.EntityType)
 	}
-	// SPEC order: structural validation precedes the capability check. An
-	// explicitly-supplied ID that is not a valid UUID v4 is structurally invalid
-	// and must yield INVALID_ARGUMENT even when the caller lacks write
+	// SPEC order (SPEC:998): active transaction → structural validation →
+	// data-integrity. The structural checks that precede the capability gate
+	// are the unknown-type check above and this ID-format check: an
+	// explicitly-supplied ID that is not a valid UUID v4 is structurally
+	// invalid and must yield INVALID_ARGUMENT even when the caller lacks write
 	// capability (mirrors UpdateEntity/DeleteEntity/DeleteEdge). An empty ID is
 	// valid — the store auto-generates it.
+	// ponytail: the remaining CreateEntity structural validation (unknown /
+	// missing-required property, non-string value — error-table rows 946/948/949)
+	// runs inside the store, AFTER this capability gate, so a request combining
+	// an unknown property with a missing WRITE capability surfaces
+	// PERMISSION_DENIED — while CreateEdge runs validateEdgePropsForCreate at
+	// the service boundary BEFORE its capability gate and surfaces
+	// INVALID_ARGUMENT for the same combination. SPEC:998 places capability
+	// explicitly for CreateEdge ("structural → entity existence → type-specific
+	// capability → edge-rule auth") but not for CreateEntity ("active
+	// transaction → structural validation → data-integrity"), so the asymmetry
+	// is not a SPEC divergence — it is a per-RPC check-order difference a
+	// caller can observe across the two write paths. Upgrade path: hoist
+	// CreateEntity's property validation to the service boundary (mirroring
+	// validateEdgePropsForCreate) so both write paths validate structurally
+	// before the capability gate.
 	if req.Id != "" && !isValidUUID(req.Id) {
 		return nil, status.Error(codes.InvalidArgument, "invalid entity ID format")
 	}
