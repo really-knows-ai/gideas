@@ -143,13 +143,15 @@ func (p *CartographerProxy) checkCapability(ctx context.Context, verb, resource 
 }
 
 // checkReadByType enforces the READ gate for read RPCs whose entity type is
-// known from the request body: a specific type is a mode-1 check, an omitted
-// type (all-types search) is a mode-2 wildcard best-effort check (SPEC R3).
+// known from the request body (SPEC R3:262): a specific type is a mode-1
+// check against <verb>:graph/entity/<type>; an omitted type is an all-types
+// search and is also a mode-1 check against <verb>:graph/entity/* — a per-type
+// grant cannot authorise it (a wildcard grant matches via flow.MatchCapability).
 func (p *CartographerProxy) checkReadByType(ctx context.Context, entityType string) error {
 	if entityType != "" {
 		return p.checkCapability(ctx, "READ", "graph/entity/"+entityType, true)
 	}
-	return p.checkCapability(ctx, "READ", "graph/entity/*", false)
+	return p.checkCapability(ctx, "READ", "graph/entity/*", true)
 }
 
 // checkWriteByType enforces the WRITE gate for write RPCs whose entity type is
@@ -179,8 +181,8 @@ func (p *CartographerProxy) ExecuteCypher(
 }
 
 // SearchNeighbors validates the READ grant against the requested entity type
-// from the request body (mode 1); an omitted type is a wildcard best-effort
-// check (mode 2) with the Cartographer authoritative (SPEC R3).
+// from the request body (mode 1); an omitted type is an all-types search that
+// requires READ:graph/entity/* (SPEC R3:262).
 func (p *CartographerProxy) SearchNeighbors(
 	ctx context.Context, req *flowv1.SearchNeighborsRequest,
 ) (*flowv1.SearchNeighborsResponse, error) {
@@ -191,8 +193,8 @@ func (p *CartographerProxy) SearchNeighbors(
 }
 
 // FullTextSearch validates the READ grant against the requested entity type
-// from the request body (mode 1); an omitted type is a mode-2 wildcard
-// best-effort check (SPEC R3).
+// from the request body (mode 1); an omitted type is an all-types search that
+// requires READ:graph/entity/* (SPEC R3:262).
 func (p *CartographerProxy) FullTextSearch(
 	ctx context.Context, req *flowv1.FullTextSearchRequest,
 ) (*flowv1.FullTextSearchResponse, error) {
@@ -203,8 +205,8 @@ func (p *CartographerProxy) FullTextSearch(
 }
 
 // ListEntities validates the READ grant against the requested entity type from
-// the request body (mode 1); an omitted type is a mode-2 wildcard best-effort
-// check (SPEC R3).
+// the request body (mode 1); an omitted type is an all-types search that
+// requires READ:graph/entity/* (SPEC R3:262).
 func (p *CartographerProxy) ListEntities(
 	ctx context.Context, req *flowv1.ListEntitiesRequest,
 ) (*flowv1.ListEntitiesResponse, error) {
