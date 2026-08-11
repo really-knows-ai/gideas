@@ -70,6 +70,13 @@ func (s *captureCartographerServer) DeleteEdge(
 	return &flowv1.DeleteEdgeResponse{EdgeId: req.GetId(), EdgeType: "DEPENDS_ON"}, nil
 }
 
+func (s *captureCartographerServer) SearchNeighbors(
+	ctx context.Context, req *flowv1.SearchNeighborsRequest,
+) (*flowv1.SearchNeighborsResponse, error) {
+	s.record(ctx, "SearchNeighbors")
+	return &flowv1.SearchNeighborsResponse{}, nil
+}
+
 func (s *captureCartographerServer) ExportGraph(
 	req *flowv1.ExportGraphRequest, stream grpc.ServerStreamingServer[flowv1.ExportGraphResponse],
 ) error {
@@ -280,6 +287,50 @@ func TestCartographerProxy_E2E_Mode2_PassesThrough(t *testing.T) {
 		t.Fatalf("expected the Cartographer to receive DeleteEdge, got %q", capture.lastMethod())
 	}
 	assertSignedCapabilitiesOnMD(t, pub, capture.metadata(), caps)
+}
+
+// TestCartographerProxy_E2E_Mode1_AllTypesSearch_BlocksPerTypeGrantOnly pins the
+// omitted-type (all-types) read-search branch (SPEC R3:262): a node holding
+// only a per-type READ:graph/entity/Component grant cannot perform a
+// type-omitted SearchNeighbors or FullTextSearch — a per-type capability
+// cannot authorise an all-types search, so the Sidecar blocks the request with
+// PERMISSION_DENIED before it reaches the Cartographer.
+func TestCartographerProxy_E2E_Mode1_AllTypesSearch_BlocksPerTypeGrantOnly(t *testing.T) {
+	const caps = "READ:graph/entity/Component,WRITE:graph/tx"
+	capture, client, _ := setupCartographerWire(t, caps)
+
+	graph := client.GetGraph()
+	before := capture.count()
+
+	if _, err := graph.SearchNeighbors([]float32{0.1, 0.2}, "", 10); err == nil {
+		t.Fatal("expected an all-types SearchNeighbors without READ:graph/entity/* to be blocked")
+	} else if st, ok := status.FromError(err); !ok || st.Code() != codes.PermissionDenied {
+		t.Fatalf("expected PermissionDenied, got %v", err)
+	}
+	if _, err := graph.FullTextSearch("auth service", ""); err == nil {
+		t.Fatal("expected an all-types FullTextSearch without READ:graph/entity/* to be blocked")
+	} else if st, ok := status.FromError(err); !ok || st.Code() != codes.PermissionDenied {
+		t.Fatalf("expected PermissionDenied, got %v", err)
+	}
+	if capture.count() != before {
+		t.Fatal("mode-1 block must prevent the requests from reaching the Cartographer")
+	}
+}
+
+// TestCartographerProxy_E2E_Mode1_AllTypesSearch_PassesWithWildcardGrant pins
+// the all-types search success path (SPEC R3:262): a node holding
+// READ:graph/entity/* can perform a type-omitted SearchNeighbors and the
+// request reaches the Cartographer.
+func TestCartographerProxy_E2E_Mode1_AllTypesSearch_PassesWithWildcardGrant(t *testing.T) {
+	const caps = "READ:graph/entity/*"
+	capture, client, _ := setupCartographerWire(t, caps)
+
+	if _, err := client.GetGraph().SearchNeighbors([]float32{0.1, 0.2}, "", 10); err != nil {
+		t.Fatalf("all-types SearchNeighbors with READ:graph/entity/* should pass mode-1: %v", err)
+	}
+	if capture.lastMethod() != "SearchNeighbors" {
+		t.Fatalf("expected the Cartographer to receive SearchNeighbors, got %q", capture.lastMethod())
+	}
 }
 
 // TestCartographerProxy_E2E_ExportGraph_StreamsWithSignedCapabilities
