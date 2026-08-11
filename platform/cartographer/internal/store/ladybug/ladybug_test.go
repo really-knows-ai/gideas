@@ -1950,6 +1950,51 @@ func TestExecuteCypher_ReadOnlyClausesClassified(t *testing.T) {
 	})
 }
 
+// TestExecuteCypher_StringLiteralKeywordNotMutation pins the false-positive
+// direction of the mutation-keyword fallback (query.go isMutationCypher): a
+// genuinely-invalid read-only statement that happens to quote a mutation
+// keyword inside a string literal must surface ErrInvalidCypher
+// (INVALID_ARGUMENT), never ErrMutationCypher (PERMISSION_DENIED). The SPEC
+// check order runs Cypher syntax before read-only enforcement (SPEC:1009), the
+// "Invalid Cypher syntax" error row is INVALID_ARGUMENT (SPEC:973), and the
+// grammar-unparseable read-only note (SPEC:487-491) mandates "never as
+// PERMISSION_DENIED". The v0.17.0 grammar rejects `MATCH (n:Component) RETURN n
+// 'delete'` at Prepare (trailing string literal); the `delete` keyword sits
+// inside that literal, so the fallback (which skips strings/comments) must not
+// classify it as a mutation.
+func TestExecuteCypher_StringLiteralKeywordNotMutation(t *testing.T) {
+	s, err := OpenInMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeStore(t, s)
+	applyTestSchema(t, s)
+
+	// The trailing 'delete' is a string literal in a statement the grammar
+	// rejects at Prepare. Classifying it as a mutation would flip the SPEC's
+	// syntax-before-read-only ordering into PERMISSION_DENIED.
+	_, err = s.ExecuteCypher(context.Background(),
+		"MATCH (n:Component) RETURN n 'delete'", nil, "")
+	if errors.Is(err, store.ErrMutationCypher) {
+		t.Fatalf("a malformed read-only statement quoting a mutation keyword must not be classified as mutation, got %v", err)
+	}
+	if !errors.Is(err, store.ErrInvalidCypher) {
+		t.Fatalf("expected ErrInvalidCypher, got %v", err)
+	}
+
+	// A mutation keyword inside a comment must also be ignored: the statement
+	// is genuinely malformed (unbalanced paren), and the `delete` keyword lives
+	// only inside the /* */ comment.
+	_, err = s.ExecuteCypher(context.Background(),
+		"MATCH (n:Component RETURN n /* delete */", nil, "")
+	if errors.Is(err, store.ErrMutationCypher) {
+		t.Fatalf("a mutation keyword inside a comment must not be classified as mutation, got %v", err)
+	}
+	if !errors.Is(err, store.ErrInvalidCypher) {
+		t.Fatalf("expected ErrInvalidCypher, got %v", err)
+	}
+}
+
 func TestExecuteCypher_WithParams(t *testing.T) {
 	s, err := OpenInMemory()
 	if err != nil {
@@ -2030,6 +2075,21 @@ func TestExtractEntityTypes(t *testing.T) {
 
 	t.Run("invalid syntax returns ErrInvalidCypher", func(t *testing.T) {
 		_, err := s.ExtractEntityTypes(ctx, "this is not valid cypher {{")
+		if !errors.Is(err, store.ErrInvalidCypher) {
+			t.Errorf("expected ErrInvalidCypher, got %v", err)
+		}
+	})
+
+	// A statement that fails Prepare with a mutation keyword quoted inside a
+	// string literal must keep ErrInvalidCypher, matching ExecuteCypher's
+	// error classification — the mutation-keyword fallback skips strings, so
+	// the SPEC's syntax-before-read-only ordering is preserved (SPEC:1009).
+	t.Run("invalid syntax with string-literal mutation keyword returns ErrInvalidCypher", func(t *testing.T) {
+		_, err := s.ExtractEntityTypes(ctx, "MATCH (n:Component) RETURN n 'delete'")
+		if errors.Is(err, store.ErrMutationCypher) {
+			t.Errorf("a malformed read-only statement quoting a mutation keyword "+
+				"must not be classified as mutation, got %v", err)
+		}
 		if !errors.Is(err, store.ErrInvalidCypher) {
 			t.Errorf("expected ErrInvalidCypher, got %v", err)
 		}
@@ -2562,6 +2622,39 @@ func TestFullTextSearch_CrossType(t *testing.T) {
 	}
 	if len(results) == 0 {
 		t.Error("expected at least one result from cross-type FTS")
+	}
+}
+
+// TestFullTextSearch_NoResultCap pins that FullTextSearch returns every
+// matching document — no silent per-type cap. SPEC R2 defines
+// FullTextSearch(query, entityType?) with no result limit and the error table
+// defines no cap; LadybugDB's QUERY_FTS_INDEX TOP argument is optional and
+// defaults to retrieving all documents, so the store must not inject one. A
+// search matching more than 100 documents must return all of them, not the
+// capped subset.
+func TestFullTextSearch_NoResultCap(t *testing.T) {
+	s, err := OpenInMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeStore(t, s)
+	applyTestSchema(t, s)
+	ctx := context.Background()
+
+	const want = 120 // > the old hard-coded TOP := 100.
+	for i := range want {
+		if _, err := s.CreateEntity(ctx, "Document", "",
+			map[string]string{"title": fmt.Sprintf("needle doc %d", i), "body": "content"}, nil, ""); err != nil {
+			t.Fatalf("CreateEntity %d: %v", i, err)
+		}
+	}
+
+	results, err := s.FullTextSearch(ctx, "needle", "Document", "")
+	if err != nil {
+		t.Fatalf("FullTextSearch: %v", err)
+	}
+	if len(results) != want {
+		t.Errorf("expected all %d matching documents, got %d", want, len(results))
 	}
 }
 
