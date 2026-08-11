@@ -39,9 +39,17 @@ func (db *ladybugDB) ExecuteCypher(
 		// at Prepare before the IsReadOnly guard runs. They are still
 		// mutation/DDL statements per SPEC error-table row "ExecuteCypher with
 		// mutation statement" and R7 §5 (FOREACH is treated as mutation per
-		// SPEC:469-470), so they must surface as PERMISSION_DENIED
+		// SPEC:484-485), so they must surface as PERMISSION_DENIED
 		// (ErrMutationCypher) rather than INVALID_ARGUMENT (ErrInvalidCypher).
-		// Genuinely-invalid read-only syntax keeps INVALID_ARGUMENT.
+		// Genuinely-invalid read-only syntax keeps INVALID_ARGUMENT — the
+		// SPEC's syntax-before-read-only check order (SPEC:1009) and the
+		// grammar-unparseable read-only note (SPEC:487-491, "never as
+		// PERMISSION_DENIED"). isMutationCypher matches clause keywords only
+		// outside string literals and comments, so a malformed read-only
+		// statement that merely quotes a mutation keyword (e.g.
+		// `MATCH (n:Component) RETURN n 'delete'`) is not misclassified as a
+		// mutation (see the isMutationCypher ponytail for the remaining
+		// bare-keyword false-positive).
 		if isMutationCypher(cypher) {
 			return nil, store.ErrMutationCypher
 		}
@@ -553,11 +561,13 @@ func (db *ladybugDB) FullTextSearch(
 	for _, t := range typesToSearch {
 		// Use QUERY_FTS_INDEX if available; fall back to property scan.
 		idxName := t + "_fts"
-		// ponytail: TOP is hard-coded to 100 because the SPEC R2 defines
-		// FullTextSearch(query, entityType?) with no topK parameter, so there is no
-		// caller-supplied limit to thread through. If a topK parameter is added to
-		// the SPEC in future, this constant should be replaced with it.
-		q := fmt.Sprintf("CALL QUERY_FTS_INDEX('%s', '%s', $q, TOP := 100) RETURN node, score ORDER BY score DESC;",
+		// No TOP argument: LadybugDB's QUERY_FTS_INDEX TOP is optional and
+		// defaults to retrieving every matching document, and SPEC R2 defines
+		// FullTextSearch(query, entityType?) with no result limit and no error
+		// table cap — a silently capped result set would be an incomplete
+		// answer with no client-visible indication. If a topK parameter is
+		// added to the SPEC in future, it should be threaded through as TOP.
+		q := fmt.Sprintf("CALL QUERY_FTS_INDEX('%s', '%s', $q) RETURN node, score ORDER BY score DESC;",
 			t, idxName)
 		stmt, err := conn.Prepare(q)
 		if err != nil {
@@ -739,16 +749,27 @@ func (db *ladybugDB) ListEntities(
 var mutationCypherPattern = regexp.MustCompile(`(?i)\b(create|set|delete|merge|remove|drop|foreach)\b`)
 
 // isMutationCypher reports whether a statement that the grammar could not
-// prepare contains a mutation/DDL clause keyword.
-// ponytail: keyword containment is a heuristic fallback for statements the
-// LadybugDB v0.17.0 grammar cannot parse — it cannot distinguish a mutation
-// keyword inside a string literal (e.g. WHERE n.name = 'SET') from a real
-// clause, so a read-only query quoting a mutation keyword fails closed with
-// PERMISSION_DENIED. This is acceptable: the ceiling is a defensive rejection
-// of a read-only query, never an execution of a mutation, and the SPEC mandates
-// PERMISSION_DENIED for the whole SPEC-enumerated mutation set. Upgrade path: a
-// parser accepting the full Neo4j clause grammar (or a lexer that skips string
-// literals) would classify by AST/clause position instead of keyword containment.
+// prepare contains a mutation/DDL clause keyword. String literals and comments
+// are stripped first (stripCommentsAndStrings), so a mutation keyword inside a
+// string literal or comment is never treated as a clause — a genuinely-invalid
+// read-only statement that merely quotes a keyword (e.g.
+// `MATCH (n:Component) RETURN n 'delete'`) falls through to ErrInvalidCypher,
+// matching the SPEC's syntax-before-read-only check order (SPEC:1009) and the
+// grammar-unparseable read-only note (SPEC:487-491).
+// ponytail: keyword containment is still a heuristic fallback for statements
+// the LadybugDB v0.17.0 grammar cannot parse. It cannot distinguish a
+// genuinely-invalid read-only statement whose malformed tail uses a mutation
+// keyword as a bare token outside any string/comment (e.g. `MATCH (n) RETURN n
+// DELETE`) from a real clause, so that narrow case fails closed with
+// PERMISSION_DENIED rather than the SPEC's INVALID_ARGUMENT for malformed
+// syntax. This is acceptable: the ceiling is a defensive rejection of a
+// read-only query, never an execution of a mutation, and the SPEC mandates
+// PERMISSION_DENIED for the whole SPEC-enumerated mutation set, which the
+// fallback keeps in the grammar-incomplete direction (REMOVE, FOREACH,
+// index/constraint DDL all fail at Prepare on v0.17.0 yet must surface
+// PERMISSION_DENIED per error-table row 970). Upgrade path: a parser accepting
+// the full Neo4j clause grammar would classify by AST/clause position instead
+// of keyword containment.
 func isMutationCypher(cypher string) bool {
-	return mutationCypherPattern.MatchString(cypher)
+	return mutationCypherPattern.MatchString(stripCommentsAndStrings(cypher))
 }
