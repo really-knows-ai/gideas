@@ -987,6 +987,36 @@ func TestCommit(t *testing.T) {
 	}
 }
 
+// TestCommit_WithAck pins the SPEC R10 commit(WithAck()) surface on the SDK
+// layer: WithAck() carries ack=true on the CommitTransactionRequest wire
+// (synchronous push delivery — the worker wakes immediately and the call
+// blocks until the sync cycle completes), while a plain Commit() carries
+// ack=false (deferred push on the worker's next timer cycle).
+func TestCommit_WithAck(t *testing.T) {
+	var capturedAck bool
+	mock := &mockCartographerClient{
+		commitTx: func(ctx context.Context, req *flowv1.CommitTransactionRequest) (*flowv1.CommitTransactionResponse, error) {
+			capturedAck = req.GetAck()
+			return &flowv1.CommitTransactionResponse{}, nil
+		},
+	}
+	tx := newMockTx(mock)
+
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("Commit returned error: %v", err)
+	}
+	if capturedAck {
+		t.Error("expected ack=false on plain Commit, got true")
+	}
+
+	if err := tx.Commit(WithAck()); err != nil {
+		t.Fatalf("Commit(WithAck()) returned error: %v", err)
+	}
+	if !capturedAck {
+		t.Error("expected ack=true on Commit(WithAck()), got false")
+	}
+}
+
 func TestRollback(t *testing.T) {
 	var capturedTxID string
 	called := false
