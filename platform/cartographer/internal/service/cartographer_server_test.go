@@ -2608,47 +2608,26 @@ func TestCommitTransaction_MergeDivergedIsInternal(t *testing.T) {
 	}
 }
 
-// pushTrackingGitStore wraps a gitstore to observe the post-commit fire-and-forget
-// remote push (FetchAndMerge → PushRemote) and inject failures into it. WithGitLock
-// runs fn inline so the asynchronous push goroutine can be driven deterministically;
-// pushDone closes only after the push attempt's WithGitLock returns — i.e. after the
-// goroutine's telemetry/log tail — so a test unblocking on pushDone can rely on all
-// push side effects being observable. Only the post-commit push invokes
-// FetchAndMerge/PushRemote, so the counters and pushStarted flag cannot be polluted
-// by the commit flow itself.
+// pushTrackingGitStore wraps a gitstore to observe the background sync worker's
+// fetch→push cycle (FetchAndMerge → PushRemote) and inject failures into it.
+// The cycle runs synchronously inside the worker (SetPushNeeded then
+// runSyncCycle, driven directly in tests), so the fetch/push counters are fully
+// observable once the cycle returns. Only the sync worker invokes
+// FetchAndMerge/PushRemote, so the counters cannot be polluted by the commit
+// flow itself.
 type pushTrackingGitStore struct {
 	gitstore.GitStore
-	mu          sync.Mutex
-	fetchCalls  int
-	pushCalls   int
-	fetchErr    error
-	pushErr     error
-	pushStarted bool
-	pushDone    chan struct{}
-	pushDoneSet bool
-}
-
-func (s *pushTrackingGitStore) WithGitLock(fn func() error) error {
-	err := fn()
-	s.mu.Lock()
-	started := s.pushStarted
-	s.pushStarted = false
-	done, notify := s.pushDone, !s.pushDoneSet
-	if started {
-		s.pushDoneSet = true
-	}
-	s.mu.Unlock()
-	if started && notify && done != nil {
-		close(done)
-	}
-	return err
+	mu         sync.Mutex
+	fetchCalls int
+	pushCalls  int
+	fetchErr   error
+	pushErr    error
 }
 
 func (s *pushTrackingGitStore) FetchAndMerge(ctx context.Context, remote, branch string) (plumbing.Hash, error) {
 	s.mu.Lock()
 	s.fetchCalls++
 	err := s.fetchErr
-	s.pushStarted = true
 	s.mu.Unlock()
 	if err != nil {
 		return plumbing.ZeroHash, err
@@ -2679,7 +2658,7 @@ func TestSyncWorkerFetchAndPushCycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("gitstore.New: %v", err)
 	}
-	pushGit := &pushTrackingGitStore{GitStore: gs, pushDone: make(chan struct{})}
+	pushGit := &pushTrackingGitStore{GitStore: gs}
 	mockPub := &mockTelemetryPublisher{}
 	sw := NewSyncWorker("https://example.com/repo.git", pushGit, base, RealClock{}, SyncWorkerWithAuditPublisher(mockPub))
 	sw.SetPushNeeded()
@@ -2957,7 +2936,6 @@ func TestSyncWorkerPushFailureLeavesFlagSet(t *testing.T) {
 			}
 			pushGit := &pushTrackingGitStore{
 				GitStore: gs, fetchErr: tc.fetchErr, pushErr: tc.pushErr,
-				pushDone: make(chan struct{}),
 			}
 			sw := NewSyncWorker("https://example.com/repo.git", pushGit, base, RealClock{})
 			sw.backoffFn = func(int) time.Duration { return 0 }
@@ -4353,8 +4331,11 @@ func TestCommitTransaction_RetryAfterCommitCreatedDoesNotDuplicateCommit(t *test
 		t.Fatalf("CreateEntity: %v", err)
 	}
 	_, err = srv.CommitTransaction(ctx, &flowv1.CommitTransactionRequest{TransactionId: begin.TransactionId})
-	if err == nil {
-		t.Fatal("expected post-commit rehydration failure")
+	// SPEC error table (SPEC:975): "Commit serialisation or re-hydration failed"
+	// maps to INTERNAL — the re-hydration failure surfaces via mapGitError's
+	// default branch, so the first commit attempt must fail with codes.Internal.
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("expected commit re-hydration failure to map to INTERNAL, got %v (%v)", status.Code(err), err)
 	}
 	state, lookupErr := srv.txManager.Lookup(begin.TransactionId)
 	if lookupErr != nil || !state.CommitCreated || state.MergeCompleted {
@@ -4409,8 +4390,11 @@ func TestCommitTransaction_CommitFailureWithoutCommitAllowsRefreshAndRetry(t *te
 	}
 	if _, err = srv.CommitTransaction(ctx, &flowv1.CommitTransactionRequest{
 		TransactionId: begin.TransactionId,
-	}); err == nil {
-		t.Fatal("expected commit failure")
+	}); status.Code(err) != codes.Internal {
+		// SPEC error table (SPEC:975): "Commit serialisation or re-hydration
+		// failed" maps to INTERNAL — the git Commit failure surfaces via
+		// mapGitError's default branch as codes.Internal.
+		t.Fatalf("expected commit serialisation failure to map to INTERNAL, got %v (%v)", status.Code(err), err)
 	}
 	state, lookupErr := srv.txManager.Lookup(begin.TransactionId)
 	if lookupErr != nil || state.CommitStarted || state.CommitCreated {
