@@ -455,14 +455,39 @@ func (tx *Transaction) Refresh() error {
 	return err
 }
 
+// CommitOption configures a CommitTransaction call.
+type CommitOption func(*commitConfig)
+
+type commitConfig struct {
+	ack bool
+}
+
+// WithAck requests synchronous push delivery (SPEC R10): the commit signals
+// the sync worker to wake immediately and blocks until the sync cycle
+// completes. A caller that hits the context deadline receives DEADLINE_EXCEEDED
+// and the push flag stays set for the next cycle. A plain Commit returns
+// immediately; the worker picks the push up on its next timer cycle.
+func WithAck() CommitOption {
+	return func(c *commitConfig) {
+		c.ack = true
+	}
+}
+
 // Commit commits the transaction back to main.
-func (tx *Transaction) Commit() error {
+func (tx *Transaction) Commit(opts ...CommitOption) error {
 	if err := tx.checkRolled(); err != nil {
 		return err
 	}
+
+	cfg := &commitConfig{}
+	for _, o := range opts {
+		o(cfg)
+	}
+
 	err := tx.session.call(tx.session.ctx, func(ctx context.Context) error {
 		_, callErr := tx.session.Cartographer.CommitTransaction(ctx, &flowv1.CommitTransactionRequest{
 			TransactionId: tx.id,
+			Ack:           cfg.ack,
 		})
 		return callErr
 	}, "")
