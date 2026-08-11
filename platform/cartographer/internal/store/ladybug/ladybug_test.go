@@ -6444,9 +6444,9 @@ func TestRehydrateMainFromFiles_HoldsLockForEntireOperation(t *testing.T) {
 
 func TestFindEntityByID_PropagatesPrepareError(t *testing.T) {
 	// Call findEntityByID with a typeDefs map containing only a phantom type
-	// that has no corresponding table in the database. LadybugDB will return
-	// an error from Prepare. The current code silently continues past this
-	// error and returns ErrEntityNotFound. The fix must propagate the error.
+	// that has no corresponding table in the database. LadybugDB returns an
+	// error from Prepare, and findEntityByID propagates it as an operational
+	// error rather than swallowing it into ErrEntityNotFound.
 	s, err := OpenInMemory()
 	if err != nil {
 		t.Fatal(err)
@@ -6455,8 +6455,8 @@ func TestFindEntityByID_PropagatesPrepareError(t *testing.T) {
 	applyTestSchema(t, s)
 
 	db := s.(*ladybugDB)
-	// Only a phantom type — no real types. Prepare will fail on the only
-	// type, and the current code would silently return ErrEntityNotFound.
+	// Only a phantom type — no real types. Prepare fails on the only type,
+	// and findEntityByID propagates that failure as an operational error.
 	phantomDefs := map[string]*store.EntityTypeDef{
 		"NonExistentTable": {Name: "NonExistentTable"},
 	}
