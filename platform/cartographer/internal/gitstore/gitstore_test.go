@@ -1897,7 +1897,7 @@ func TestCreateBranchRefOnlyExisting(t *testing.T) {
 }
 
 // TestCreateBranchFromMainWhenHeadNotOnMain pins SPEC Hydration step 1
-// (SPEC:754): CreateBranch must branch from main, not from the current HEAD.
+// (SPEC:803): CreateBranch must branch from main, not from the current HEAD.
 // After an abandoned failed Commit leaves the working tree checked out on a
 // transaction branch, a new transaction must not inherit that branch's commits
 // — branching from HEAD would leak the abandoned transaction's changes into
@@ -3027,7 +3027,8 @@ func TestSetRemoteInvalidScheme(t *testing.T) {
 
 // TestSetRemoteNoHost verifies that a scheme-valid URL lacking a host
 // component (e.g. "https://") is rejected with ErrRemoteURLNoHost rather than
-// accepted (SPEC R9: validate the URL before configuring the remote).
+// accepted (SPEC R10 / error-table row "Unsupported remote URL scheme",
+// SPEC:987: validate the URL before configuring the remote).
 func TestSetRemoteNoHost(t *testing.T) {
 	gs := setupTestStore(t)
 	err := gs.WithGitLock(func() error {
@@ -3987,6 +3988,86 @@ func TestFullWriteAddCommitReadBack(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("FullWriteAddCommitReadBack: %v", err)
+	}
+}
+
+// TestReadBackTimestampsSurviveRoundTrip pins the storage-layer
+// silent-divergence rule for the gitstore read paths: ReadAllEntityFiles and
+// ReadAllEdgeFiles must decode the exact persisted created_at/updated_at,
+// never fabricate values in place of persisted state. A regression to the
+// time.Now() fabrication that previously struck the store load paths would go
+// uncaught at this layer, since the sibling read-back tests assert only
+// IDs/properties/embeddings.
+func TestReadBackTimestampsSurviveRoundTrip(t *testing.T) {
+	gs := setupTestStore(t)
+	err := gs.WithGitLock(func() error {
+		createdAt := time.Now().UTC().Round(time.Millisecond)
+		updatedAt := createdAt.Add(30 * time.Minute)
+
+		// Write an entity and an edge with distinct CreatedAt/UpdatedAt.
+		e1ID := validUUID(t)
+		if err := gs.WriteEntityFiles(ctx(), "Component", []Entity{
+			{
+				ID:        e1ID,
+				Type:      "Component",
+				CreatedAt: createdAt,
+				UpdatedAt: updatedAt,
+			},
+		}); err != nil {
+			return err
+		}
+		edgeID := validUUID(t)
+		fromID := validUUID(t)
+		toID := validUUID(t)
+		if err := gs.WriteEdgeFiles(ctx(), "DEPENDS_ON", []Edge{
+			{
+				ID:           edgeID,
+				Type:         "DEPENDS_ON",
+				FromEntityID: fromID,
+				ToEntityID:   toID,
+				CreatedAt:    createdAt,
+				UpdatedAt:    updatedAt,
+			},
+		}); err != nil {
+			return err
+		}
+
+		// Read back and assert the exact times survive.
+		entities, err := gs.ReadAllEntityFiles(ctx(), "Component")
+		if err != nil {
+			return err
+		}
+		if len(entities) != 1 {
+			return fmt.Errorf("expected 1 entity, got %d", len(entities))
+		}
+		if !entities[0].CreatedAt.Equal(createdAt) {
+			return fmt.Errorf("entity CreatedAt = %v, want %v", entities[0].CreatedAt, createdAt)
+		}
+		if !entities[0].UpdatedAt.Equal(updatedAt) {
+			return fmt.Errorf("entity UpdatedAt = %v, want %v", entities[0].UpdatedAt, updatedAt)
+		}
+		if entities[0].CreatedAt.Equal(entities[0].UpdatedAt) {
+			return fmt.Errorf("entity CreatedAt and UpdatedAt must be distinct")
+		}
+
+		edges, err := gs.ReadAllEdgeFiles(ctx(), "DEPENDS_ON")
+		if err != nil {
+			return err
+		}
+		if len(edges) != 1 {
+			return fmt.Errorf("expected 1 edge, got %d", len(edges))
+		}
+		if !edges[0].CreatedAt.Equal(createdAt) {
+			return fmt.Errorf("edge CreatedAt = %v, want %v", edges[0].CreatedAt, createdAt)
+		}
+		if !edges[0].UpdatedAt.Equal(updatedAt) {
+			return fmt.Errorf("edge UpdatedAt = %v, want %v", edges[0].UpdatedAt, updatedAt)
+		}
+
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("TestReadBackTimestampsSurviveRoundTrip: %v", err)
 	}
 }
 
@@ -5117,7 +5198,7 @@ func TestFetchAndMerge_FastForward(t *testing.T) {
 // is an ancestor of the other) and leaves the local main ref unchanged. This
 // is the delivered divergence behavior of the sync pull path: service mapGitError
 // maps ErrPullDiverged to FAILED_PRECONDITION, matching SPEC R10 / error-table
-// row "Remote pull diverged" (line 926).
+// row "Sync diverged" (SPEC:980).
 func TestFetchAndMerge_Diverged(t *testing.T) {
 	tmpDir := t.TempDir()
 	bareDir := filepath.Join(tmpDir, "remote.git")
@@ -5316,7 +5397,7 @@ func TestFetchAndMerge_DivergencePersistsAcrossCycles(t *testing.T) {
 
 // TestFetchAndMerge_LocalAhead pins the local-ahead (remote strictly behind)
 // classification of FetchAndMerge: local main has advanced past the remote
-// (e.g. a fire-and-forget push that failed transiently — SPEC:788), so there
+// (e.g. a fire-and-forget push that failed transiently — GIT_PLAN.md:12), so there
 // is nothing to pull and the call must succeed as up-to-date, never fail with
 // ErrPullDiverged. The remote-behind state is reached with distinct
 // local/remote tips by dropping the remote-tracking ref first (simulating a

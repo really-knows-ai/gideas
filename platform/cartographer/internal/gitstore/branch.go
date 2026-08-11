@@ -47,7 +47,7 @@ func (g *gitStore) CreateBranch(ctx context.Context, txID string) error {
 	}
 
 	// CreateBranch only creates the config entry; the ref must point at main
-	// explicitly. SPEC Hydration step 1 (SPEC:754) mandates that the
+	// explicitly. SPEC Hydration step 1 (SPEC:803) mandates that the
 	// transaction branch is created from main. Branching from HEAD would let an
 	// abandoned failed Commit (whose working tree is still checked out on the
 	// transaction branch) leak its committed changes into the next transaction
@@ -70,11 +70,12 @@ func (g *gitStore) CreateBranch(ctx context.Context, txID string) error {
 // Checkout checks out the named branch. If the branch does not exist, it
 // creates it from HEAD and checks it out. Uses Force: true to handle dirty
 // working trees.
-// ponytail: The create-on-missing fallback (line 54) is test-only infrastructure.
-// The SPEC flow (R9 hydration) uses HardResetToBranch which creates the branch
-// via SetBranchRef before checkout, so this path is never reached in production.
-// RestoreMain always checks out "main" which exists. Only tests exercise the
-// create-on-missing path.
+// ponytail: The create-on-missing fallback (lines 81-82) is test-only infrastructure.
+// The SPEC flow (R9 hydration step 1) creates the branch up front: CreateBranch
+// writes refs/heads/<txID> via backend.SetReference before the working tree is
+// ever checked out, so this path is never reached in production. RestoreMain
+// always checks out "main" which exists. Only tests exercise the create-on-missing
+// path.
 func (g *gitStore) Checkout(ctx context.Context, branch string) error {
 	ref := plumbing.ReferenceName("refs/heads/" + branch)
 	err := g.wt.Checkout(&git.CheckoutOptions{Branch: ref, Force: true})
