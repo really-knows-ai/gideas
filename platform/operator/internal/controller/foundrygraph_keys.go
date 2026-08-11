@@ -155,18 +155,19 @@ func InitializeSidecarSigningKey(ctx context.Context, c client.Client, operatorN
 // byte, so a raw 32-byte key would be silently truncated and fail closed on every
 // verification (CrashLoopBackOff at startup). The Cartographer's parseVerificationKey
 // base64-decodes the env var (cartographer/cmd/main.go).
-// ponytail: only the per-namespace public `key` fields are base64-encoded here. The
-// per-namespace sidecar `private-key` field is copied through raw — nothing consumes
-// it today (the Cartographer reads only `key`; the proxy signs from the operator-
-// namespace signing Secret returned in-memory by InitializeOperatorSigningKey, not
-// from this per-namespace copy), so a future consumer that reads `private-key` from
-// an env var hits the same NUL-truncation seam this encoding fixes for `key`.
-// Pre-existing per-namespace Secrets created before this encoding hold raw 32-byte
-// keys until the next reconcile re-encodes them (CreateOrUpdate converges the data
+// The per-namespace sidecar `private-key` is base64-encoded for the same reason: the
+// Node operator injects it into every Sidecar container via a secretKeyRef env var
+// (SIDECAR_SIGNING_KEY) at node pod creation time (SPEC R5/R6), and a raw 64-byte
+// private key hits the same NUL-truncation seam as the public key. The Sidecar
+// base64-decodes it with a length check and fails fast on bad encoding
+// (platform/sidecar/cmd/main.go).
+// ponytail: pre-existing per-namespace Secrets created before this encoding hold raw
+// bytes until the next reconcile re-encodes them (CreateOrUpdate converges the data
 // field), but a pod already running keeps the old env value until it restarts, so a
-// roll-out mid-migration can briefly carry stale raw bytes. Upgrade path: base64-
-// encode `private-key` too once a consumer reads it via env, or have consumers read
-// the Secrets as mounted files (byte-exact) instead of env vars.
+// roll-out mid-migration can briefly carry stale raw bytes. The Cartographer reads
+// only the `key` data key; the Sidecar reads only `private-key` — the two consumers
+// are independent, so encoding one cannot affect the other. Upgrade path: consumers
+// could read the Secrets as mounted files (byte-exact) instead of env vars.
 func (r *FoundryGraphReconciler) reconcileSecrets(ctx context.Context, fg *flowv1.FoundryGraph) error {
 	log := logf.FromContext(ctx)
 
@@ -197,8 +198,13 @@ func (r *FoundryGraphReconciler) reconcileSecrets(ctx context.Context, fg *flowv
 			// random Ed25519 public keys contain a NUL byte — a raw 32-byte
 			// key would be silently truncated and every verification request
 			// would fail closed (CrashLoopBackOff at startup).
-			"key":         []byte(base64.StdEncoding.EncodeToString(operatorSidecar.Data["key"])),
-			"private-key": operatorSidecar.Data["private-key"],
+			"key": []byte(base64.StdEncoding.EncodeToString(operatorSidecar.Data["key"])),
+			// The per-namespace sidecar `private-key` is base64-encoded too:
+			// the Node operator injects it into every Sidecar container via a
+			// secretKeyRef env var (SIDECAR_SIGNING_KEY), and a raw 64-byte
+			// private key hits the same NUL-truncation seam as the public key.
+			// The Sidecar base64-decodes it with a length check (main.go).
+			"private-key": []byte(base64.StdEncoding.EncodeToString(operatorSidecar.Data["private-key"])),
 		}
 		return nil
 	}); err != nil {

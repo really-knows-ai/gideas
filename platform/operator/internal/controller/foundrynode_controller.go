@@ -74,12 +74,21 @@ const (
 
 	// conditionReady is the standard Ready condition type.
 	conditionReady = "Ready"
+
+	// cartographerGRPCPort is the default Cartographer gRPC port used when the
+	// reconciler is constructed without an explicit CartographerPort (SPEC R5:
+	// CARTOGRAPHER_PORT defaults to 50051).
+	cartographerGRPCPort = 50051
 )
 
 // capabilityPattern validates VERB:RESOURCE[/QUALIFIER] capability strings.
+// The `graph` family carries the SPEC R3 graph capabilities
+// (READ/WRITE:graph/entity/<type>, READ/WRITE:graph/entity/*,
+// READ/WRITE:graph/tx) that nodes declare and the Sidecar attests when a
+// FoundryGraph is provisioned in the namespace.
 var capabilityPattern = regexp.MustCompile(
 	`^(READ|WRITE|STAMP|ATTEST|USE|CREATE):` +
-		`(artefact|law|friction|flow|workitem|feedback|support|queue)` +
+		`(artefact|law|friction|flow|workitem|feedback|support|queue|graph)` +
 		`(/[a-zA-Z0-9_*-]+(/[a-zA-Z0-9_*-]+)?)?$`,
 )
 
@@ -94,6 +103,11 @@ var capabilityPattern = regexp.MustCompile(
 type FoundryNodeReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
+
+	// CartographerPort is the gRPC port of the Cartographer service, used to
+	// build the CARTOGRAPHER_ADDRESS injected into Sidecar containers (SPEC
+	// R5). Zero falls back to cartographerGRPCPort.
+	CartographerPort int32
 }
 
 // +kubebuilder:rbac:groups=flow.foundry.io,resources=foundrynodes,verbs=get;list;watch;create;update;patch;delete
@@ -154,15 +168,19 @@ func (r *FoundryNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	// Determine deployment strategy.
 	useStatefulSet := r.requiresStatefulSet(&node)
 
+	// Discover the namespace's FoundryGraph (a namespace singleton, SPEC R1) so
+	// the Sidecar container can be wired to the Cartographer it drives.
+	graphName := r.findGraphName(ctx, &node)
+
 	// Reconcile the workload (Deployment or StatefulSet).
 	if useStatefulSet {
-		if err := r.reconcileStatefulSet(ctx, &node, fedEnabled); err != nil {
+		if err := r.reconcileStatefulSet(ctx, &node, fedEnabled, graphName); err != nil {
 			return SetStatusCondition(ctx, r.Client, &node, conditionReady, metav1.ConditionFalse, reasonReconcileFailed, err.Error(),
 				func(n *flowv1.FoundryNode) *[]metav1.Condition { return &n.Status.Conditions },
 			)
 		}
 	} else {
-		if err := r.reconcileDeployment(ctx, &node, fedEnabled); err != nil {
+		if err := r.reconcileDeployment(ctx, &node, fedEnabled, graphName); err != nil {
 			return SetStatusCondition(ctx, r.Client, &node, conditionReady, metav1.ConditionFalse, reasonReconcileFailed, err.Error(),
 				func(n *flowv1.FoundryNode) *[]metav1.Condition { return &n.Status.Conditions },
 			)
@@ -330,8 +348,25 @@ func (r *FoundryNodeReconciler) hasQueueServerCapability(node *flowv1.FoundryNod
 	return slices.Contains(node.Spec.Capabilities, "USE:queue/server")
 }
 
+// findGraphName returns the name of the FoundryGraph in the node's namespace,
+// or "" when none exists. The FoundryGraph is a namespace singleton (SPEC R1),
+// conventionally named flow-graph; the Cartographer it drives is exposed at
+// cartographer-<fg-name>.<namespace>.svc.cluster.local (SPEC R5). When no
+// FoundryGraph exists, the Sidecar gets no CARTOGRAPHER_ADDRESS and its
+// CartographerProxy is not created.
+func (r *FoundryNodeReconciler) findGraphName(ctx context.Context, node *flowv1.FoundryNode) string {
+	var graphs flowv1.FoundryGraphList
+	if err := r.List(ctx, &graphs, client.InNamespace(node.Namespace)); err != nil {
+		return ""
+	}
+	if len(graphs.Items) == 0 {
+		return ""
+	}
+	return graphs.Items[0].Name
+}
+
 // buildPodTemplate constructs the pod template spec with node + sidecar containers.
-func (r *FoundryNodeReconciler) buildPodTemplate(node *flowv1.FoundryNode, hasFederation bool) corev1.PodTemplateSpec {
+func (r *FoundryNodeReconciler) buildPodTemplate(node *flowv1.FoundryNode, hasFederation bool, graphName string) corev1.PodTemplateSpec {
 	labels := r.labelsForNode(node)
 
 	// Node container.
@@ -386,6 +421,36 @@ func (r *FoundryNodeReconciler) buildPodTemplate(node *flowv1.FoundryNode, hasFe
 		sidecarContainer.Env = append(sidecarContainer.Env, fedAddr)
 	}
 
+	// Inject the Cartographer address and the Sidecar capability-signing key
+	// when a FoundryGraph exists in the namespace (SPEC R5): nodes reach the
+	// Cartographer only through the Sidecar's CartographerProxy, and the proxy
+	// must sign the node's capability attestation with the shared sidecar
+	// private key (SPEC R3 / Capability Authorisation Chain). The signing key
+	// is the per-namespace cartographer-sidecar-key Secret's private-key data
+	// key, base64-encoded by the FoundryGraph reconciler for byte-exact env
+	// transport (NUL bytes cannot cross execve).
+	if graphName != "" {
+		port := r.CartographerPort
+		if port == 0 {
+			port = cartographerGRPCPort
+		}
+		sidecarContainer.Env = append(sidecarContainer.Env,
+			corev1.EnvVar{
+				Name:  "CARTOGRAPHER_ADDRESS",
+				Value: fmt.Sprintf("cartographer-%s.%s.svc.cluster.local:%d", graphName, node.Namespace, port),
+			},
+			corev1.EnvVar{
+				Name: "SIDECAR_SIGNING_KEY",
+				ValueFrom: &corev1.EnvVarSource{
+					SecretKeyRef: &corev1.SecretKeySelector{
+						LocalObjectReference: corev1.LocalObjectReference{Name: sidecarKeySecretName},
+						Key:                  "private-key",
+					},
+				},
+			},
+		)
+	}
+
 	// Inject volume mounts if storage is configured.
 	if node.Spec.Storage != nil {
 		for _, vol := range node.Spec.Storage.Volumes {
@@ -430,7 +495,7 @@ func (r *FoundryNodeReconciler) buildPodTemplate(node *flowv1.FoundryNode, hasFe
 }
 
 // reconcileDeployment creates or updates a Deployment for the FoundryNode.
-func (r *FoundryNodeReconciler) reconcileDeployment(ctx context.Context, node *flowv1.FoundryNode, hasFederation bool) error {
+func (r *FoundryNodeReconciler) reconcileDeployment(ctx context.Context, node *flowv1.FoundryNode, hasFederation bool, graphName string) error {
 	replicas := int32(1)
 	deploy := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
@@ -452,7 +517,7 @@ func (r *FoundryNodeReconciler) reconcileDeployment(ctx context.Context, node *f
 		deploy.Spec.Selector = &metav1.LabelSelector{
 			MatchLabels: r.labelsForNode(node),
 		}
-		deploy.Spec.Template = r.buildPodTemplate(node, hasFederation)
+		deploy.Spec.Template = r.buildPodTemplate(node, hasFederation, graphName)
 		if prevHash != "" {
 			if deploy.Spec.Template.Labels == nil {
 				deploy.Spec.Template.Labels = make(map[string]string)
@@ -473,7 +538,7 @@ func (r *FoundryNodeReconciler) reconcileDeployment(ctx context.Context, node *f
 }
 
 // reconcileStatefulSet creates or updates a StatefulSet for the FoundryNode.
-func (r *FoundryNodeReconciler) reconcileStatefulSet(ctx context.Context, node *flowv1.FoundryNode, hasFederation bool) error {
+func (r *FoundryNodeReconciler) reconcileStatefulSet(ctx context.Context, node *flowv1.FoundryNode, hasFederation bool, graphName string) error {
 	replicas := int32(1)
 	sts := &appsv1.StatefulSet{
 		ObjectMeta: metav1.ObjectMeta{
@@ -489,7 +554,7 @@ func (r *FoundryNodeReconciler) reconcileStatefulSet(ctx context.Context, node *
 		sts.Spec.Selector = &metav1.LabelSelector{
 			MatchLabels: r.labelsForNode(node),
 		}
-		sts.Spec.Template = r.buildPodTemplate(node, hasFederation)
+		sts.Spec.Template = r.buildPodTemplate(node, hasFederation, graphName)
 
 		// Build VolumeClaimTemplates from storage config.
 		if node.Spec.Storage != nil {

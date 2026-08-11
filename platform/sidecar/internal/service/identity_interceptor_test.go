@@ -2,6 +2,9 @@ package service
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/base64"
 	"testing"
 
 	"google.golang.org/grpc"
@@ -20,7 +23,7 @@ func TestIdentityInterceptor_InjectsSessionIdentity(t *testing.T) {
 	srv.sessions["wi-42"] = sess
 	srv.mu.Unlock()
 
-	interceptor := IdentityInterceptor(srv, "ns-A", "node-X", "READ:artefact,WRITE:artefact")
+	interceptor := IdentityInterceptor(srv, "ns-A", "node-X", "READ:artefact,WRITE:artefact", nil)
 
 	// Build incoming context with SDK-supplied workitem ID.
 	md := metadata.Pairs(MetadataKeyWorkitemID, "wi-42")
@@ -61,7 +64,7 @@ func TestIdentityInterceptor_OverwritesNodeSuppliedValues(t *testing.T) {
 	srv.sessions["wi-1"] = sess
 	srv.mu.Unlock()
 
-	interceptor := IdentityInterceptor(srv, "real-ns", "real-node", "READ:law")
+	interceptor := IdentityInterceptor(srv, "real-ns", "real-node", "READ:law", nil)
 
 	// Node attempts to spoof namespace, node_id, and capabilities.
 	md := metadata.Pairs(
@@ -101,7 +104,7 @@ func TestIdentityInterceptor_OverwritesNodeSuppliedValues(t *testing.T) {
 
 func TestIdentityInterceptor_EntryBoundFallback(t *testing.T) {
 	srv := NewSidecarServer("entry-ns", "entry-node", "")
-	interceptor := IdentityInterceptor(srv, "entry-ns", "entry-node", "READ:artefact")
+	interceptor := IdentityInterceptor(srv, "entry-ns", "entry-node", "READ:artefact", nil)
 
 	// No workitem ID in metadata — entry-bound call.
 	md := metadata.Pairs("x-other-key", "value")
@@ -140,7 +143,7 @@ func TestIdentityInterceptor_EntryBoundFallback(t *testing.T) {
 
 func TestIdentityInterceptor_EntryBoundFallback_UnknownWorkitem(t *testing.T) {
 	srv := NewSidecarServer("entry-ns", "entry-node", "")
-	interceptor := IdentityInterceptor(srv, "entry-ns", "entry-node", "")
+	interceptor := IdentityInterceptor(srv, "entry-ns", "entry-node", "", nil)
 
 	// Workitem ID present but no matching session — falls through to entry-bound.
 	md := metadata.Pairs(MetadataKeyWorkitemID, "unknown-wi")
@@ -174,7 +177,7 @@ func TestIdentityInterceptor_EntryBoundFallback_UnknownWorkitem(t *testing.T) {
 
 func TestIdentityInterceptor_NoMetadata_NoNamespace_PassesThrough(t *testing.T) {
 	srv := NewSidecarServer("", "", "")
-	interceptor := IdentityInterceptor(srv, "", "", "")
+	interceptor := IdentityInterceptor(srv, "", "", "", nil)
 
 	ctx := context.Background()
 	called := false
@@ -201,7 +204,7 @@ func TestIdentityInterceptor_PreservesOtherMetadata(t *testing.T) {
 	srv.sessions["wi-1"] = sess
 	srv.mu.Unlock()
 
-	interceptor := IdentityInterceptor(srv, "ns-f", "n", "READ:artefact")
+	interceptor := IdentityInterceptor(srv, "ns-f", "n", "READ:artefact", nil)
 
 	md := metadata.Pairs(
 		MetadataKeyWorkitemID, "wi-1",
@@ -263,6 +266,145 @@ func TestSidecarServer_LookupSession_NotFound(t *testing.T) {
 	identity := srv.LookupSession("nonexistent")
 	if identity != nil {
 		t.Fatalf("expected nil identity for nonexistent session, got %+v", identity)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Capability signing tests (SPEC R3 / Capability Authorisation Chain)
+// ---------------------------------------------------------------------------
+
+func TestIdentityInterceptor_SignsCapabilities(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	srv := NewSidecarServer("ns", "node", "")
+	interceptor := IdentityInterceptor(srv, "ns", "node", "READ:graph/entity/*", priv)
+
+	// Entry-bound fallback path (no workitem session).
+	var capturedCtx context.Context
+	handler := func(ctx context.Context, req any) (any, error) {
+		capturedCtx = ctx
+		return "ok", nil
+	}
+
+	info := &grpc.UnaryServerInfo{FullMethod: "/flow.v1.CartographerService/ExecuteCypher"}
+	_, err = interceptor(context.Background(), nil, info, handler)
+	if err != nil {
+		t.Fatalf("interceptor error: %v", err)
+	}
+
+	enrichedMD, ok := metadata.FromIncomingContext(capturedCtx)
+	if !ok {
+		t.Fatal("expected incoming metadata")
+	}
+
+	caps := "READ:graph/entity/*"
+	assertMDValue(t, enrichedMD, MetadataKeyCapabilities, caps)
+	assertMDValue(t, enrichedMD, MetadataKeyCapabilitiesSignedBy, "sidecar")
+	assertSignedCapabilities(t, pub, enrichedMD, caps)
+}
+
+func TestIdentityInterceptor_NilKey_NoSignature(t *testing.T) {
+	srv := NewSidecarServer("ns", "node", "")
+	interceptor := IdentityInterceptor(srv, "ns", "node", "READ:artefact", nil)
+
+	var capturedCtx context.Context
+	handler := func(ctx context.Context, req any) (any, error) {
+		capturedCtx = ctx
+		return nil, nil
+	}
+
+	info := &grpc.UnaryServerInfo{FullMethod: "/test"}
+	_, err := interceptor(context.Background(), nil, info, handler)
+	if err != nil {
+		t.Fatalf("interceptor error: %v", err)
+	}
+
+	enrichedMD, _ := metadata.FromIncomingContext(capturedCtx)
+	assertMDValue(t, enrichedMD, MetadataKeyCapabilities, "READ:artefact")
+	if vals := enrichedMD.Get(MetadataKeyCapabilitiesSignature); len(vals) != 0 {
+		t.Fatalf("no signature expected without a signing key, got %v", vals)
+	}
+	if vals := enrichedMD.Get(MetadataKeyCapabilitiesSignedAt); len(vals) != 0 {
+		t.Fatalf("no signed-at expected without a signing key, got %v", vals)
+	}
+}
+
+func TestIdentityInterceptor_WrongLengthKey_FailsClosed(t *testing.T) {
+	srv := NewSidecarServer("ns", "node", "")
+	interceptor := IdentityInterceptor(srv, "ns", "node", "READ:artefact", []byte("too-short"))
+
+	called := false
+	handler := func(ctx context.Context, req any) (any, error) {
+		called = true
+		return nil, nil
+	}
+
+	info := &grpc.UnaryServerInfo{FullMethod: "/test"}
+	_, err := interceptor(context.Background(), nil, info, handler)
+	if err == nil {
+		t.Fatal("expected error for a malformed signing key")
+	}
+	if called {
+		t.Fatal("handler must not be called when the signing key is malformed")
+	}
+}
+
+func TestIdentityStreamInterceptor_SignsCapabilities(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	srv := NewSidecarServer("ns", "node", "")
+	interceptor := IdentityStreamInterceptor(srv, "ns", "node", "READ:graph/entity/*", priv)
+
+	var capturedStream grpc.ServerStream
+	handler := func(srv any, ss grpc.ServerStream) error {
+		capturedStream = ss
+		return nil
+	}
+
+	info := &grpc.StreamServerInfo{FullMethod: "/flow.v1.CartographerService/ExportGraph"}
+	err = interceptor(nil, &identityTestStream{ctx: context.Background()}, info, handler)
+	if err != nil {
+		t.Fatalf("stream interceptor error: %v", err)
+	}
+
+	enrichedMD, ok := metadata.FromIncomingContext(capturedStream.Context())
+	if !ok {
+		t.Fatal("expected incoming metadata on the wrapped stream")
+	}
+
+	caps := "READ:graph/entity/*"
+	assertMDValue(t, enrichedMD, MetadataKeyCapabilities, caps)
+	assertMDValue(t, enrichedMD, MetadataKeyCapabilitiesSignedBy, "sidecar")
+	assertSignedCapabilities(t, pub, enrichedMD, caps)
+}
+
+// identityTestStream is a minimal grpc.ServerStream for interceptor tests.
+type identityTestStream struct {
+	grpc.ServerStream
+	ctx context.Context
+}
+
+func (s *identityTestStream) Context() context.Context { return s.ctx }
+
+// assertSignedCapabilities verifies the x-flow-capabilities-signature over
+// "{caps}|{signed-at}" against the given public key.
+func assertSignedCapabilities(t *testing.T, pub ed25519.PublicKey, md metadata.MD, caps string) {
+	t.Helper()
+	sigB64 := md.Get(MetadataKeyCapabilitiesSignature)
+	signedAt := md.Get(MetadataKeyCapabilitiesSignedAt)
+	if len(sigB64) != 1 || len(signedAt) != 1 {
+		t.Fatalf("expected signature and signed-at metadata, got sig=%v at=%v", sigB64, signedAt)
+	}
+	sig, err := base64.StdEncoding.DecodeString(sigB64[0])
+	if err != nil {
+		t.Fatalf("decode signature: %v", err)
+	}
+	if !ed25519.Verify(pub, []byte(caps+"|"+signedAt[0]), sig) {
+		t.Fatal("signature does not verify against the sidecar public key")
 	}
 }
 

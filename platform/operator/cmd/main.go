@@ -307,9 +307,20 @@ func main() {
 		setupLog.Error(err, "Failed to create controller", "controller", "FoundryFlow")
 		os.Exit(1)
 	}
+	// Parse Cartographer port from --cartographer-port flag (default 50051).
+	// Parsed early because both the FoundryNode reconciler (CARTOGRAPHER_ADDRESS
+	// injection, SPEC R5) and the FoundryGraph reconciler consume it.
+	cartographerPort64, err := strconv.ParseInt(cartographerPortStr, 10, 32)
+	if err != nil {
+		setupLog.Error(err, "invalid --cartographer-port", "value", cartographerPortStr)
+		os.Exit(1)
+	}
+	cartographerPort := int32(cartographerPort64)
+
 	if err := (&controller.FoundryNodeReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:           mgr.GetClient(),
+		Scheme:           mgr.GetScheme(),
+		CartographerPort: cartographerPort,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "FoundryNode")
 		os.Exit(1)
@@ -464,14 +475,6 @@ func main() {
 		setupLog.Error(err, "invalid port in --proxy-bind-address", "address", proxyAddr, "port", proxyPortStr)
 		os.Exit(1)
 	}
-
-	// Parse Cartographer port from --cartographer-port flag (default 50051).
-	cartographerPort64, err := strconv.ParseInt(cartographerPortStr, 10, 32)
-	if err != nil {
-		setupLog.Error(err, "invalid --cartographer-port", "value", cartographerPortStr)
-		os.Exit(1)
-	}
-	cartographerPort := int32(cartographerPort64)
 
 	// Create the shared proxy routing table.
 	proxyRoutingTable := controller.NewProxyRoutingTable()

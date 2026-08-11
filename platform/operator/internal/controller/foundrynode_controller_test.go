@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"testing"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -33,6 +34,25 @@ import (
 
 	flowv1 "github.com/foundry/flow/operator/api/v1"
 )
+
+// TestCapabilityPatternGraphFamily pins the SPEC R3 capability grammar: nodes
+// must be able to declare the graph capability families the Sidecar attests
+// (READ/WRITE:graph/entity/<type>, READ/WRITE:graph/entity/*, READ/WRITE:graph/tx).
+func TestCapabilityPatternGraphFamily(t *testing.T) {
+	valid := []string{
+		"READ:graph/entity/Component",
+		"READ:graph/entity/*",
+		"WRITE:graph/entity/Component",
+		"WRITE:graph/entity/*",
+		"READ:graph/tx",
+		"WRITE:graph/tx",
+	}
+	for _, cap := range valid {
+		if !capabilityPattern.MatchString(cap) {
+			t.Errorf("expected %q to match the capability grammar", cap)
+		}
+	}
+}
 
 var _ = Describe("FoundryNode Controller", func() {
 	Context("When reconciling a valid resource", func() {
@@ -298,6 +318,121 @@ var _ = Describe("FoundryNode Controller", func() {
 			By("Verifying sidecar container has FEDERATION_ADDRESS")
 			sidecarEnvMap := envVarMap(deploy.Spec.Template.Spec.Containers[1].Env)
 			Expect(sidecarEnvMap).To(HaveKeyWithValue("FEDERATION_ADDRESS", "flow-federation:50061"))
+		})
+	})
+
+	Context("When a FoundryGraph exists in the namespace", func() {
+		const resourceName = "test-node-graph"
+		const testNamespace = "node-graph-test"
+
+		ctx := context.Background()
+
+		nodeNamespacedName := types.NamespacedName{
+			Name:      resourceName,
+			Namespace: testNamespace,
+		}
+
+		BeforeEach(func() {
+			By("creating the test namespace")
+			ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: testNamespace}}
+			var existingNS corev1.Namespace
+			if err := k8sClient.Get(ctx, types.NamespacedName{Name: testNamespace}, &existingNS); errors.IsNotFound(err) {
+				Expect(k8sClient.Create(ctx, ns)).To(Succeed())
+			}
+
+			By("creating a FoundryGraph in the namespace (the namespace singleton)")
+			var existingGraph flowv1.FoundryGraph
+			if err := k8sClient.Get(ctx, types.NamespacedName{Name: "flow-graph", Namespace: testNamespace}, &existingGraph); errors.IsNotFound(err) {
+				graphResource := &flowv1.FoundryGraph{
+					ObjectMeta: metav1.ObjectMeta{Name: "flow-graph", Namespace: testNamespace},
+					Spec:       flowv1.FoundryGraphSpec{},
+				}
+				Expect(k8sClient.Create(ctx, graphResource)).To(Succeed())
+			}
+
+			By("creating a FoundryNode declaring SPEC R3 graph capabilities")
+			var existingNode flowv1.FoundryNode
+			if err := k8sClient.Get(ctx, nodeNamespacedName, &existingNode); errors.IsNotFound(err) {
+				nodeResource := &flowv1.FoundryNode{
+					ObjectMeta: metav1.ObjectMeta{Name: resourceName, Namespace: testNamespace},
+					Spec: flowv1.FoundryNodeSpec{
+						Image: "test-image:latest",
+						Capabilities: []string{
+							"READ:graph/entity/*",
+							"WRITE:graph/entity/*",
+							"WRITE:graph/tx",
+						},
+					},
+				}
+				Expect(k8sClient.Create(ctx, nodeResource)).To(Succeed())
+			}
+		})
+
+		AfterEach(func() {
+			By("Cleanup the FoundryNode")
+			nodeResource := &flowv1.FoundryNode{}
+			if err := k8sClient.Get(ctx, nodeNamespacedName, nodeResource); err == nil {
+				_ = k8sClient.Delete(ctx, nodeResource)
+			}
+
+			By("Cleanup the Deployment")
+			deploy := &appsv1.Deployment{}
+			if err := k8sClient.Get(ctx, nodeNamespacedName, deploy); err == nil {
+				_ = k8sClient.Delete(ctx, deploy)
+			}
+
+			By("Cleanup the FoundryGraph")
+			graphResource := &flowv1.FoundryGraph{}
+			if err := k8sClient.Get(ctx, types.NamespacedName{Name: "flow-graph", Namespace: testNamespace}, graphResource); err == nil {
+				_ = k8sClient.Delete(ctx, graphResource)
+			}
+
+			By("Cleanup the namespace")
+			ns := &corev1.Namespace{}
+			if err := k8sClient.Get(ctx, types.NamespacedName{Name: testNamespace}, ns); err == nil {
+				_ = k8sClient.Delete(ctx, ns)
+			}
+		})
+
+		It("should inject CARTOGRAPHER_ADDRESS and the SIDECAR_SIGNING_KEY secret ref into the sidecar container", func() {
+			By("Reconciling the FoundryNode")
+			controllerReconciler := &FoundryNodeReconciler{
+				Client:           k8sClient,
+				Scheme:           k8sClient.Scheme(),
+				CartographerPort: 50051,
+			}
+
+			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: nodeNamespacedName,
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			By("Verifying the Deployment was created with the graph capabilities accepted")
+			var deploy appsv1.Deployment
+			Expect(k8sClient.Get(ctx, nodeNamespacedName, &deploy)).To(Succeed())
+
+			By("Verifying CARTOGRAPHER_ADDRESS is projected from the FoundryGraph name (SPEC R5)")
+			sidecarEnv := deploy.Spec.Template.Spec.Containers[1].Env
+			Expect(sidecarEnv).To(ContainElement(corev1.EnvVar{
+				Name:  "CARTOGRAPHER_ADDRESS",
+				Value: "cartographer-flow-graph.node-graph-test.svc.cluster.local:50051",
+			}))
+
+			By("Verifying SIDECAR_SIGNING_KEY reads the cartographer-sidecar-key private-key secret keyRef")
+			var signingEnv corev1.EnvVar
+			found := false
+			for _, e := range sidecarEnv {
+				if e.Name == "SIDECAR_SIGNING_KEY" {
+					signingEnv = e
+					found = true
+					break
+				}
+			}
+			Expect(found).To(BeTrue())
+			Expect(signingEnv.ValueFrom).NotTo(BeNil())
+			Expect(signingEnv.ValueFrom.SecretKeyRef).NotTo(BeNil())
+			Expect(signingEnv.ValueFrom.SecretKeyRef.Name).To(Equal("cartographer-sidecar-key"))
+			Expect(signingEnv.ValueFrom.SecretKeyRef.Key).To(Equal("private-key"))
 		})
 	})
 })

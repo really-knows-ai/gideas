@@ -97,17 +97,16 @@ func TestReconcileSecretsCreatesPerNamespaceKeys(t *testing.T) {
 		t.Fatalf("reconcileSecrets: %v", err)
 	}
 
-	// The per-namespace key Secrets must have been created. The public `key`
-	// values are base64-encoded for env-var transport (a raw Ed25519 key can
-	// contain a NUL byte, which POSIX env vars cannot hold), so the assertions
-	// compare against the base64 of the operator-namespace raw bytes; the
-	// sidecar `private-key` is copied through raw (nothing consumes it from an
-	// env var today).
+	// The per-namespace key Secrets must have been created. Both the public
+	// `key` and the sidecar `private-key` values are base64-encoded for env-var
+	// transport (a raw Ed25519 key can contain a NUL byte, which POSIX env vars
+	// cannot hold), so the assertions compare against the base64 of the
+	// operator-namespace raw bytes.
 	var sd corev1.Secret
 	if err := fakeCli.Get(ctx, types.NamespacedName{Name: sidecarKeySecretName, Namespace: targetNS}, &sd); err != nil {
 		t.Fatalf("expected sidecar key Secret in namespace %q: %v", targetNS, err)
 	}
-	if string(sd.Data["key"]) != base64.StdEncoding.EncodeToString([]byte("sd-pub")) || string(sd.Data["private-key"]) != "sd-priv" {
+	if string(sd.Data["key"]) != base64.StdEncoding.EncodeToString([]byte("sd-pub")) || string(sd.Data["private-key"]) != base64.StdEncoding.EncodeToString([]byte("sd-priv")) {
 		t.Errorf("sidecar key Secret data mismatch: %v", sd.Data)
 	}
 

@@ -10,9 +10,9 @@ import "flow/v1/common.proto";
 // owning service. Nodes see SDK calls; the Sidecar handles transport.
 //
 // The Sidecar also acts as the proxy for all other services (Operator,
-// Archivist, Librarian, FrictionLedger) when called from the Node. Those
-// service definitions are not duplicated here -- the Go SDK will connect
-// to the Sidecar's port and use the respective service stubs.
+// Archivist, Librarian, FrictionLedger, Cartographer) when called from the
+// Node. Those service definitions are not duplicated here -- the Go SDK will
+// connect to the Sidecar's port and use the respective service stubs.
 //
 service SidecarService {
   // Resets the Sidecar's inactivity timer. Implicit heartbeats occur on

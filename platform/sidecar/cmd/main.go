@@ -2,19 +2,23 @@
 //
 // It listens on a single port and multiplexes all Flow services
 // (SidecarService, OperatorService, ArchivistService, LibrarianService,
-// FrictionLedgerService). The SidecarService handles node-facing RPCs
-// (Heartbeat, AddFriction, RecordTelemetry) and operator-facing RPCs
-// (AssignWork). Other services are proxied to their real gRPC endpoints
-// when the corresponding address environment variable is set.
+// FrictionLedgerService, CartographerService). The SidecarService handles
+// node-facing RPCs (Heartbeat, AddFriction, RecordTelemetry) and
+// operator-facing RPCs (AssignWork). Other services are proxied to their
+// real gRPC endpoints when the corresponding address environment variable
+// is set.
 //
 // Usage:
 //
 //	FLOW_NODE_ID=my-node go run ./sidecar/cmd/main.go
 //	OPERATOR_ADDRESS=localhost:50052 FLOW_NODE_ID=my-node go run ./sidecar/cmd/main.go
 //	EVENT_BUS_ADDRESS=localhost:50056 FLOW_NODE_ID=my-node go run ./sidecar/cmd/main.go
+//	CARTOGRAPHER_ADDRESS=localhost:50051 SIDECAR_SIGNING_KEY=<b64> FLOW_NODE_ID=my-node go run ./sidecar/cmd/main.go
 package main
 
 import (
+	"crypto/ed25519"
+	"encoding/base64"
 	"fmt"
 	"log/slog"
 	"net"
@@ -45,6 +49,8 @@ const (
 	envFrictionLedgerAddr  = "FRICTION_LEDGER_ADDRESS"
 	envFederationAddress   = "FEDERATION_ADDRESS"
 	envCapabilities        = "FLOW_CAPABILITIES"
+	envCartographerAddress = "CARTOGRAPHER_ADDRESS"
+	envSidecarSigningKey   = "SIDECAR_SIGNING_KEY"
 )
 
 func main() {
@@ -76,7 +82,28 @@ func main() {
 	eventBusAddr := os.Getenv(envEventBusAddress)
 	frictionLedgerAddr := os.Getenv(envFrictionLedgerAddr)
 	federationAddr := os.Getenv(envFederationAddress)
+	cartographerAddr := os.Getenv(envCartographerAddress)
 	capabilities := os.Getenv(envCapabilities)
+
+	// The Sidecar signs the node's capability attestation
+	// (x-flow-capabilities-signature) with the shared sidecar Ed25519 private
+	// key so the Cartographer can verify it on ingress (SPEC R3 / Capability
+	// Authorisation Chain). The key is injected by the Node operator from the
+	// per-namespace cartographer-sidecar-key Secret (data key private-key),
+	// base64-encoded for byte-exact env transport. When the CartographerProxy
+	// is enabled the key is mandatory: without it every node graph RPC would
+	// be rejected by the Cartographer as unsigned, so the Sidecar fails fast
+	// rather than booting a proxy that can only deny.
+	var signingKey ed25519.PrivateKey
+	if cartographerAddr != "" {
+		keyBytes, err := base64.StdEncoding.DecodeString(os.Getenv(envSidecarSigningKey))
+		if err != nil || len(keyBytes) != ed25519.PrivateKeySize {
+			slog.Error("SIDECAR_SIGNING_KEY must be a base64-encoded Ed25519 private key when CARTOGRAPHER_ADDRESS is set",
+				"error", err)
+			os.Exit(1)
+		}
+		signingKey = ed25519.PrivateKey(keyBytes)
+	}
 
 	slog.Info("Sidecar starting",
 		"port", port,
@@ -89,6 +116,7 @@ func main() {
 		"event_bus_address", eventBusAddr,
 		"friction_ledger_address", frictionLedgerAddr,
 		"federation_address", federationAddr,
+		"cartographer_address", cartographerAddr,
 		"capabilities", capabilities,
 		"phase", "brain-stem",
 	)
@@ -109,7 +137,8 @@ func main() {
 	// all proxied RPCs carry the correct identity context regardless of
 	// what the node SDK sends.
 	srv := grpc.NewServer(
-		grpc.UnaryInterceptor(service.IdentityInterceptor(sidecarSrv, namespace, nodeID, capabilities)),
+		grpc.UnaryInterceptor(service.IdentityInterceptor(sidecarSrv, namespace, nodeID, capabilities, signingKey)),
+		grpc.StreamInterceptor(service.IdentityStreamInterceptor(sidecarSrv, namespace, nodeID, capabilities, signingKey)),
 	)
 
 	// Event Bus: dial and create telemetry buffer.
@@ -210,6 +239,24 @@ func main() {
 		slog.Info("Federation proxy disabled (no FEDERATION_ADDRESS set)")
 	}
 
+	// CartographerService: proxy to the real Cartographer if address is set.
+	// When unset or empty, the CartographerProxy is not created and
+	// Cartographer-related RPCs are unavailable from that node (SPEC R5).
+	var cartographerCloser func() error
+	if cartographerAddr != "" {
+		cartographerProxy, err := proxy.NewCartographerProxy(cartographerAddr)
+		if err != nil {
+			slog.Error("Failed to connect to Cartographer", "address", cartographerAddr, "error", err)
+			os.Exit(1)
+		}
+		flowv1.RegisterCartographerServiceServer(srv, cartographerProxy)
+		cartographerCloser = cartographerProxy.Close
+		slog.Info("Cartographer proxy enabled", "address", cartographerAddr)
+	} else {
+		cartographerCloser = func() error { return nil }
+		slog.Info("Cartographer proxy disabled (no CARTOGRAPHER_ADDRESS set)")
+	}
+
 	// Enable gRPC reflection for debugging with grpcurl.
 	reflection.Register(srv)
 
@@ -228,6 +275,7 @@ func main() {
 		_ = librarianCloser()
 		_ = frictionLedgerCloser()
 		_ = federationCloser()
+		_ = cartographerCloser()
 		_ = eventBusCloser()
 		_ = sidecarSrv.Close()
 	}()
