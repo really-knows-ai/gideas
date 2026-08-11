@@ -655,7 +655,7 @@ func tryRemotePullOnInit(
 	}
 	if empty {
 		slog.Info("Pulling from remote on init", "url", remoteURL)
-		// SPEC R10 / SPEC:978: the sync worker bounds every git operation by
+		// SPEC R10 / SPEC:981: the sync worker bounds every git operation by
 		// the configurable per-operation deadline (gitOp, default
 		// service.DefaultGitOperationTimeout, five minutes). The clone-on-init
 		// path is a git operation too, so it carries the same deadline: a hung
