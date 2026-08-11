@@ -105,14 +105,16 @@ func (g *gitStore) ReadAllEntityFiles(ctx context.Context, entityType string) ([
 			if base := strings.TrimSuffix(fi.Name(), ".json"); base != ej.ID.String() {
 				return EntityFile{}, fmt.Errorf("entity file %s embedded id %s conflicts with filename", fi.Name(), ej.ID)
 			}
-			// Guard against a zero or non-v4 embedded id. writeEntityFile
-			// rejects these (ErrInvalidUUID), and recovery reconstruction and
-			// refresh snapshots consume this path — a file whose embedded id
-			// is uuid.Nil or not version 4 (external corruption) must surface
-			// the same sentinel rather than load an entity under a never-valid
-			// UUID. Version() is 0 for uuid.Nil, so the single version check
-			// covers both.
-			if ej.ID.Version() != 4 {
+			// Guard against a zero, non-v4, or non-RFC4122-variant embedded
+			// id. writeEntityFile rejects these (ErrInvalidUUID), and recovery
+			// reconstruction and refresh snapshots consume this path — a file
+			// whose embedded id is uuid.Nil, not version 4, or not an RFC4122
+			// variant (external corruption) must surface the same sentinel
+			// rather than load an entity under a never-valid UUID. Version() is
+			// 0 for uuid.Nil, so the version check covers zero; the variant
+			// check matches uuidutil.Validate, which gates the write path on
+			// both dimensions.
+			if ej.ID.Version() != 4 || ej.ID.Variant() != uuid.RFC4122 {
 				return EntityFile{}, fmt.Errorf(
 					"%w: entity file %s embedded id %s is not a valid UUID v4",
 					ErrInvalidUUID, fi.Name(), ej.ID)

@@ -1553,6 +1553,125 @@ func TestReadAllEdgeFilesZeroIDGuard(t *testing.T) {
 	}
 }
 
+// TestReadAllFilesNonRFC4122VariantGuard: a JSON entity or edge file whose
+// embedded id (or edge endpoint) is a version-4 UUID with a non-RFC4122
+// variant nibble (external corruption) must surface ErrInvalidUUID, not be
+// silently loaded. uuidutil.Validate gates the write path on both Version()==4
+// and Variant()==uuid.RFC4122, so a canonical-spelled v4 UUID whose variant
+// nibble falls outside RFC4122's 8-b would otherwise load on the read path
+// while being rejected on write — a read/write validation divergence from the
+// SPEC:162 canonical RFC4122 §3 form. The fixture's variant nibble c
+// (Microsoft variant, 110x) keeps Version()==4 while failing the variant
+// check, isolating that dimension from the sibling zero-id guard tests.
+func TestReadAllFilesNonRFC4122VariantGuard(t *testing.T) {
+	gs := setupTestStore(t)
+	// 550e8400-e29b-41d4-c716-446655440000: version nibble 4, variant nibble c.
+	badID := "550e8400-e29b-41d4-c716-446655440000"
+	err := gs.WithGitLock(func() error {
+		now := time.Now().UTC().Round(time.Millisecond)
+
+		// (a) Entity file whose embedded id is a v4 non-RFC4122-variant UUID
+		// matching its filename (so only the variant dimension can trip).
+		eej := struct {
+			ID         uuid.UUID         `json:"id"`
+			Type       string            `json:"type"`
+			Properties map[string]string `json:"properties,omitempty"`
+			CreatedAt  time.Time         `json:"created_at"`
+			UpdatedAt  time.Time         `json:"updated_at"`
+		}{
+			ID:        uuid.MustParse(badID),
+			Type:      "Component",
+			CreatedAt: now,
+			UpdatedAt: now,
+		}
+		data, err := json.Marshal(eej)
+		if err != nil {
+			return err
+		}
+		f, err := gs.fs.Create("entities/Component/" + badID + ".json")
+		if err != nil {
+			return fmt.Errorf("create bad-variant entity file: %w", err)
+		}
+		if _, err := f.Write(data); err != nil {
+			_ = f.Close()
+			return fmt.Errorf("write bad-variant entity file: %w", err)
+		}
+		if err := f.Close(); err != nil {
+			return fmt.Errorf("close bad-variant entity file: %w", err)
+		}
+		if _, err := gs.ReadAllEntityFiles(ctx(), "Component"); !errors.Is(err, ErrInvalidUUID) {
+			return fmt.Errorf("expected ErrInvalidUUID for bad-variant entity id, got %v", err)
+		}
+
+		// (b-d) Edge files: bad-variant id / from / to endpoints must each
+		// surface ErrInvalidUUID.
+		eID := validUUID(t)
+		fromID := validUUID(t)
+		toID := validUUID(t)
+		eUUID := uuid.MustParse(eID)
+		fromUUID := uuid.MustParse(fromID)
+		toUUID := uuid.MustParse(toID)
+		badUUID := uuid.MustParse(badID)
+		rewrite := func(path string, id, from, to uuid.UUID) error {
+			ej := struct {
+				ID           uuid.UUID         `json:"id"`
+				Type         string            `json:"type"`
+				FromEntityID uuid.UUID         `json:"from"`
+				ToEntityID   uuid.UUID         `json:"to"`
+				Properties   map[string]string `json:"properties,omitempty"`
+				CreatedAt    time.Time         `json:"created_at"`
+				UpdatedAt    time.Time         `json:"updated_at"`
+			}{
+				ID:           id,
+				Type:         "DEPENDS_ON",
+				FromEntityID: from,
+				ToEntityID:   to,
+				CreatedAt:    now,
+				UpdatedAt:    now,
+			}
+			data, err := json.Marshal(ej)
+			if err != nil {
+				return err
+			}
+			f, err := gs.fs.Create(path)
+			if err != nil {
+				return fmt.Errorf("recreate edge file: %w", err)
+			}
+			if _, err := f.Write(data); err != nil {
+				_ = f.Close()
+				return fmt.Errorf("write edge file: %w", err)
+			}
+			return f.Close()
+		}
+		// (b) Bad-variant edge id (filename must match the embedded id so the
+		// variant check, not the id-vs-filename guard, is exercised).
+		if err := rewrite("edges/DEPENDS_ON/"+badID+".json", badUUID, fromUUID, toUUID); err != nil {
+			return err
+		}
+		if _, err := gs.ReadAllEdgeFiles(ctx(), "DEPENDS_ON"); !errors.Is(err, ErrInvalidUUID) {
+			return fmt.Errorf("expected ErrInvalidUUID for bad-variant edge id, got %v", err)
+		}
+		// (c) Bad-variant from endpoint.
+		if err := rewrite("edges/DEPENDS_ON/"+eID+".json", eUUID, badUUID, toUUID); err != nil {
+			return err
+		}
+		if _, err := gs.ReadAllEdgeFiles(ctx(), "DEPENDS_ON"); !errors.Is(err, ErrInvalidUUID) {
+			return fmt.Errorf("expected ErrInvalidUUID for bad-variant from endpoint, got %v", err)
+		}
+		// (d) Bad-variant to endpoint.
+		if err := rewrite("edges/DEPENDS_ON/"+eID+".json", eUUID, fromUUID, badUUID); err != nil {
+			return err
+		}
+		if _, err := gs.ReadAllEdgeFiles(ctx(), "DEPENDS_ON"); !errors.Is(err, ErrInvalidUUID) {
+			return fmt.Errorf("expected ErrInvalidUUID for bad-variant to endpoint, got %v", err)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("TestReadAllFilesNonRFC4122VariantGuard: %v", err)
+	}
+}
+
 // TestWriteEdgeFilesTypeMismatch asserts that writing an edge whose Type
 // differs from the batch type returns ErrEdgeTypeMismatch (edge.go:109).
 func TestWriteEdgeFilesTypeMismatch(t *testing.T) {
