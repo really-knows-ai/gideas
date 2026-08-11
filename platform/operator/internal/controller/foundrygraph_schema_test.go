@@ -272,7 +272,13 @@ func TestDiffSchema(t *testing.T) {
 			expected: SchemaDiffNone,
 		},
 		{
-			name: "rules modified only - non-destructive",
+			name: "rule adds FROM/TO pair to applied edge type - destructive",
+			// SPEC R6: a rule modification that adds a FROM/TO pair on an
+			// already-applied edge type is destructive — LadybugDB fixes the rel
+			// table's endpoint clauses at CREATE time. The store's
+			// diffSchemaAgainstCatalog rejects this with ErrDestructiveSchemaChange,
+			// so the operator must classify it destructive instead of pushing the
+			// schema directly and wedging on the store rejection.
 			old: &flowv1.FoundryGraphSpec{
 				EntityTypes: []flowv1.EntityTypeSpec{
 					{
@@ -281,6 +287,9 @@ func TestDiffSchema(t *testing.T) {
 							{CanConnectTo: []string{"Service"}, Using: []string{"DEPENDS_ON"}},
 						},
 					},
+				},
+				EdgeTypes: []flowv1.EdgeTypeSpec{
+					{Name: "DEPENDS_ON"},
 				},
 			},
 			new: &flowv1.FoundryGraphSpec{
@@ -292,42 +301,66 @@ func TestDiffSchema(t *testing.T) {
 						},
 					},
 				},
+				EdgeTypes: []flowv1.EdgeTypeSpec{
+					{Name: "DEPENDS_ON"},
+				},
 			},
-			expected: SchemaDiffNonDestructive,
+			expected: SchemaDiffDestructive,
 		},
 		{
-			name: "canConnectTo entry removed - non-destructive (membership change surfaced)",
-			// Removing a member from an OR membership list is a semantically relevant
-			// change (it narrows which connections are permitted) that must NOT collapse to
-			// SchemaDiffNone — the old spec permitted "Service", the new one no longer does.
+			name: "canConnectTo entry removed - destructive (endpoint pair removed)",
+			// Removing a target from an OR membership list removes a FROM/TO pair
+			// on the applied edge type, so it is destructive (SPEC R6); the store
+			// rejects it with ErrDestructiveSchemaChange.
 			old: &flowv1.FoundryGraphSpec{
 				EntityTypes: []flowv1.EntityTypeSpec{
 					{Name: "Component", Rules: []flowv1.ConnectionRule{{CanConnectTo: []string{"Service", "Database"}, Using: []string{"DEPENDS_ON"}}}},
+				},
+				EdgeTypes: []flowv1.EdgeTypeSpec{
+					{Name: "DEPENDS_ON"},
 				},
 			},
 			new: &flowv1.FoundryGraphSpec{
 				EntityTypes: []flowv1.EntityTypeSpec{
 					{Name: "Component", Rules: []flowv1.ConnectionRule{{CanConnectTo: []string{"Database"}, Using: []string{"DEPENDS_ON"}}}},
 				},
+				EdgeTypes: []flowv1.EdgeTypeSpec{
+					{Name: "DEPENDS_ON"},
+				},
 			},
-			expected: SchemaDiffNonDestructive,
+			expected: SchemaDiffDestructive,
 		},
 		{
-			name: "using entry removed - non-destructive (membership change)",
+			name: "using entry removed - destructive (edge type loses endpoint pair)",
+			// Removing a `using` reference drops the edge type's FROM/TO pair set:
+			// the applied edge type's rel endpoints would change (the store
+			// normalizes an edgeless type to its reserved placeholder pair and
+			// rejects the change), so it is destructive (SPEC R6).
 			old: &flowv1.FoundryGraphSpec{
 				EntityTypes: []flowv1.EntityTypeSpec{
 					{Name: "Component", Rules: []flowv1.ConnectionRule{{CanConnectTo: []string{"Service"}, Using: []string{"DEPENDS_ON", "CONTAINS"}}}},
+				},
+				EdgeTypes: []flowv1.EdgeTypeSpec{
+					{Name: "DEPENDS_ON"},
+					{Name: "CONTAINS"},
 				},
 			},
 			new: &flowv1.FoundryGraphSpec{
 				EntityTypes: []flowv1.EntityTypeSpec{
 					{Name: "Component", Rules: []flowv1.ConnectionRule{{CanConnectTo: []string{"Service"}, Using: []string{"DEPENDS_ON"}}}},
 				},
+				EdgeTypes: []flowv1.EdgeTypeSpec{
+					{Name: "DEPENDS_ON"},
+					{Name: "CONTAINS"},
+				},
 			},
-			expected: SchemaDiffNonDestructive,
+			expected: SchemaDiffDestructive,
 		},
 		{
-			name: "whole rule dropped - non-destructive (membership change)",
+			name: "whole rule dropped - destructive (edge type loses endpoint pair)",
+			// Dropping an entire rule removes the FROM/TO pairs it contributed,
+			// changing an applied edge type's endpoint set → destructive (SPEC R6);
+			// the store rejects the resulting edge-endpoint change.
 			old: &flowv1.FoundryGraphSpec{
 				EntityTypes: []flowv1.EntityTypeSpec{
 					{Name: "Component", Rules: []flowv1.ConnectionRule{
@@ -335,13 +368,117 @@ func TestDiffSchema(t *testing.T) {
 						{CanConnectTo: []string{"Database"}, Using: []string{"CONTAINS"}},
 					}},
 				},
+				EdgeTypes: []flowv1.EdgeTypeSpec{
+					{Name: "DEPENDS_ON"},
+					{Name: "CONTAINS"},
+				},
 			},
 			new: &flowv1.FoundryGraphSpec{
 				EntityTypes: []flowv1.EntityTypeSpec{
 					{Name: "Component", Rules: []flowv1.ConnectionRule{{CanConnectTo: []string{"Service"}, Using: []string{"DEPENDS_ON"}}}},
 				},
+				EdgeTypes: []flowv1.EdgeTypeSpec{
+					{Name: "DEPENDS_ON"},
+					{Name: "CONTAINS"},
+				},
+			},
+			expected: SchemaDiffDestructive,
+		},
+		{
+			name: "rule change preserving endpoint pairs - non-destructive",
+			// SPEC R6: a rule modification that preserves every edge type's FROM/TO
+			// endpoint set is non-destructive — the rel table's endpoint clauses are
+			// unchanged, so the schema pushes directly without WipeGraph. Splitting
+			// one rule into two OR-ed rules over the same pairs changes the rule set
+			// but keeps the endpoint pairs identical.
+			old: &flowv1.FoundryGraphSpec{
+				EntityTypes: []flowv1.EntityTypeSpec{
+					{
+						Name: "Component",
+						Rules: []flowv1.ConnectionRule{
+							{CanConnectTo: []string{"Service", "Database"}, Using: []string{"DEPENDS_ON"}},
+						},
+					},
+				},
+				EdgeTypes: []flowv1.EdgeTypeSpec{
+					{Name: "DEPENDS_ON"},
+				},
+			},
+			new: &flowv1.FoundryGraphSpec{
+				EntityTypes: []flowv1.EntityTypeSpec{
+					{
+						Name: "Component",
+						Rules: []flowv1.ConnectionRule{
+							{CanConnectTo: []string{"Service"}, Using: []string{"DEPENDS_ON"}},
+							{CanConnectTo: []string{"Database"}, Using: []string{"DEPENDS_ON"}},
+						},
+					},
+				},
+				EdgeTypes: []flowv1.EdgeTypeSpec{
+					{Name: "DEPENDS_ON"},
+				},
 			},
 			expected: SchemaDiffNonDestructive,
+		},
+		{
+			name: "new entity type with brand-new edge type - non-destructive",
+			// SPEC R2: an added entity type carrying a brand-new edge type remains
+			// additive — the new rel table is created with its endpoint clauses at
+			// CREATE time. The endpoint-set comparison only covers already-applied
+			// edge types, so this must not be classified destructive.
+			old: &flowv1.FoundryGraphSpec{
+				EntityTypes: []flowv1.EntityTypeSpec{
+					{Name: "Component"},
+				},
+				EdgeTypes: []flowv1.EdgeTypeSpec{
+					{Name: "DEPENDS_ON"},
+				},
+			},
+			new: &flowv1.FoundryGraphSpec{
+				EntityTypes: []flowv1.EntityTypeSpec{
+					{Name: "Component"},
+					{Name: "Service", Rules: []flowv1.ConnectionRule{
+						{CanConnectTo: []string{"Component"}, Using: []string{"CONTAINS"}},
+					}},
+				},
+				EdgeTypes: []flowv1.EdgeTypeSpec{
+					{Name: "DEPENDS_ON"},
+					{Name: "CONTAINS"},
+				},
+			},
+			expected: SchemaDiffNonDestructive,
+		},
+		{
+			name: "new entity type adds FROM/TO pair to applied edge type - destructive",
+			// A new entity type is additive by itself, but if its rules add a
+			// FROM/TO pair to an edge type that is already applied, the rel table's
+			// endpoints would change → destructive (SPEC R6), matching the store's
+			// catalog diff. The endpoint-set comparison therefore runs even when no
+			// surviving entity type's rules changed.
+			old: &flowv1.FoundryGraphSpec{
+				EntityTypes: []flowv1.EntityTypeSpec{
+					{Name: "Component", Rules: []flowv1.ConnectionRule{
+						{CanConnectTo: []string{"Service"}, Using: []string{"DEPENDS_ON"}},
+					}},
+				},
+				EdgeTypes: []flowv1.EdgeTypeSpec{
+					{Name: "DEPENDS_ON"},
+				},
+			},
+			new: &flowv1.FoundryGraphSpec{
+				EntityTypes: []flowv1.EntityTypeSpec{
+					{Name: "Component", Rules: []flowv1.ConnectionRule{
+						{CanConnectTo: []string{"Service"}, Using: []string{"DEPENDS_ON"}},
+					}},
+					{Name: "Database", Rules: []flowv1.ConnectionRule{
+						{CanConnectTo: []string{"Service"}, Using: []string{"DEPENDS_ON"}},
+					}},
+				},
+				EdgeTypes: []flowv1.EdgeTypeSpec{
+					{Name: "DEPENDS_ON"},
+				},
+			},
+			expected: SchemaDiffDestructive,
 		},
 		{
 			name: "properties reorder - no diff (non-destructive is NOT implied or destructive)",

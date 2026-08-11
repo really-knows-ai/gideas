@@ -29,8 +29,8 @@ type SchemaDiffResult int
 
 const (
 	SchemaDiffNone           SchemaDiffResult = iota // no schema change
-	SchemaDiffNonDestructive                         // additive-only: new types, new properties, rule changes, enableVectorIndex false->true
-	SchemaDiffDestructive                            // removed types, removed/changed properties, enableVectorIndex true->false
+	SchemaDiffNonDestructive                         // additive-only: new types, new properties, rule changes preserving every edge type's FROM/TO endpoint set, enableVectorIndex false->true
+	SchemaDiffDestructive                            // removed types, removed/changed properties, edge-type FROM/TO endpoint-set changes, enableVectorIndex true->false
 )
 
 // diffSchema compares old and new FoundryGraphSpec and returns the type of schema change.
@@ -56,9 +56,10 @@ func diffSchema(oldSpec, newSpec *flowv1.FoundryGraphSpec) SchemaDiffResult {
 }
 
 // diffEntityTypes compares the entity-type sets between old and new specs. Removed
-// entity types, removed or changed existing type properties, and enableVectorIndex
-// true→false are destructive; added types, added properties, and rule changes are
-// non-destructive (SPEC R6: additive-only schema changes are non-destructive).
+// entity types, removed or changed existing type properties, enableVectorIndex
+// true→false, and rule changes that add or remove a FROM/TO pair on an already-applied
+// edge type are destructive; added types, added properties, and rule changes that
+// preserve every edge type's FROM/TO endpoint set are non-destructive (SPEC R6).
 func diffEntityTypes(oldSpec, newSpec *flowv1.FoundryGraphSpec) (destructive, nonDestructive bool) {
 	oldTypes := make(map[string]flowv1.EntityTypeSpec, len(oldSpec.EntityTypes))
 	for _, et := range oldSpec.EntityTypes {
@@ -77,6 +78,7 @@ func diffEntityTypes(oldSpec, newSpec *flowv1.FoundryGraphSpec) (destructive, no
 	}
 
 	// Added types, property changes, and rule changes per surviving type.
+	rulesChanged := false
 	for name, newET := range newTypes {
 		oldET, exists := oldTypes[name]
 		if !exists {
@@ -96,8 +98,25 @@ func diffEntityTypes(oldSpec, newSpec *flowv1.FoundryGraphSpec) (destructive, no
 		nonDestructive = nonDestructive || nd
 
 		if !rulesEqual(oldET.Rules, newET.Rules) {
-			nonDestructive = true
+			rulesChanged = true
 		}
+	}
+
+	// SPEC R6: a rule modification that adds or removes a FROM/TO pair on an
+	// already-applied edge type is destructive — LadybugDB fixes a rel table's
+	// endpoint clauses at CREATE time and cannot express a change through ALTER —
+	// so the operator must take the WipeGraph path, mirroring the store's
+	// diffSchemaAgainstCatalog rejection (ErrDestructiveSchemaChange). A rule
+	// change that preserves every edge type's endpoint set (e.g. one rule split
+	// into OR-ed rules over the same pairs) is non-destructive. The endpoint sets
+	// are derived from ENTITY rules (each entity type's rules' using ×
+	// canConnectTo), so this comparison belongs here where the rules are compared.
+	// It runs unconditionally — a new entity type's rules can also add pairs to an
+	// already-applied edge type.
+	if edgeEndpointSetsChanged(edgeEndpointSets(oldSpec.EntityTypes), edgeEndpointSets(newSpec.EntityTypes), oldSpec.EdgeTypes) {
+		destructive = true
+	} else if rulesChanged {
+		nonDestructive = true
 	}
 	return destructive, nonDestructive
 }
@@ -205,6 +224,50 @@ func dedupeSorted(in []string) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// edgeEndpointSets derives each edge type's FROM/TO endpoint set from the
+// entity-type rules, mirroring the store's collectFromToPairs (SPEC R2): for each
+// entity type, for each rule, for each `using` edge reference, for each
+// `canConnectTo` target, the edge type gains a (from=entityType, to=target) pair.
+// Each endpoint set is a set of canonical "from\x00to" keys, so comparison is
+// set-based — order and duplicates within the lists are semantically irrelevant
+// (SPEC R1). An edge type absent from the map has an empty endpoint set.
+func edgeEndpointSets(types []flowv1.EntityTypeSpec) map[string]map[string]bool {
+	sets := make(map[string]map[string]bool)
+	for _, et := range types {
+		for _, rule := range et.Rules {
+			for _, edgeRef := range rule.Using {
+				if sets[edgeRef] == nil {
+					sets[edgeRef] = make(map[string]bool)
+				}
+				for _, target := range rule.CanConnectTo {
+					sets[edgeRef][et.Name+"\x00"+target] = true
+				}
+			}
+		}
+	}
+	return sets
+}
+
+// edgeEndpointSetsChanged reports whether any already-applied edge type's FROM/TO
+// endpoint set differs between the old and new spec. Only edge types present in the
+// old spec (the applied schema) are compared: a brand-new edge type is additive and
+// creates its rel table with its endpoints at CREATE time (SPEC R2), so it can never
+// make the diff destructive regardless of the pairs it carries.
+func edgeEndpointSetsChanged(oldSets, newSets map[string]map[string]bool, appliedEdgeTypes []flowv1.EdgeTypeSpec) bool {
+	for _, et := range appliedEdgeTypes {
+		oldSet, newSet := oldSets[et.Name], newSets[et.Name]
+		if len(oldSet) != len(newSet) {
+			return true
+		}
+		for k := range oldSet {
+			if !newSet[k] {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // specSemanticallyEqual checks if two FoundryGraphSpecs are semantically identical.
