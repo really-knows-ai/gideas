@@ -174,9 +174,13 @@ func (c *Client) GetFlow() (*Flow, error) {
 }
 
 // GetGraph returns the Cartographer graph handle for the current flow.
-// The graph operations (ExecuteCypher, SearchNeighbors, etc.) require a
-// workitem context and will return errors if the client was not initialised or
-// FLOW_WORKITEM_ID was not set. The single-value return documents the SDK
+// A Graph handle is always returned (never nil); graph operations
+// (ExecuteCypher, SearchNeighbors, etc.) surface errors themselves,
+// returning "flow sdk: graph not initialised" when the client was not
+// initialised. Graph operations do not require a workitem context: when
+// FLOW_WORKITEM_ID is unset the SDK attaches no workitem metadata and the
+// Sidecar's entry-bound fallback forwards the request with namespace and
+// node identity and no workitem. The single-value return documents the SDK
 // surface (SPEC R4): a Graph handle is always returned; graph operations
 // surface nil-session errors themselves.
 func (c *Client) GetGraph() *Graph {
