@@ -348,12 +348,16 @@ func (r *FoundryNodeReconciler) hasQueueServerCapability(node *flowv1.FoundryNod
 	return slices.Contains(node.Spec.Capabilities, "USE:queue/server")
 }
 
-// findGraphName returns the name of the FoundryGraph in the node's namespace,
-// or "" when none exists. The FoundryGraph is a namespace singleton (SPEC R1),
-// conventionally named flow-graph; the Cartographer it drives is exposed at
-// cartographer-<fg-name>.<namespace>.svc.cluster.local (SPEC R5). When no
-// FoundryGraph exists, the Sidecar gets no CARTOGRAPHER_ADDRESS and its
-// CartographerProxy is not created.
+// findGraphName returns the name of the FoundryGraph that is the namespace's
+// provisioned singleton owner, or "" when none exists. The FoundryGraph is a
+// namespace singleton (SPEC R1, conventionally named flow-graph): the
+// earliest-created resource is the owner the FoundryGraph reconciler provisions,
+// and any later one is a conflict the Operator never provisions. Selecting the
+// owner by creation timestamp (name tiebreak) mirrors enforceSingleton, so the
+// Sidecar's CARTOGRAPHER_ADDRESS always targets the Cartographer Service the
+// Operator actually created (cartographer-<fg-name>.<namespace>.svc.cluster.local,
+// SPEC R5) rather than an arbitrary list item. When no FoundryGraph exists, the
+// Sidecar gets no CARTOGRAPHER_ADDRESS and its CartographerProxy is not created.
 func (r *FoundryNodeReconciler) findGraphName(ctx context.Context, node *flowv1.FoundryNode) string {
 	var graphs flowv1.FoundryGraphList
 	if err := r.List(ctx, &graphs, client.InNamespace(node.Namespace)); err != nil {
@@ -362,7 +366,19 @@ func (r *FoundryNodeReconciler) findGraphName(ctx context.Context, node *flowv1.
 	if len(graphs.Items) == 0 {
 		return ""
 	}
-	return graphs.Items[0].Name
+	// The namespace singleton owner is the earliest-created FoundryGraph — the
+	// same deterministic selection as the FoundryGraph reconciler's
+	// enforceSingleton (creation timestamp, name tiebreak). List order is not
+	// authoritative: a conflict resource may sort before the owner.
+	owner := graphs.Items[0]
+	for i := 1; i < len(graphs.Items); i++ {
+		it := &graphs.Items[i]
+		if it.CreationTimestamp.Before(&owner.CreationTimestamp) ||
+			(it.CreationTimestamp.Equal(&owner.CreationTimestamp) && it.Name < owner.Name) {
+			owner = graphs.Items[i]
+		}
+	}
+	return owner.Name
 }
 
 // buildPodTemplate constructs the pod template spec with node + sidecar containers.
