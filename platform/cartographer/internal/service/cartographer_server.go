@@ -2502,7 +2502,8 @@ func (s *CartographerServer) WipeGraph(
 		// recreated here — a clean wipe leaves entities/ and edges/ absent.
 		// Downstream file-per-element writes (WriteEntityFiles/WriteEdgeFiles)
 		// recreate type dirs on demand via MkdirAll, and re-hydration
-		// (loadEntitiesFromDir/loadEdgesFromDir) treats a missing dir as empty.
+		// (loadEntitiesFromDirOnConn/loadEdgesFromDirOnConn) treats a missing
+		// dir as empty.
 		return nil
 	})
 	if wipeErr != nil {
