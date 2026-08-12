@@ -5620,6 +5620,87 @@ func TestApplySchema_AdditiveEntityProperty(t *testing.T) {
 	}
 }
 
+// TestApplySchema_AdditiveRequiredEntityProperty_ForwardOnly pins the SPEC R6
+// forward-only required-property branch for a newly-added property with
+// `required: true` (SPEC:410-413): CreateEntity rejects new entities missing the
+// property, but a pre-existing entity created before the property was added is
+// not retroactively invalidated — it stays readable, and UpdateEntity does not
+// require the property either.
+func TestApplySchema_AdditiveRequiredEntityProperty_ForwardOnly(t *testing.T) {
+	s, err := OpenInMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeStore(t, s)
+	ctx := context.Background()
+
+	// Initial schema with one non-required property.
+	schema1 := &flowv1.Schema{
+		EntityTypes: []*flowv1.EntityType{{
+			Name:       "Document",
+			Properties: []*flowv1.Property{{Name: "title", Type: "string"}},
+		}},
+	}
+	if err := s.ApplySchema(ctx, schema1); err != nil {
+		t.Fatalf("first ApplySchema: %v", err)
+	}
+
+	// Create an entity before the required property exists.
+	doc, err := s.CreateEntity(ctx, "Document", "", map[string]string{"title": "draft"}, nil, "main")
+	if err != nil {
+		t.Fatalf("CreateEntity: %v", err)
+	}
+
+	// Additive: add a NEW required property.
+	schema2 := &flowv1.Schema{
+		EntityTypes: []*flowv1.EntityType{{
+			Name: "Document",
+			Properties: []*flowv1.Property{
+				{Name: "title", Type: "string"},
+				{Name: "author", Type: "string", Required: true},
+			},
+		}},
+	}
+	if err := s.ApplySchema(ctx, schema2); err != nil {
+		t.Fatalf("additive ApplySchema with a required property: %v", err)
+	}
+
+	// The pre-existing entity lacks the newly-required property but must NOT be
+	// retroactively invalidated: it stays readable.
+	got, err := s.GetEntity(ctx, doc.Id, "main")
+	if err != nil {
+		t.Fatalf("GetEntity after adding a required property must not fail: %v", err)
+	}
+	if got.Properties["title"] != "draft" {
+		t.Fatalf("expected title=draft, got %v", got.Properties)
+	}
+
+	// UpdateEntity does not require the newly-added property either (SPEC:413).
+	updated, err := s.UpdateEntity(ctx, doc.Id, map[string]string{"title": "draft-v2"}, nil, "main")
+	if err != nil {
+		t.Fatalf("UpdateEntity omitting the newly-required property must succeed: %v", err)
+	}
+	if updated.Properties["title"] != "draft-v2" {
+		t.Fatalf("expected title=draft-v2, got %v", updated.Properties)
+	}
+
+	// Forward-only enforcement: a NEW entity still missing the required property
+	// is rejected.
+	if _, err := s.CreateEntity(ctx, "Document", "",
+		map[string]string{"title": "doc2"}, nil, "main"); !errors.Is(err, store.ErrMissingRequiredProperty) {
+		t.Fatalf("expected ErrMissingRequiredProperty for a new entity lacking the required property, got %v", err)
+	}
+
+	// ...and one carrying it succeeds.
+	doc2, err := s.CreateEntity(ctx, "Document", "", map[string]string{"title": "doc3", "author": "me"}, nil, "main")
+	if err != nil {
+		t.Fatalf("CreateEntity with the newly-required property: %v", err)
+	}
+	if doc2.Properties["author"] != "me" {
+		t.Fatalf("expected author=me, got %v", doc2.Properties)
+	}
+}
+
 // TestCheckBranchSchemaCompatibility pins the SPEC R9 commit flow step 1 check:
 // the branch DB's schema is validated against the current (main) schema.
 // Additive changes (new properties, new types) and rule modifications are
@@ -5963,6 +6044,94 @@ func TestApplySchema_AdditiveEdgeProperty(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("DEPENDS_ON edge type missing after reopen")
+	}
+}
+
+// TestApplySchema_RuleModification_PreexistingEdgeRemainsValid pins the SPEC R6
+// forward-only rules branch (SPEC:413-415): CreateEdge validates against the
+// current rules, but existing edges created under previous rules remain valid
+// and are not retroactively re-validated. The rule modification must preserve
+// the edge type's FROM/TO pair set (a pair change is destructive), so the edit
+// grants the source type a second, brand-new edge type — a non-destructive rule
+// change. The pre-existing edge must stay readable and listed while new edge
+// creation validates against the modified rules.
+func TestApplySchema_RuleModification_PreexistingEdgeRemainsValid(t *testing.T) {
+	s, err := OpenInMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeStore(t, s)
+	ctx := context.Background()
+
+	// Initial schema: Service may connect to Component only via DEPENDS_ON.
+	schema1 := &flowv1.Schema{
+		EntityTypes: []*flowv1.EntityType{
+			{Name: "Service", Rules: []*flowv1.ConnectionRule{
+				{CanConnectTo: []string{"Component"}, Using: []string{"DEPENDS_ON"}},
+			}},
+			{Name: "Component"},
+		},
+		EdgeTypes: []*flowv1.EdgeType{{Name: "DEPENDS_ON"}},
+	}
+	if err := s.ApplySchema(ctx, schema1); err != nil {
+		t.Fatalf("first ApplySchema: %v", err)
+	}
+
+	svc, err := s.CreateEntity(ctx, "Service", "", nil, nil, "main")
+	if err != nil {
+		t.Fatalf("CreateEntity Service: %v", err)
+	}
+	comp, err := s.CreateEntity(ctx, "Component", "", nil, nil, "main")
+	if err != nil {
+		t.Fatalf("CreateEntity Component: %v", err)
+	}
+	edge, err := s.CreateEdge(ctx, "DEPENDS_ON", svc.Id, comp.Id, nil, "main")
+	if err != nil {
+		t.Fatalf("CreateEdge under the initial rules: %v", err)
+	}
+
+	// Non-destructive rule modification: Service's rule gains a second edge type
+	// LINKS_TO (a new edge type, so DEPENDS_ON's FROM/TO pair set is unchanged
+	// and the apply stays additive).
+	schema2 := &flowv1.Schema{
+		EntityTypes: []*flowv1.EntityType{
+			{Name: "Service", Rules: []*flowv1.ConnectionRule{
+				{CanConnectTo: []string{"Component"}, Using: []string{"DEPENDS_ON", "LINKS_TO"}},
+			}},
+			{Name: "Component"},
+		},
+		EdgeTypes: []*flowv1.EdgeType{{Name: "DEPENDS_ON"}, {Name: "LINKS_TO"}},
+	}
+	if err := s.ApplySchema(ctx, schema2); err != nil {
+		t.Fatalf("rule-modifying ApplySchema: %v", err)
+	}
+
+	// The pre-existing edge created under the previous rules stays valid — it is
+	// readable and listed, not retroactively re-validated against the new rules.
+	got, err := s.GetEdge(ctx, edge.Id, "main")
+	if err != nil {
+		t.Fatalf("GetEdge after the rule modification must not fail: %v", err)
+	}
+	if got.Type != edge.Type {
+		t.Fatalf("expected a %s edge, got %+v", edge.Type, got)
+	}
+	listed, err := s.ListEdgesOfType(ctx, "DEPENDS_ON", "main")
+	if err != nil {
+		t.Fatalf("ListEdgesOfType after the rule modification: %v", err)
+	}
+	if len(listed) != 1 || listed[0].Id != edge.Id {
+		t.Fatalf("expected the pre-existing edge to remain listed, got %+v", listed)
+	}
+
+	// New edge creation validates against the CURRENT rules: the newly added
+	// LINKS_TO edge type is now permitted...
+	if _, err := s.CreateEdge(ctx, "LINKS_TO", svc.Id, comp.Id, nil, "main"); err != nil {
+		t.Fatalf("CreateEdge via the newly permitted edge type must succeed: %v", err)
+	}
+	// ...while a direction no rule ever declared stays forbidden.
+	_, err = s.CreateEdge(ctx, "DEPENDS_ON", comp.Id, svc.Id, nil, "main")
+	if !errors.Is(err, store.ErrEdgeRuleViolation) {
+		t.Fatalf("expected ErrEdgeRuleViolation for an unpermitted reverse edge, got %v", err)
 	}
 }
 
