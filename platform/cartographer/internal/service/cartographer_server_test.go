@@ -6827,11 +6827,29 @@ func TestChangeLogMarkerAndCleanupFailureCannotRecoverAsActive(t *testing.T) {
 		reopened, reopenedGit, opPub, initTestKey(), nil, "", 30*time.Second,
 		"test-ns", 30*time.Minute, 1, WithLadybugPath(dataPath),
 	)
-	if err := restarted.RecoverOpenTransactions(ctx); err == nil || !strings.Contains(err.Error(), "branch state") {
-		t.Fatalf("restart did not fail closed: %v", err)
+	// The rollback-only marker persist failed, so the store invalidated the
+	// state record; on restart the branch has no lifecycle record. Recovery
+	// must not wedge startup and must not register the rejected transaction as
+	// active — it finishes the aborted rollback instead (SPEC R9 recovery:
+	// a branch with no persisted state record cannot be recovered).
+	if err := restarted.RecoverOpenTransactions(ctx); err != nil {
+		t.Fatalf("recovery wedged startup on an invalidated branch: %v", err)
 	}
 	if _, err := restarted.txManager.Lookup(begin.TransactionId); err == nil {
 		t.Fatal("failed-closed transaction was registered as active")
+	}
+	// The rollback finished the aborted cleanup: the git branch is removed.
+	if err := reopenedGit.WithGitLock(func() error {
+		exists, err := reopenedGit.BranchExists(ctx, begin.TransactionId)
+		if err != nil {
+			return err
+		}
+		if exists {
+			return fmt.Errorf("invalidated transaction git branch still exists")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -10614,5 +10632,541 @@ func TestExportGraph_DeterministicResourceExhausted(t *testing.T) {
 	}
 	if len(stream.data) != 0 {
 		t.Fatalf("expected no data streamed on failure, got %d bytes", len(stream.data))
+	}
+}
+
+// =========================================================================
+// Crash-window / durability pins (special-fixer review items)
+// =========================================================================
+
+// TestCommitTransaction_RecoveredPartialCommitRehydratesAfterStartupRebuild
+// pins the CommitTransaction cross-restart retry (SPEC serialisation flow
+// retry contract): a crash between main's re-hydration and the fast-forward
+// merge, followed by the unconditional startup rebuild
+// (rehydrateMainAfterRecovery, cmd/main.go) which re-hydrates main.lbug from
+// git main's pre-transaction tree, must not leave the retried commit skipping
+// re-hydration. Recovery must clear the durable CommitHydrated flag so the
+// retried commit re-hydrates from the transaction branch and main.lbug
+// converges with git main.
+func TestCommitTransaction_RecoveredPartialCommitRehydratesAfterStartupRebuild(t *testing.T) {
+	ctx := testCtx()
+	dataPath := t.TempDir()
+	opPub, _ := generateTestKey()
+
+	st, err := ladybug.Open(dataPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	gs, err := gitstore.New(dataPath)
+	if err != nil {
+		t.Fatalf("open git store: %v", err)
+	}
+	// The first commit's fast-forward merge fails, simulating the crash
+	// window between main's re-hydration and the merge.
+	failingGit := &mergeFailingGitStore{GitStore: gs, failMerge: true}
+	srv := NewCartographerServer(
+		st, failingGit, opPub, initTestKey(), nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000,
+		WithLadybugPath(dataPath),
+	)
+	srv.MarkDBReady()
+	applyTestSchema(ctx, t, st)
+	// Git main is non-empty, so the startup rebuild runs on restart.
+	mainEntity, err := st.CreateEntity(ctx, "Component", "", map[string]string{"name": "main"}, nil, "main")
+	if err != nil {
+		t.Fatalf("create main entity: %v", err)
+	}
+	commitGitEntity(ctx, t, gs, mainEntity.Id, "main")
+
+	begin, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
+	if err != nil {
+		t.Fatalf("BeginTransaction: %v", err)
+	}
+	created, err := srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
+		EntityType: "Component", Properties: map[string]string{"name": "tx"}, TransactionId: begin.TransactionId,
+	})
+	if err != nil {
+		t.Fatalf("CreateEntity: %v", err)
+	}
+	// First commit: the re-hydration completes (CommitHydrated=true persists)
+	// but the merge fails — the crash window.
+	if _, err := srv.CommitTransaction(ctx, &flowv1.CommitTransactionRequest{
+		TransactionId: begin.TransactionId,
+	}); err == nil {
+		t.Fatal("expected merge failure")
+	}
+
+	// Simulate restart.
+	if err := st.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+	if err := gs.Close(); err != nil {
+		t.Fatalf("close git store: %v", err)
+	}
+	reopened, err := ladybug.Open(dataPath)
+	if err != nil {
+		t.Fatalf("reopen store: %v", err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	reopenedGit, err := gitstore.New(dataPath)
+	if err != nil {
+		t.Fatalf("reopen git store: %v", err)
+	}
+	t.Cleanup(func() { _ = reopenedGit.Close() })
+	// Simulate the unconditional startup rebuild (rehydrateMainAfterRecovery):
+	// restore the working tree to main, then re-hydrate main.lbug from git
+	// main — which does NOT contain the un-merged transaction commit.
+	if err := reopenedGit.WithGitLock(func() error {
+		if err := reopenedGit.RestoreMain(ctx); err != nil {
+			return err
+		}
+		return reopenedGit.CleanUntracked(ctx)
+	}); err != nil {
+		t.Fatalf("restore main before rebuild: %v", err)
+	}
+	entitiesDir, edgesDir := reopenedGit.HydrationDirs()
+	if err := reopened.RehydrateMainFromFiles(ctx, entitiesDir, edgesDir); err != nil {
+		t.Fatalf("simulate startup rebuild: %v", err)
+	}
+	// The rebuild left main.lbug pre-transaction.
+	if _, err := reopened.GetEntity(ctx, created.EntityId, "main"); !errors.Is(err, store.ErrEntityNotFound) {
+		t.Fatalf("main.lbug should serve pre-transaction data after the rebuild, got err=%v", err)
+	}
+
+	restarted := NewCartographerServer(
+		reopened, reopenedGit, opPub, initTestKey(), nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000,
+		WithLadybugPath(dataPath),
+	)
+	restarted.MarkDBReady()
+	if err := restarted.RecoverOpenTransactions(ctx); err != nil {
+		t.Fatalf("RecoverOpenTransactions: %v", err)
+	}
+	state, err := restarted.txManager.Lookup(begin.TransactionId)
+	if err != nil || state.CommitHydrated {
+		t.Fatalf("recovered partial commit must not carry CommitHydrated: state=%+v err=%v", state, err)
+	}
+	// Retry the commit: it must re-hydrate main from the transaction branch's
+	// files (CommitHydrated was cleared) so main.lbug converges with git main.
+	if _, err := restarted.CommitTransaction(ctx, &flowv1.CommitTransactionRequest{
+		TransactionId: begin.TransactionId,
+	}); err != nil {
+		t.Fatalf("retry CommitTransaction: %v", err)
+	}
+	if _, err := reopened.GetEntity(ctx, created.EntityId, "main"); err != nil {
+		t.Fatalf("committed transaction entity missing from main.lbug after restart-retry: %v", err)
+	}
+}
+
+// TestRefreshTransaction_CrashSafeRebuildPreservesBranchDBOnFailure pins the
+// RefreshTransaction branch-DB rebuild's crash-safety property: when the
+// refresh's re-hydration fails, the existing branch DB — the only durable
+// record of the transaction's mutations (SPEC R9 change-log recovery) — must
+// survive, and no temporary files may leak.
+func TestRefreshTransaction_CrashSafeRebuildPreservesBranchDBOnFailure(t *testing.T) {
+	ctx := testCtx()
+	dataPath := t.TempDir()
+	st, err := ladybug.Open(dataPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	gs, err := gitstore.New(dataPath)
+	if err != nil {
+		t.Fatalf("open git store: %v", err)
+	}
+	t.Cleanup(func() { _ = gs.Close() })
+	// Fail the refresh's branch re-hydration (the 2nd HydrateBranchFromFiles
+	// call — the 1st is BeginTransaction's).
+	release := make(chan struct{})
+	close(release)
+	blocking := &hydrationBlockingStore{
+		Store: st, blocked: make(chan struct{}), release: release, fail: true,
+	}
+	opPub, _ := generateTestKey()
+	srv := NewCartographerServer(
+		blocking, gs, opPub, initTestKey(), nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000,
+		WithLadybugPath(dataPath),
+	)
+	srv.MarkDBReady()
+	applyTestSchema(ctx, t, st)
+	begin, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
+	if err != nil {
+		t.Fatalf("BeginTransaction: %v", err)
+	}
+	created, err := srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
+		EntityType: "Component", Properties: map[string]string{"name": "tx"}, TransactionId: begin.TransactionId,
+	})
+	if err != nil {
+		t.Fatalf("CreateEntity: %v", err)
+	}
+	commitGitEntity(ctx, t, gs, testMutationEntityID, "main")
+
+	if _, err := srv.RefreshTransaction(ctx, &flowv1.RefreshTransactionRequest{
+		TransactionId: begin.TransactionId,
+	}); err == nil {
+		t.Fatal("expected refresh hydration failure")
+	}
+	// The existing branch DB — the only durable record of the transaction's
+	// mutations — must survive the failed rebuild.
+	if _, err := os.Stat(filepath.Join(dataPath, "branches", begin.TransactionId+".lbug")); err != nil {
+		t.Fatalf("transaction branch DB was destroyed by the failed refresh: %v", err)
+	}
+	ent, err := st.GetEntity(ctx, created.EntityId, begin.TransactionId)
+	if err != nil {
+		t.Fatalf("transaction mutation lost after failed refresh: %v", err)
+	}
+	if ent.Properties["name"] != "tx" {
+		t.Fatalf("transaction entity content = %+v, want name=tx", ent.Properties)
+	}
+	// No leftover temporary branch files from the aborted rebuild. The
+	// engine's `<key>.lbug.wal` write-ahead-log artifact is deliberately
+	// ignored: the store's DropBranchDB removes only the `.lbug`/`.schema.json`/
+	// `.state.json` files (a pre-existing store behavior applying to every
+	// branch drop), so the assertion pins that no temporary *branch DB*
+	// resources leak.
+	entries, err := os.ReadDir(filepath.Join(dataPath, "branches"))
+	if err != nil {
+		t.Fatalf("read branches dir: %v", err)
+	}
+	expected := map[string]bool{
+		begin.TransactionId + ".lbug":        true,
+		begin.TransactionId + ".schema.json": true,
+		begin.TransactionId + ".state.json":  true,
+	}
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".wal") {
+			continue
+		}
+		if !expected[e.Name()] {
+			t.Fatalf("leftover branch file from aborted refresh: %q", e.Name())
+		}
+	}
+}
+
+// TestRefreshTransaction_FileBackedCrashSafeSwap exercises the crash-safe
+// rebuild+swap on a file-backed store end to end: the refreshed branch reflects
+// main's new state plus the transaction's changes, and the subsequent commit
+// converges main.lbug with git main.
+func TestRefreshTransaction_FileBackedCrashSafeSwap(t *testing.T) {
+	ctx := testCtx()
+	dataPath := t.TempDir()
+	opPub, _ := generateTestKey()
+	st, err := ladybug.Open(dataPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	gs, err := gitstore.New(dataPath)
+	if err != nil {
+		t.Fatalf("open git store: %v", err)
+	}
+	t.Cleanup(func() { _ = gs.Close() })
+	srv := NewCartographerServer(
+		st, gs, opPub, initTestKey(), nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000,
+		WithLadybugPath(dataPath),
+	)
+	srv.MarkDBReady()
+	applyTestSchema(ctx, t, st)
+	mainEntity, err := st.CreateEntity(ctx, "Component", "", map[string]string{"name": "main"}, nil, "main")
+	if err != nil {
+		t.Fatalf("create main entity: %v", err)
+	}
+	commitGitEntity(ctx, t, gs, mainEntity.Id, "main")
+
+	begin, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
+	if err != nil {
+		t.Fatalf("BeginTransaction: %v", err)
+	}
+	txEntity, err := srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
+		EntityType: "Component", Properties: map[string]string{"name": "tx"}, TransactionId: begin.TransactionId,
+	})
+	if err != nil {
+		t.Fatalf("CreateEntity: %v", err)
+	}
+	// Main advances while the transaction is open.
+	interim, err := st.CreateEntity(ctx, "Component", "", map[string]string{"name": "interim"}, nil, "main")
+	if err != nil {
+		t.Fatalf("create interim entity: %v", err)
+	}
+	commitGitEntity(ctx, t, gs, interim.Id, "interim")
+
+	if _, err := srv.RefreshTransaction(ctx, &flowv1.RefreshTransactionRequest{
+		TransactionId: begin.TransactionId,
+	}); err != nil {
+		t.Fatalf("RefreshTransaction: %v", err)
+	}
+	// The refreshed branch reflects main's new state plus the transaction's
+	// change (all reads go through the swapped-in branch DB).
+	for _, probe := range []struct{ id, want string }{
+		{mainEntity.Id, "main"}, {interim.Id, "interim"}, {txEntity.EntityId, "tx"},
+	} {
+		ent, err := st.GetEntity(ctx, probe.id, begin.TransactionId)
+		if err != nil {
+			t.Fatalf("entity %s missing from refreshed branch: %v", probe.id, err)
+		}
+		if ent.Properties["name"] != probe.want {
+			t.Fatalf("entity %s on branch has name %q, want %q", probe.id, ent.Properties["name"], probe.want)
+		}
+	}
+	// The commit succeeds and main.lbug converges with git main.
+	if _, err := srv.CommitTransaction(ctx, &flowv1.CommitTransactionRequest{
+		TransactionId: begin.TransactionId,
+	}); err != nil {
+		t.Fatalf("CommitTransaction after file-backed refresh: %v", err)
+	}
+	for _, probe := range []struct{ id, want string }{
+		{mainEntity.Id, "main"}, {interim.Id, "interim"}, {txEntity.EntityId, "tx"},
+	} {
+		ent, err := st.GetEntity(ctx, probe.id, "main")
+		if err != nil {
+			t.Fatalf("entity %s missing from main after commit: %v", probe.id, err)
+		}
+		if ent.Properties["name"] != probe.want {
+			t.Fatalf("entity %s on main has name %q, want %q", probe.id, ent.Properties["name"], probe.want)
+		}
+	}
+}
+
+// TestRecoverOpenTransactionsMissingStateRollsBack pins the BeginTransaction
+// crash-window recovery (SPEC R9 change-log recovery): a git branch whose
+// branch DB exists but whose state record is missing (crash between
+// HydrateBranchFromFiles and persistTransactionState) must be rolled back
+// instead of hard-failing startup.
+func TestRecoverOpenTransactionsMissingStateRollsBack(t *testing.T) {
+	ctx := testCtx()
+	dataPath := t.TempDir()
+	st, err := ladybug.Open(dataPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	gs, err := gitstore.New(dataPath)
+	if err != nil {
+		t.Fatalf("open git store: %v", err)
+	}
+	opPub, _ := generateTestKey()
+	srv := NewCartographerServer(
+		st, gs, opPub, initTestKey(), nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000,
+		WithLadybugPath(dataPath),
+	)
+	applyTestSchema(ctx, t, st)
+	begin, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
+	if err != nil {
+		t.Fatalf("BeginTransaction: %v", err)
+	}
+	branchDBPath := filepath.Join(dataPath, "branches", begin.TransactionId+".lbug")
+	if _, err := os.Stat(branchDBPath); err != nil {
+		t.Fatalf("stat persisted branch DB: %v", err)
+	}
+	// Simulate the BeginTransaction crash window: the branch DB and git branch
+	// persist but the state record was never written.
+	if err := os.Remove(filepath.Join(dataPath, "branches", begin.TransactionId+".state.json")); err != nil {
+		t.Fatalf("remove state record: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+	if err := gs.Close(); err != nil {
+		t.Fatalf("close git store: %v", err)
+	}
+
+	reopened, err := ladybug.Open(dataPath)
+	if err != nil {
+		t.Fatalf("reopen store: %v", err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	reopenedGit, err := gitstore.New(dataPath)
+	if err != nil {
+		t.Fatalf("reopen git store: %v", err)
+	}
+	t.Cleanup(func() { _ = reopenedGit.Close() })
+	restarted := NewCartographerServer(
+		reopened, reopenedGit, opPub, initTestKey(), nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000,
+		WithLadybugPath(dataPath),
+	)
+	// Recovery must roll the harmless transaction back, not wedge startup.
+	if err := restarted.RecoverOpenTransactions(ctx); err != nil {
+		t.Fatalf("RecoverOpenTransactions with missing state record: %v", err)
+	}
+	if _, err := os.Stat(branchDBPath); !os.IsNotExist(err) {
+		t.Fatalf("missing-state transaction branch DB was not rolled back: %v", err)
+	}
+	if err := reopenedGit.WithGitLock(func() error {
+		exists, err := reopenedGit.BranchExists(ctx, begin.TransactionId)
+		if err != nil {
+			return err
+		}
+		if exists {
+			return fmt.Errorf("missing-state transaction git branch still exists")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Startup continues: a fresh transaction begins normally.
+	if _, err := restarted.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{}); err != nil {
+		t.Fatalf("BeginTransaction after missing-state recovery: %v", err)
+	}
+}
+
+// TestCommitTransaction_MergeCompletedAckWaitsForPush pins the MergeCompleted
+// retry path's WithAck contract (SPEC R10, SPEC:630-634): an acked commit
+// retried after the merge landed must wake the sync worker and block until the
+// push is delivered — it must not return success while the push flag is still
+// set.
+func TestCommitTransaction_MergeCompletedAckWaitsForPush(t *testing.T) {
+	ladybugPath := t.TempDir()
+	gs, err := gitstore.New(ladybugPath)
+	if err != nil {
+		t.Fatalf("gitstore.New: %v", err)
+	}
+	syncGit := &syncMockGitStore{
+		GitStore:    gs,
+		pushEntered: make(chan struct{}),
+		pushRelease: make(chan struct{}),
+	}
+	t.Cleanup(syncGit.releasePush)
+	base, err := ladybug.OpenInMemory()
+	if err != nil {
+		t.Fatalf("OpenInMemory: %v", err)
+	}
+	t.Cleanup(func() { _ = base.Close() })
+	// Fail only the "persist completed merge" state write so the first commit
+	// leaves MergeCompleted=true in memory with the git merge already landed.
+	failingStore := &transactionStateFailingStore{
+		Store: base,
+		fail:  func(state store.BranchTransactionState) bool { return state.MergeCompleted },
+	}
+	fc := newFakeClock(time.Now())
+	sw := NewSyncWorker("https://example.com/repo.git", syncGit, failingStore, fc)
+	go sw.Run()
+	t.Cleanup(sw.Stop)
+	opPub, _ := generateTestKey()
+	srv := NewCartographerServer(
+		failingStore, syncGit, opPub, initTestKey(), nil, "https://example.com/repo.git",
+		30*time.Second, "test-ns", 30*time.Minute, 100000, WithLadybugPath(ladybugPath), WithSyncWorker(sw),
+	)
+	srv.MarkDBReady()
+	waitFor(t, func() bool { return fc.tickers() >= 1 }, "startup cycle")
+
+	ctx := testCtx()
+	applyTestSchema(ctx, t, base)
+	begin, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
+	if err != nil {
+		t.Fatalf("BeginTransaction: %v", err)
+	}
+	if _, err := srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
+		EntityType: "Component", Properties: map[string]string{"name": "merged"},
+		TransactionId: begin.TransactionId,
+	}); err != nil {
+		t.Fatalf("CreateEntity: %v", err)
+	}
+	// First attempt: the fast-forward merge lands on main, but persisting
+	// MergeCompleted fails, so CommitTransaction returns before the normal-path
+	// push wiring.
+	if _, err := srv.CommitTransaction(ctx, &flowv1.CommitTransactionRequest{
+		TransactionId: begin.TransactionId,
+	}); err == nil || !strings.Contains(err.Error(), "state write failure") {
+		t.Fatalf("CommitTransaction error=%v", err)
+	}
+	state, err := srv.txManager.Lookup(begin.TransactionId)
+	if err != nil || !state.MergeCompleted {
+		t.Fatalf("MergeCompleted not retained: state=%+v err=%v", state, err)
+	}
+	// Retry with Ack: the MergeCompleted path must wake the worker and block
+	// until the sync cycle delivers the push.
+	commitDone := make(chan error, 1)
+	go func() {
+		_, err := srv.CommitTransaction(ctx, &flowv1.CommitTransactionRequest{
+			TransactionId: begin.TransactionId, Ack: true,
+		})
+		commitDone <- err
+	}()
+	select {
+	case <-syncGit.pushEntered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("acked MergeCompleted commit never reached the sync worker's push")
+	}
+	select {
+	case err := <-commitDone:
+		t.Fatalf("MergeCompleted commit returned before the push was delivered: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	syncGit.releasePush()
+	if err := <-commitDone; err != nil {
+		t.Fatalf("MergeCompleted acked commit returned error after the push was delivered: %v", err)
+	}
+	syncGit.mu.Lock()
+	pushCalls := syncGit.pushCalls
+	syncGit.mu.Unlock()
+	if pushCalls != 1 {
+		t.Fatalf("expected exactly 1 push for the acked MergeCompleted commit, got %d", pushCalls)
+	}
+	if srv.syncWorker.pushNeeded.Load() {
+		t.Fatal("push flag not cleared after the acked push")
+	}
+}
+
+// TestStopGC_ConcurrentCallsDoNotPanic pins the StopGC close-once
+// synchronisation: concurrent StopGC calls must not race on the gcStop channel
+// close (the select/default idiom is a data race; the fix guards the close with
+// a sync.Once).
+func TestStopGC_ConcurrentCallsDoNotPanic(t *testing.T) {
+	srv, _ := newTestServer(t)
+	srv.StartGC()
+	var wg sync.WaitGroup
+	for range 4 {
+		wg.Go(func() {
+			srv.StopGC()
+		})
+	}
+	wg.Wait()
+	// Sequential idempotency after the concurrent burst.
+	srv.StopGC()
+}
+
+// TestDeleteEdge_ReturnsFullDeletedEdge pins SPEC R2's "DeleteEdge(id,
+// transactionId?) … Returns the deleted edge": the response must carry the
+// deleted edge's endpoints and properties (the SDK builds the returned Edge
+// from these fields).
+func TestDeleteEdge_ReturnsFullDeletedEdge(t *testing.T) {
+	srv, _ := newTestServer(t)
+	ctx := testCtx()
+
+	applyTestSchema(ctx, t, srv.store)
+	txID := beginTestTx(t, srv, ctx)
+	svc, err := srv.store.CreateEntity(ctx, "Service", "", map[string]string{"name": "svc"}, nil, txID)
+	if err != nil {
+		t.Fatalf("create service: %v", err)
+	}
+	comp, err := srv.store.CreateEntity(ctx, "Component", "", map[string]string{"name": "core"}, nil, txID)
+	if err != nil {
+		t.Fatalf("create component: %v", err)
+	}
+
+	createResp, err := srv.CreateEdge(ctx, &flowv1.CreateEdgeRequest{
+		EdgeType:      "DEPENDS_ON",
+		FromEntityId:  svc.Id,
+		ToEntityId:    comp.Id,
+		Properties:    map[string]string{"weight": "high"},
+		TransactionId: txID,
+	})
+	if err != nil {
+		t.Fatalf("CreateEdge failed: %v", err)
+	}
+
+	deleteResp, err := srv.DeleteEdge(ctx, &flowv1.DeleteEdgeRequest{Id: createResp.EdgeId, TransactionId: txID})
+	if err != nil {
+		t.Fatalf("DeleteEdge failed: %v", err)
+	}
+	if deleteResp.EdgeId != createResp.EdgeId {
+		t.Fatalf("expected deleted edge ID %q, got %q", createResp.EdgeId, deleteResp.EdgeId)
+	}
+	if deleteResp.FromEntityId != svc.Id {
+		t.Fatalf("deleted edge from-entity = %q, want %q", deleteResp.FromEntityId, svc.Id)
+	}
+	if deleteResp.ToEntityId != comp.Id {
+		t.Fatalf("deleted edge to-entity = %q, want %q", deleteResp.ToEntityId, comp.Id)
+	}
+	if deleteResp.Properties["weight"] != "high" {
+		t.Fatalf("deleted edge properties = %v, want weight=high", deleteResp.Properties)
 	}
 }

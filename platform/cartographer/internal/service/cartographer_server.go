@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"os"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -68,7 +69,8 @@ type CartographerServer struct {
 
 	syncWorker *SyncWorker
 
-	gcStop chan struct{}
+	gcStop     chan struct{}
+	gcStopOnce sync.Once
 }
 
 // NewCartographerServer creates a new CartographerServer.
@@ -131,12 +133,14 @@ func (s *CartographerServer) Verifier() *CapabilityVerifier { return s.verifier 
 
 func (s *CartographerServer) MarkDBReady() { s.dbReady.Store(true) }
 func (s *CartographerServer) StartGC()     { go s.startGC() }
+
+// StopGC stops the garbage-collection loop. The close is guarded by a
+// sync.Once: StopGC can be called concurrently (e.g. the shutdown path and a
+// test teardown racing it), and the select/default close-once idiom is a data
+// race on the channel — two concurrent calls can both observe it unclosed and
+// both close it, panicking with "close of closed channel".
 func (s *CartographerServer) StopGC() {
-	select {
-	case <-s.gcStop:
-	default:
-		close(s.gcStop)
-	}
+	s.gcStopOnce.Do(func() { close(s.gcStop) })
 }
 
 // Publish telemetry event.
@@ -366,6 +370,20 @@ func (s *CartographerServer) RecoverOpenTransactions(ctx context.Context) error 
 		}
 		durableState, stateErr := s.store.LoadBranchTransactionState(ctx, txID)
 		if stateErr != nil {
+			// BeginTransaction crash window (SPEC R9 change-log recovery): a
+			// crash between HydrateBranchFromFiles and persistTransactionState
+			// leaves the git branch and branch DB present but no
+			// branches/<txID>.state.json record. The caller can never have
+			// received the txID (the BeginTransaction response is sent only
+			// after the persist succeeds), so the transaction is provably
+			// harmless — roll it back instead of hard-failing startup.
+			if isMissingBranchStateError(stateErr) {
+				if err := s.cleanupMissingRecoveryBranch(ctx, txID); err != nil {
+					return fmt.Errorf("roll back transaction with missing state record %q: %w", txID, err)
+				}
+				slog.Warn("RecoverOpenTransactions: rolled back branch with missing state record", "tx_id", txID)
+				continue
+			}
 			return fmt.Errorf("read transaction state %q: %w", txID, stateErr)
 		}
 		edges, dumpErr := s.store.DumpAllEdges(ctx, txID)
@@ -417,7 +435,20 @@ func (s *CartographerServer) RecoverOpenTransactions(ctx context.Context) error 
 		state.SchemaHash = durableState.SchemaHash
 		state.CommitStarted = durableState.CommitStarted
 		state.CommitCreated = durableState.CommitCreated
-		state.CommitHydrated = durableState.CommitHydrated
+		// The unconditional startup rebuild (rehydrateMainAfterRecovery,
+		// cmd/main.go) re-hydrated main.lbug from git main's working tree
+		// before recovery ran. A durable CommitHydrated=true records that
+		// main.lbug held the transaction's data at crash time — but the
+		// rebuild read git main, which contains the transaction only if the
+		// merge landed. The diff above is non-empty, so the merge never
+		// landed and main.lbug now serves pre-transaction data; carrying the
+		// flag forward would make the retried commit skip re-hydration (the
+		// SPEC serialisation-flow retry contract "steps 6-9 are skipped — the
+		// main DB is already hydrated" holds only for an in-process retry,
+		// where the startup rebuild did not run) and leave main.lbug
+		// permanently divergent from git main. Clear it so the retried commit
+		// re-hydrates from the transaction branch's files.
+		state.CommitHydrated = false
 		state.MainRehydrated = durableState.MainRehydrated
 		state.MergeCompleted = durableState.MergeCompleted
 		slog.Info("RecoverOpenTransactions: recovered", "tx_id", txID)
@@ -427,6 +458,17 @@ func (s *CartographerServer) RecoverOpenTransactions(ctx context.Context) error 
 
 func (s *CartographerServer) cleanupMissingRecoveryBranch(ctx context.Context, txID string) error {
 	return s.cleanupTransaction(ctx, &TransactionState{ID: txID})
+}
+
+// isMissingBranchStateError reports whether LoadBranchTransactionState failed
+// because no durable lifecycle record exists for the branch — the
+// BeginTransaction crash window (git branch + branch DB persisted, state
+// record never written). The store returns a plain message error for the
+// missing record ("branch state is missing"); every other state error
+// (corrupt record, unsupported version, invalid baseline) is a genuine state
+// problem and stays a hard failure.
+func isMissingBranchStateError(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "branch state is missing")
 }
 
 func (s *CartographerServer) cleanupIdenticalRecoveryBranch(ctx context.Context, txID string) error {
@@ -1459,8 +1501,14 @@ func (s *CartographerServer) DeleteEdge(
 	}); err != nil {
 		return nil, mapGitError(err)
 	}
+	// SPEC R2: "DeleteEdge(id, transactionId?) … Returns the deleted edge".
+	// The store's DeleteEdge returns the full edge record (endpoints and
+	// properties, via findEdgeByID), so populate every declared field — the
+	// SDK's tx.DeleteEdge builds the returned Edge from these fields, and
+	// omitting them would silently drop the edge's endpoints and properties.
 	return &flowv1.DeleteEdgeResponse{
 		EdgeId: edge.Id, EdgeType: edge.Type,
+		FromEntityId: edge.FromEntityID, ToEntityId: edge.ToEntityID, Properties: edge.Properties,
 	}, nil
 }
 
@@ -1639,6 +1687,16 @@ func (s *CartographerServer) CommitTransaction(
 		}
 		if err := s.cleanupTransaction(ctx, state); err != nil {
 			return nil, mapGitError(err)
+		}
+		// SPEC R10 (SPEC:630-634): WithAck blocks until the sync cycle
+		// delivers the push, mirroring the main commit path below. Without
+		// this, an acked commit retried on the MergeCompleted path returns
+		// success while the push flag is still set and the commit is
+		// undelivered.
+		if s.syncWorker != nil && req.GetAck() {
+			if syncErr := s.syncWorker.WakeAndWait(ctx); syncErr != nil {
+				return nil, mapGitError(syncErr)
+			}
 		}
 		return &flowv1.CommitTransactionResponse{}, nil
 	}
@@ -2104,20 +2162,103 @@ func (s *CartographerServer) validateRefresh(
 	return nil
 }
 
+// resetBranchStoreFromWorkingTree rebuilds the transaction's branch DB from
+// the current git working tree (the transaction branch, reset to main's state
+// at Refresh step 1). SPEC R9 change-log recovery reconstructs the
+// transaction's change log from the branch DB on restart, so the branch DB is
+// the only durable record of the transaction's mutations — the in-memory
+// change log is lost at a crash and the working tree was reset to main. The
+// rebuild therefore builds the replacement branch DB (under a temporary key)
+// and swaps it in only after it is fully hydrated, so a crash at any point
+// before the swap leaves the previous branch DB (and hence the transaction's
+// mutations) intact.
 func (s *CartographerServer) resetBranchStoreFromWorkingTree(ctx context.Context, txID string) error {
 	if s.ladybugPath == "" {
 		return status.Error(codes.FailedPrecondition, "refresh requires LADYBUG_DB_PATH")
 	}
+	oldPath := filepath.Join(s.ladybugPath, "branches", txID+".lbug")
+	if _, err := os.Stat(oldPath); err != nil {
+		// No persisted branch DB file (in-memory branch store — the standard
+		// test configuration): nothing survives a process crash, so the
+		// drop-and-recreate window below cannot lose durable data. Keep the
+		// simple in-place rebuild.
+		if err := s.store.DropBranchDB(ctx, txID); err != nil {
+			return mapStoreError(err)
+		}
+		return s.buildBranchStoreFromWorkingTree(ctx, txID)
+	}
+
+	// File-backed branch: build the replacement under a temporary key, then
+	// swap. The replacement must be fully built (schema replicated + hydrated)
+	// before the existing branch DB is dropped.
+	tempID := s.newIDFn()
+	if err := s.buildBranchStoreFromWorkingTree(ctx, tempID); err != nil {
+		_ = s.store.DropBranchDB(ctx, tempID)
+		return err
+	}
+	state, lookupErr := s.txManager.Lookup(txID)
+	if lookupErr != nil {
+		_ = s.store.DropBranchDB(ctx, tempID)
+		return errTransactionNotFound(txID)
+	}
+	// Mirror the transaction's durable lifecycle record under the temporary
+	// key so the swap never leaves the branch without a state record (the
+	// final persist in RefreshTransaction rewrites it with the refreshed
+	// baseline).
+	if err := s.store.SaveBranchTransactionState(ctx, tempID, durableTransactionState(state)); err != nil {
+		_ = s.store.DropBranchDB(ctx, tempID)
+		return mapStoreError(err)
+	}
+	// Drop the old branch DB (the store's in-memory handle must be released so
+	// the next operation reopens the replacement from the swapped-in files),
+	// then move the replacement files onto the transaction's canonical names.
 	if err := s.store.DropBranchDB(ctx, txID); err != nil {
+		_ = s.store.DropBranchDB(ctx, tempID)
 		return mapStoreError(err)
 	}
-	if err := s.store.CreateBranchDB(ctx, txID); err != nil {
+	branchesDir := filepath.Join(s.ladybugPath, "branches")
+	// Move the replacement files onto the transaction's canonical names.
+	// ponytail: the engine's write-ahead-log companion (`<temp>.lbug.wal`) is
+	// deliberately NOT renamed. Renaming it alongside the open database file
+	// makes the engine's re-open of the swapped-in DB crash (the engine does
+	// path-based WAL recovery); leaving it behind means the swapped-in `.lbug`
+	// holds the full data only after the temp connection's close (the
+	// DropBranchDB below) checkpoints the WAL into it. Residual window: a
+	// crash between the `.lbug` rename and that close can lose the few
+	// un-checkpointed rows still in the orphaned WAL — a narrower version of
+	// the pre-existing refresh crash-window data loss, and the branch DB file
+	// itself is never absent (SPEC R9 change-log recovery). Upgrade path: a
+	// store primitive that atomically replaces a branch DB (close-and-rename
+	// in one step) would close even this window.
+	for _, pair := range [][2]string{
+		{tempID + ".lbug", txID + ".lbug"},
+		{tempID + ".schema.json", txID + ".schema.json"},
+		{tempID + ".state.json", txID + ".state.json"},
+	} {
+		src, dst := filepath.Join(branchesDir, pair[0]), filepath.Join(branchesDir, pair[1])
+		if _, err := os.Stat(src); err != nil {
+			continue
+		}
+		if err := os.Rename(src, dst); err != nil {
+			return fmt.Errorf("swap refreshed branch DB for %q: %w", txID, err)
+		}
+	}
+	// Release the temporary key's in-memory registration (its files were
+	// renamed onto the transaction's canonical names above).
+	return mapStoreError(s.store.DropBranchDB(ctx, tempID))
+}
+
+// buildBranchStoreFromWorkingTree creates a fresh branch DB for key and
+// populates it with main's schema and the working tree's file-per-element
+// data (Refresh flow step 2).
+func (s *CartographerServer) buildBranchStoreFromWorkingTree(ctx context.Context, key string) error {
+	if err := s.store.CreateBranchDB(ctx, key); err != nil {
 		return mapStoreError(err)
 	}
-	if err := s.store.ReplicateSchemaToBranch(ctx, txID); err != nil {
+	if err := s.store.ReplicateSchemaToBranch(ctx, key); err != nil {
 		return mapStoreError(err)
 	}
-	if err := s.store.HydrateBranchFromFiles(ctx, txID,
+	if err := s.store.HydrateBranchFromFiles(ctx, key,
 		filepath.Join(s.ladybugPath, "graph-repo/entities"),
 		filepath.Join(s.ladybugPath, "graph-repo/edges")); err != nil {
 		return mapStoreError(err)
