@@ -365,6 +365,36 @@ func assertSignedCapabilitiesOnMD(t *testing.T, pub ed25519.PublicKey, md metada
 	}
 }
 
+// TestCartographerProxy_NodeCapabilities_NilPassThrough pins the
+// non-node-originated nil branch of nodeCapabilities (SPEC R3 / Capability
+// Authorisation Chain): a request carrying no x-flow-node-id — no incoming
+// metadata at all, or metadata without the node identity — yields a nil
+// capability set, which makes checkCapability pass the request through
+// unchecked (even a blocking fixed gate) and leaves the Cartographer's ingress
+// verifier as the security boundary. The wire harness always injects
+// x-flow-node-id via the identity interceptor (entry-bound fallback), so these
+// branches are unreachable through the E2E path and are pinned directly.
+func TestCartographerProxy_NodeCapabilities_NilPassThrough(t *testing.T) {
+	if caps := nodeCapabilities(context.Background()); caps != nil {
+		t.Fatalf("expected nil capabilities for a context with no metadata, got %v", caps)
+	}
+
+	noNodeID := metadata.NewIncomingContext(
+		context.Background(),
+		metadata.Pairs("x-flow-namespace", "wire-ns"),
+	)
+	if caps := nodeCapabilities(noNodeID); caps != nil {
+		t.Fatalf("expected nil capabilities for metadata without x-flow-node-id, got %v", caps)
+	}
+
+	// A nil capability set is treated as a system-to-system call: even the
+	// fixed blocking tx gate passes through instead of denying.
+	p := &CartographerProxy{}
+	if err := p.checkCapability(context.Background(), "WRITE", "graph/tx", true); err != nil {
+		t.Fatalf("expected checkCapability to pass through on nil capabilities, got %v", err)
+	}
+}
+
 // TestCartographerProxy_E2E_ExecuteCypher exercises the full read-path wire
 // chain: the SDK's ExecuteCypher (no entity-type metadata — SPEC R3) reaches
 // the fake Cartographer through the Sidecar proxy carrying a capability
@@ -508,9 +538,9 @@ func TestCartographerProxy_E2E_ZeroCapabilityNode_PassesMode2(t *testing.T) {
 // TestCartographerProxy_E2E_Mode1_AllTypesSearch_BlocksPerTypeGrantOnly pins the
 // omitted-type (all-types) read-search branch (SPEC R3:262): a node holding
 // only a per-type READ:graph/entity/Component grant cannot perform a
-// type-omitted SearchNeighbors or FullTextSearch — a per-type capability
-// cannot authorise an all-types search, so the Sidecar blocks the request with
-// PERMISSION_DENIED before it reaches the Cartographer.
+// type-omitted SearchNeighbors, FullTextSearch, or ListEntities — a per-type
+// capability cannot authorise an all-types search, so the Sidecar blocks the
+// request with PERMISSION_DENIED before it reaches the Cartographer.
 func TestCartographerProxy_E2E_Mode1_AllTypesSearch_BlocksPerTypeGrantOnly(t *testing.T) {
 	const caps = "READ:graph/entity/Component,WRITE:graph/tx"
 	capture, client, _ := setupCartographerWire(t, caps)
@@ -528,6 +558,11 @@ func TestCartographerProxy_E2E_Mode1_AllTypesSearch_BlocksPerTypeGrantOnly(t *te
 	} else if st, ok := status.FromError(err); !ok || st.Code() != codes.PermissionDenied {
 		t.Fatalf("expected PermissionDenied, got %v", err)
 	}
+	if _, err := graph.ListEntities(""); err == nil {
+		t.Fatal("expected an all-types ListEntities without READ:graph/entity/* to be blocked")
+	} else if st, ok := status.FromError(err); !ok || st.Code() != codes.PermissionDenied {
+		t.Fatalf("expected PermissionDenied, got %v", err)
+	}
 	if capture.count() != before {
 		t.Fatal("mode-1 block must prevent the requests from reaching the Cartographer")
 	}
@@ -535,8 +570,8 @@ func TestCartographerProxy_E2E_Mode1_AllTypesSearch_BlocksPerTypeGrantOnly(t *te
 
 // TestCartographerProxy_E2E_Mode1_AllTypesSearch_PassesWithWildcardGrant pins
 // the all-types search success path (SPEC R3:262): a node holding
-// READ:graph/entity/* can perform a type-omitted SearchNeighbors and the
-// request reaches the Cartographer.
+// READ:graph/entity/* can perform a type-omitted SearchNeighbors and
+// ListEntities and the requests reach the Cartographer.
 func TestCartographerProxy_E2E_Mode1_AllTypesSearch_PassesWithWildcardGrant(t *testing.T) {
 	const caps = "READ:graph/entity/*"
 	capture, client, _ := setupCartographerWire(t, caps)
@@ -546,6 +581,13 @@ func TestCartographerProxy_E2E_Mode1_AllTypesSearch_PassesWithWildcardGrant(t *t
 	}
 	if capture.lastMethod() != methodSearchNeighbors {
 		t.Fatalf("expected the Cartographer to receive SearchNeighbors, got %q", capture.lastMethod())
+	}
+
+	if _, err := client.GetGraph().ListEntities(""); err != nil {
+		t.Fatalf("all-types ListEntities with READ:graph/entity/* should pass mode-1: %v", err)
+	}
+	if capture.lastMethod() != methodListEntities {
+		t.Fatalf("expected the Cartographer to receive ListEntities, got %q", capture.lastMethod())
 	}
 }
 
