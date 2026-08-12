@@ -63,7 +63,7 @@ const (
 //  1. **Session mode**: When x-flow-workitem-id is present and a matching
 //     session exists, the interceptor injects x-flow-namespace (from the
 //     Sidecar's environment), x-flow-workitem-id, x-flow-node-id, and
-//     x-flow-capabilities from the active session.
+//     x-flow-capabilities (from the Sidecar's FLOW_CAPABILITIES constant).
 //
 //  2. **Entry-bound fallback**: When no workitem session is found but the
 //     Sidecar has namespace and nodeID configured, it injects
