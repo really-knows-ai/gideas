@@ -1738,7 +1738,6 @@ type shutdownGitStore struct {
 	gitstore.GitStore
 	restoreCalls int
 	cleanCalls   int
-	closeCalls   int
 }
 
 func (g *shutdownGitStore) WithGitLock(fn func() error) error { return fn() }
@@ -1747,13 +1746,12 @@ func (g *shutdownGitStore) CleanUntracked(context.Context) error {
 	g.cleanCalls++
 	return nil
 }
-func (g *shutdownGitStore) Close() error { g.closeCalls++; return nil }
 
 // lockErrGitStore is a gitstore.GitStore stub whose WithGitLock reports a lock
 // acquisition failure without invoking the closure, so the teardown's
 // working-tree branch is never reached. It verifies shutdown itself still runs
-// to completion (Close is reached) while the lock/Restore/Clean failures are
-// no longer silently swallowed.
+// to completion while the lock/Restore/Clean failures are no longer silently
+// swallowed.
 type lockErrGitStore struct {
 	shutdownGitStore
 	lockErr error
@@ -1785,7 +1783,7 @@ func TestIsFatalServeError(t *testing.T) {
 // startup race), so Serve legitimately returns either nil or grpc.ErrServerStopped
 // — both must classify as non-fatal so main falls through to the teardown join
 // instead of os.Exit(1), and the durability teardown (dbStore.Close, git
-// RestoreMain/CleanUntracked/Close) must complete.
+// RestoreMain/CleanUntracked) must complete.
 func TestWaitForShutdownTeardownCompletes(t *testing.T) {
 	db := &shutdownStore{}
 	gs := &shutdownGitStore{}
@@ -1823,7 +1821,7 @@ func TestWaitForShutdownTeardownCompletes(t *testing.T) {
 	}
 
 	// The teardown join must be reachable: shutdownDone closes only after the
-	// durability teardown (dbStore.Close, git RestoreMain/CleanUntracked/Close)
+	// durability teardown (dbStore.Close, git RestoreMain/CleanUntracked)
 	// has run.
 	select {
 	case <-shutdownDone:
@@ -1839,9 +1837,6 @@ func TestWaitForShutdownTeardownCompletes(t *testing.T) {
 	}
 	if gs.cleanCalls != 1 {
 		t.Errorf("git CleanUntracked calls = %d, want 1", gs.cleanCalls)
-	}
-	if gs.closeCalls != 1 {
-		t.Errorf("git Close calls = %d, want 1", gs.closeCalls)
 	}
 }
 
@@ -1896,9 +1891,6 @@ func TestWaitForShutdownLockFailureStillCompletes(t *testing.T) {
 	// The failed lock blocks the tree-branch but must not halt the teardown.
 	if db.closeCalls != 1 {
 		t.Errorf("dbStore.Close calls = %d, want 1 (teardown must not abort before Close)", db.closeCalls)
-	}
-	if gs.closeCalls != 1 {
-		t.Errorf("git Close calls = %d, want 1", gs.closeCalls)
 	}
 	// Under a failed lock the working-tree branch is never entered: the lock
 	// error is now surfaced instead of silently dropped, so Restore/Clean are

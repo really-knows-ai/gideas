@@ -950,9 +950,6 @@ func waitForShutdown(
 		slog.Error("Shutdown: git working-tree teardown failed; tree may be left stranded and "+
 			"misread as live on next startup's R8 re-hydration", "error", err)
 	}
-	// gitStore.Close is a documented no-op (interface conformance only), so an
-	// error is not worth distinguishing from nil.
-	_ = gs.Close()
 
 	if auditPub != nil {
 		auditPub.Stop()

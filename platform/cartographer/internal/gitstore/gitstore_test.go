@@ -187,7 +187,6 @@ func TestInitNewRepo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New failed: %v", err)
 	}
-	defer func() { _ = gs.Close() }()
 
 	// Verify .git is initialised
 	gitPath := filepath.Join(tmpDir, "graph-repo", ".git")
@@ -252,7 +251,6 @@ func TestHydrationDirs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	defer func() { _ = gs.Close() }()
 	entitiesDir, edgesDir := gs.HydrationDirs()
 	wantEntities := filepath.Join(tmpDir, "graph-repo", "entities")
 	wantEdges := filepath.Join(tmpDir, "graph-repo", "edges")
@@ -267,17 +265,13 @@ func TestHydrationDirs(t *testing.T) {
 // TestInitExistingRepo opens an existing repository on disk.
 func TestInitExistingRepo(t *testing.T) {
 	tmpDir := t.TempDir()
-	gs1, err := New(tmpDir)
-	if err != nil {
+	if _, err := New(tmpDir); err != nil {
 		t.Fatalf("first New failed: %v", err)
 	}
-	_ = gs1.Close()
 
-	gs2, err := New(tmpDir)
-	if err != nil {
+	if _, err := New(tmpDir); err != nil {
 		t.Fatalf("second New failed: %v", err)
 	}
-	_ = gs2.Close()
 }
 
 func TestInitBadPath(t *testing.T) {
@@ -3355,7 +3349,6 @@ func TestPushRemoteAnonymous(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New local: %v", err)
 	}
-	defer func() { _ = store.Close() }()
 	gs := store.(*gitStore)
 
 	for _, tc := range []struct {
@@ -3470,7 +3463,6 @@ func TestCloneSingleBranchNoAuth(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new local store: %v", err)
 	}
-	t.Cleanup(func() { _ = store.Close() })
 	gs := store.(*gitStore)
 	if gs.authFn != nil {
 		t.Fatal("expected nil auth provider")
@@ -3591,7 +3583,6 @@ func TestCloneSingleBranchCleansUntracked(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new local store: %v", err)
 	}
-	t.Cleanup(func() { _ = store.Close() })
 	gs := store.(*gitStore)
 
 	// Simulate a transaction that crashed between file-write and git-commit
@@ -3683,7 +3674,6 @@ func TestCloneSingleBranchNonEmptyRepoRejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new local store: %v", err)
 	}
-	t.Cleanup(func() { _ = store.Close() })
 	gs := store.(*gitStore)
 
 	err = store.WithGitLock(func() error {
@@ -4397,8 +4387,6 @@ func TestRemotePushPull(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New local: %v", err)
 	}
-	defer func() { _ = store.Close() }()
-
 	gs := store.(*gitStore)
 
 	err = store.WithGitLock(func() error {
@@ -4511,7 +4499,6 @@ func TestCloneSingleBranchFromRemote(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New local: %v", err)
 	}
-	defer func() { _ = localStore.Close() }()
 
 	gs := localStore.(*gitStore)
 
@@ -5008,15 +4995,13 @@ func TestFetchAndMerge_BootstrapFromInitOnly(t *testing.T) {
 	// and remote. This is the same init commit that New() produces: a single
 	// commit with message "init" containing entities/ + edges/ dirs.
 	seedDir := filepath.Join(tmpDir, "seed")
-	seedStore, err := New(seedDir)
-	if err != nil {
+	if _, err := New(seedDir); err != nil {
 		t.Fatalf("New seed: %v", err)
 	}
-	_ = seedStore.Close()
 
 	// Clone the seed as a bare remote — the bare remote now has the same
 	// "init" commit as the local will have.
-	_, err = git.PlainClone(bareDir, true, &git.CloneOptions{
+	_, err := git.PlainClone(bareDir, true, &git.CloneOptions{
 		URL: "file://" + filepath.Join(seedDir, "graph-repo"),
 	})
 	if err != nil {
@@ -5068,7 +5053,6 @@ func TestFetchAndMerge_BootstrapFromInitOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New local: %v", err)
 	}
-	defer func() { _ = localStore.Close() }()
 
 	gs := localStore.(*gitStore)
 
