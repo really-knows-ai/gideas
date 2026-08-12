@@ -184,6 +184,21 @@ func (c *Client) GetFlow() (*Flow, error) {
 // surface (SPEC R4): a Graph handle is always returned; graph operations
 // surface nil-session errors themselves.
 func (c *Client) GetGraph() *Graph {
+	// ponytail: the ID-to-type cache (SPEC R3) is owned per Graph handle and
+	// GetGraph allocates a fresh one per call, so a second GetGraph call
+	// starts with an empty cache and mappings learned through the first
+	// handle are lost. Consequence: R3's best-effort per-type capability
+	// annotation degrades to the WRITE:graph/entity/* wildcard for those
+	// entities on UpdateEntity/DeleteEntity/CreateEdge issued through the
+	// newer handle, until the SDK re-learns them from its own traffic.
+	// Failure mode: the wildcard widens the Sidecar mode-2 check, but the
+	// Cartographer's authoritative per-type check still rejects callers
+	// lacking the capability — the correctness net holds, so this is a
+	// best-effort degradation, never a security gap. Deployment risk:
+	// minimal — the cost is annotation accuracy for nodes that recreate the
+	// handle (e.g. once per workitem). Upgrade path: hoist the cache onto
+	// the Client, shared across Graph handles, with the same TTL/eviction
+	// bounds as the per-handle map.
 	return &Graph{session: c.session, idTypeMap: newIDTypeMap()}
 }
 
