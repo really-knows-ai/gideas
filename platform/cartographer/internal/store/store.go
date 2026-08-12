@@ -53,12 +53,14 @@ type Store interface {
 	// Entity CRUD
 	//
 	// Property values are map[string]string — the schema property model is
-	// type: string only (SPEC). The SPEC error-table row "Non-string property
-	// value → INVALID_ARGUMENT" (R7 enforcement points 1-2) is therefore not
-	// directly testable at the store layer: a non-string value is
-	// unrepresentable in this signature. That check lives materially at the
-	// proto/service coercion layer. This is a layering consequence of the
-	// string-only property model, not a defect.
+	// type: string only (SPEC). The SPEC error-table rows "Non-string entity
+	// property value in CreateEntity/UpdateEntity" and "Non-string edge
+	// property value in CreateEdge" are annotated in the SPEC as structurally
+	// inexpressible: the proto wire contract is map<string,string>, so a
+	// non-string value cannot be represented in a parsed request and no
+	// INVALID_ARGUMENT guard can exist anywhere in the stack. A malformed
+	// client payload fails at protobuf unmarshal (transport-level), before
+	// handler or store code runs.
 	CreateEntity(ctx context.Context, entityType, id string,
 		properties map[string]string, embedding []float32, branch string,
 	) (*Entity, error)
