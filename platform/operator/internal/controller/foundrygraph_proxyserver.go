@@ -276,7 +276,7 @@ func (s *ProxyServer) ExportGraph(req *flowv1gen.ExportGraphRequest, stream flow
 		"x-flow-capabilities-signature", caps.signature,
 	)
 
-	// grpc.NewClient connects lazily, so the 10s dial timeout above does not by itself
+	// grpc.NewClient connects lazily, so the 10s dial timeout below does not by itself
 	// bound the transport connection — the actual connect happens when the stream RPC is
 	// initiated. Bound ONLY the dial/connect with the short deadline, then establish and
 	// stream on the capability-injected caller ctx below. grpc-go binds a client stream's
