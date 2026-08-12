@@ -303,19 +303,33 @@ func (s *ProxyServer) ExportGraph(req *flowv1gen.ExportGraphRequest, stream flow
 		return status.Errorf(codes.Unavailable, "cannot start export stream: %v", err)
 	}
 
+	// A pre-stream rejection — the Cartographer returns INVALID_ARGUMENT (unsupported
+	// format) or RESOURCE_EXHAUSTED (buffer allocation) BEFORE sending any chunk (SPEC
+	// error table rows "Unsupported export format" and "ExportGraph buffer allocation
+	// failure", both "no data sent"); those statuses arrive at the proxy's first Recv
+	// with no chunk forwarded, so pass them through verbatim and let the documented CLI
+	// error codes surface (the sidecar relay preserves upstream statuses identically).
+	// Once at least one chunk has been forwarded, any failure — a transport-level break
+	// (Unavailable), a non-conforming upstream status (e.g. DataLoss), or a raw error —
+	// is a genuine mid-stream failure (partial data may already have been sent) and
+	// maps to INTERNAL per the SPEC error table row "ExportGraph mid-stream failure".
+	var sentAny bool
 	for {
 		chunk, err := clientStream.Recv()
 		if err == io.EOF {
 			return nil
 		}
 		if err != nil {
-			// SPEC error table: "ExportGraph mid-stream failure → INTERNAL". Any failure
-			// after the stream has started — a transport-level break (Unavailable), a
-			// non-conforming upstream status, or a raw error — is a mid-stream failure
-			// (partial data may already have been sent), so surface it as INTERNAL rather
-			// than the dial-style Unavailable or a verbatim upstream status.
+			if !sentAny {
+				if st, ok := status.FromError(err); ok {
+					if c := st.Code(); c == codes.InvalidArgument || c == codes.ResourceExhausted {
+						return err
+					}
+				}
+			}
 			return status.Errorf(codes.Internal, "export stream failed: %v", err)
 		}
+		sentAny = true
 		if err := stream.Send(chunk); err != nil {
 			// SPEC error table: a downstream stream break during export is the same
 			// mid-stream failure (partial data may already have been sent) → INTERNAL.
