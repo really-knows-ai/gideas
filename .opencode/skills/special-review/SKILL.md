@@ -1,6 +1,6 @@
 ---
 name: special-review
-description: Review requested files against provided criteria and produce a flat checklist of issues in REVIEW_ITEMS.md. REVIEW.md stores only the review criteria and a log line per pass. If REVIEW.md exists, the criteria is read from it; if not, this is a fresh review and the user confirms the criteria. Verifies and prunes prior resolved/wont-fix items upfront, captures learnings, then runs a full fresh review with parallel subagents. Deduplicates against learnings and prior open items.
+description: Review requested files against provided criteria and produce a flat checklist of issues in REVIEW_ITEMS.md. REVIEW.md stores only the review criteria and a log line per pass. If REVIEW.md exists, the criteria is read from it; if not, this is a fresh review and the user confirms the criteria. Verifies and prunes prior resolved/wont-fix items upfront, captures learnings, then runs a full fresh review with parallel subagents — one per review facet when REVIEW_CRITERIA.md is present. Deduplicates against learnings and prior open items.
 ---
 
 # Special Review
@@ -42,19 +42,23 @@ so the review always starts from a clean base.  Reviewers are provided with
 
 **Never read target files yourself.** The subagents read them. Your job is
 dispatch, not investigation. If you find yourself reading anything other than
-REVIEW.md, REVIEW_ITEMS.md, LEARNINGS.md, or the criteria document, stop —
-you are violating the skill.
+REVIEW.md, REVIEW_ITEMS.md, LEARNINGS.md, REVIEW_CRITERIA.md, or the criteria
+document, stop — you are violating the skill.
 
 ## Workflow
 
 ### 1. Read the review artifacts and determine what needs reviewing
 
-Two files live in the project directory:
+Three files may live in the project directory:
 
 - **`REVIEW.md`** — the review criteria plus a pass log. One line is
   appended per review pass.
 - **`REVIEW_ITEMS.md`** — the checklist of findings. This is the output
   of the review and the input to `special-fixer`.
+- **`REVIEW_CRITERIA.md`** (optional) — decomposes the criteria into
+  numbered **facets**, one `## Facet N — <title>` section each.  If it
+  exists, Step 4 dispatches one reviewer subagent per facet instead of
+  partitioning by file.
 
 **If `REVIEW.md` exists:** read it. The `**Criteria:**` field gives the
 criteria for this review — a statement of what is being reviewed and what
@@ -243,6 +247,12 @@ Read the criteria.  If it is a file path, read the file.  If it is inline
 text, use it directly.  If it is a description, treat it as the review
 standard.
 
+Read `REVIEW_CRITERIA.md` if it exists in the project directory.  It lists
+the facets for this review.  For each facet, note its title and its
+**Check** / **Closure** fields (and its advisory **Focus** note) — these
+become the per-facet reviewer briefs in Step 4.  If it does not exist, Step 4
+falls back to partitioning by file.
+
 **Do NOT read the target files here.**  The full-rigour subagents
 (Step 4) will read the files they need.  Your job is to partition the
 work and dispatch.
@@ -251,9 +261,16 @@ If any of the three is missing, ask the user before proceeding.
 
 ### 4. Dispatch reviewer subagents — fresh full-rigour review
 
-Break the review into independent units by separating target files or criteria
-sections.  Use `task(subagent_type: "reviewer")` to dispatch one subagent per
-unit, all in parallel.
+**If `REVIEW_CRITERIA.md` exists** (preferred), break the review into one
+independent unit **per facet**.  Dispatch one `task(subagent_type:
+"reviewer")` per facet from Step 3, all in parallel.  Each facet reviews the
+**full target file set** (the head of main) against its own Check and Closure
+— a facet is never given a pre-limited subset, so a gap in one file cannot
+hide because the facet reviewer wasn't told to read it.
+
+**If `REVIEW_CRITERIA.md` does not exist**, fall back to partitioning by
+target files or criteria sections: dispatch one subagent per unit, all in
+parallel.
 
 **Do NOT read the target files yourself** — the subagents read them.  Your
 job is to partition the work and dispatch.  If you already read parts of a
@@ -273,16 +290,26 @@ passes does not reduce the depth or scope of this review.  Each subagent
 receives this prompt:
 
 ```
-Full-rigour review: assess these target files against the provided criteria
+Full-rigour review.  Assess the target files against the review unit below,
 as if for the first time.  Produce a flat checklist of issues.  Make no
-severity judgements — if something diverges from the criteria, it goes in
-the list.
+severity judgements — if something diverges from the unit, it goes in the
+list.
 
-**Target files to review:**
-[list of one or more file paths]
+**Review unit — read exactly one:**
+- Facet review: read `## Facet <N> — <title>` from
+  [path to REVIEW_CRITERIA.md] and apply its **Check** and **Closure** fields.
+  Follow Closure exactly: it names the finite artifact to enumerate; enumerate
+  it completely so nothing is missed.  (This is the norm when
+  REVIEW_CRITERIA.md exists.)
+- Whole-criteria review: read [path to the criteria document] and apply it as
+  a whole.  (Used only when REVIEW_CRITERIA.md does not exist.)
 
-**Criteria (read this file, do not inline):**
-[path to the criteria document, e.g. "plans/cartographer/SPEC.md"]
+**Target files to review (the full head of main — every file in scope, never
+a pre-limited subset):**
+[list of file paths]
+
+**Criteria document (read, do not inline):**
+[path, e.g. "plans/cartographer/SPEC.md"]
 
 **Prior learnings (read this file, do not re-flag documented patterns):**
 [path to LEARNINGS.md]
@@ -293,36 +320,30 @@ across multiple fresh findings signals the pattern may be real.
 
 **Rules:**
 - No severity labels.  No ranking.  No "blocker" vs "minor."
-- If the target does something that contradicts or deviates from the
-  criteria, list it as a finding.  Be specific: include file paths and
-  line numbers.
-- If a criteria requirement is not addressed at all by the target files,
-  list that as a finding.
+- If the target does something that contradicts or deviates from the review
+  unit, list it as a finding.  Be specific: file paths and line numbers.
+- If a requirement of the review unit is not addressed at all by the target
+  files, list that as a finding.
+- Review only against this unit.  If it is a facet, do not flag divergences
+  that belong to a different facet — that facet's reviewer will catch them.
 - Do not flag stylistic preferences.  Do not flag patterns that work but
   could be written differently.
 - Do not review the criteria itself.  Only review the target files against
-  the criteria.
-- **Do not re-flag patterns documented in Prior learnings.**  If a learning
-  says "no hardcoded line numbers", do not flag stale line numbers.  If a
-  learning says "every RPC needs a response type", do not flag missing
-  proto types unless the target introduces a NEW RPC not covered by the
-  learning.
-- **Classify each finding with one of three tags** based on the nature of
-  the issue and the kind of resolution it needs:
+  the unit.
+- Do not re-flag patterns documented in Prior learnings.
+- Classify each finding with one of three tags:
   - `[FIX]` — the text/code is wrong and must be corrected (errors,
     contradictions, broken commands, SPEC violations).
   - `[PONYTAIL]` — a deliberate simplification with a known ceiling that
     needs a `ponytail:` annotation documenting the trade-off and upgrade
-    path. PONYTAIL is never for SPEC divergences — any divergence from
-    the criteria is `[FIX]`. The fix may be to update the code or to
-    update the criteria, but the divergence is never "acceptable."
-  - `[IMPL-NOTE]` — the content is correct but incomplete; the implementer
-    needs additional context or clarification at coding time.  Only use
-    this when reviewing **plans or specs** — if reviewing implementation
-    source code, a gap is either `[FIX]` or not a finding.
-- This is a full-rigour pass.  Prior review passes do not reduce the depth
-  or scope of this review.  Every file and every line is assessed against
-  the criteria.
+    path.  Never for SPEC divergences — any divergence from the criteria is
+    `[FIX]`.
+  - `[IMPL-NOTE]` — correct but incomplete; needs implementer context at
+    coding time.  Only for plans/specs — for source code a gap is `[FIX]` or
+    not a finding.
+  (A facet's section may further constrain which tags apply.)
+- This is a full-rigour pass.  Prior passes do not reduce the depth or scope
+  of this review.
 
 **Output format per finding:**
 `- [ ] [TAG] <file>:<line> — <description of the divergence.>`
