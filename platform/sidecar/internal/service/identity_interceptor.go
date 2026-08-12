@@ -55,10 +55,9 @@ const (
 
 // IdentityInterceptor returns a gRPC unary server interceptor that enriches
 // incoming metadata with authoritative identity and capability fields.
-//
-// is the sole authority for runtime attribution on node-originated requests.
-// Nodes cannot override or spoof these fields. The interceptor operates in
-// two modes:
+// It is the sole authority for runtime attribution on node-originated
+// requests. Nodes cannot override or spoof these fields. The interceptor
+// operates in two modes:
 //
 //  1. **Session mode**: When x-flow-workitem-id is present and a matching
 //     session exists, the interceptor injects x-flow-namespace (from the
