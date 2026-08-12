@@ -287,6 +287,12 @@ func (a *Agent) heartbeatLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			// hbCancel may have fired while this tick was in flight; when both
+			// channels are ready select picks at random, so re-check before
+			// sending to guarantee no heartbeat lands after Run returns.
+			if ctx.Err() != nil {
+				return
+			}
 			// Use the workitem domain method for heartbeat.
 			wi, err := a.client.GetWorkitem()
 			if err == nil {

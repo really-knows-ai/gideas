@@ -29,6 +29,13 @@ func newQueueStore(dbPath, shardID, queueName string) (*queueStore, error) {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
 
+	// Pin the pool to one connection: with plain ":memory:" every new
+	// connection would get its own empty database, so a second pooled
+	// connection silently loses the schema and any written rows (read/write
+	// then race across disjoint DBs). It also serializes access to the single
+	// per-pod queue.db file, avoiding SQLITE_BUSY between pooled connections.
+	db.SetMaxOpenConns(1)
+
 	// Enable WAL mode for better concurrent read performance.
 	if _, err := db.Exec("PRAGMA journal_mode=WAL"); err != nil {
 		_ = db.Close()
