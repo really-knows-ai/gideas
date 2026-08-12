@@ -79,6 +79,7 @@ type mockCartographerClient struct {
 	extendTimeout func(ctx context.Context, req *flowv1.ExtendTimeoutRequest) (*flowv1.ExtendTimeoutResponse, error)
 	exportGraph   func(ctx context.Context, req *flowv1.ExportGraphRequest,
 	) (grpc.ServerStreamingClient[flowv1.ExportGraphResponse], error)
+	sync func(ctx context.Context, req *flowv1.SyncRequest) (*flowv1.SyncResponse, error)
 }
 
 func (m *mockCartographerClient) ExecuteCypher(
@@ -227,6 +228,9 @@ func (m *mockCartographerClient) ExportGraph(
 func (m *mockCartographerClient) Sync(
 	ctx context.Context, req *flowv1.SyncRequest, opts ...grpc.CallOption,
 ) (*flowv1.SyncResponse, error) {
+	if m.sync != nil {
+		return m.sync(ctx, req)
+	}
 	return &flowv1.SyncResponse{}, nil
 }
 
@@ -1155,6 +1159,53 @@ func TestExportGraph_NilSession(t *testing.T) {
 	}
 }
 
+// TestGraphSync_AnnotatesWildcard pins SPEC R3's WRITE:graph/entity/*
+// requirement for Sync at the SDK layer (SPEC R10: Sync requires
+// WRITE:graph/entity/*): the RPC requires the wildcard capability and its
+// request carries no entity-type field for the Sidecar to read from the body,
+// so the SDK must annotate the fixed wildcard entity_type metadata on the
+// call, mirroring DeleteEdge's and ExportGraph's fixed wildcard annotations.
+func TestGraphSync_AnnotatesWildcard(t *testing.T) {
+	called := false
+	var capturedKey, capturedValue string
+	mock := &mockCartographerClient{
+		sync: func(ctx context.Context, req *flowv1.SyncRequest) (*flowv1.SyncResponse, error) {
+			called = true
+			md, ok := metadata.FromOutgoingContext(ctx)
+			if !ok {
+				t.Fatal("no outgoing metadata")
+			}
+			vals := md.Get(metadataEntityTypeKey)
+			if len(vals) == 0 {
+				t.Fatal("no entity_type metadata")
+			}
+			capturedKey = metadataEntityTypeKey
+			capturedValue = vals[0]
+			return &flowv1.SyncResponse{}, nil
+		},
+	}
+	g := newMockGraph(mock)
+	if err := g.Sync(); err != nil {
+		t.Fatalf("Sync returned error: %v", err)
+	}
+	if !called {
+		t.Fatal("expected Sync RPC to be invoked")
+	}
+	if capturedKey != metadataEntityTypeKey {
+		t.Errorf("expected metadata key entity_type, got %q", capturedKey)
+	}
+	if capturedValue != "*" {
+		t.Errorf("expected wildcard *, got %q", capturedValue)
+	}
+}
+
+func TestSync_NilSession(t *testing.T) {
+	g := &Graph{}
+	if err := g.Sync(); err == nil {
+		t.Fatal("expected error for nil session")
+	}
+}
+
 func TestExportGraph_Success(t *testing.T) {
 	mock := &mockCartographerClient{
 		exportGraph: func(ctx context.Context, req *flowv1.ExportGraphRequest,
@@ -1451,6 +1502,22 @@ func TestIDTypeMap_ResolveOrWildcard_NotFound(t *testing.T) {
 	typ := m.resolveOrWildcard("unknown")
 	if typ != "*" {
 		t.Errorf("expected wildcard *, got %q", typ)
+	}
+}
+
+// TestIDTypeMap_EmptyTypeNotStored pins resolveOrWildcard's documented
+// guarantee: capability annotation falls back to the wildcard rather than
+// annotating with an empty type (which fails resolution). An empty
+// entity_type from a server response must not be stored, so a stored ID with
+// an empty type resolves as unknown and produces "*" — never entity_type="".
+func TestIDTypeMap_EmptyTypeNotStored(t *testing.T) {
+	m := newIDTypeMap()
+	m.store("id-1", "")
+	if typ := m.resolveOrWildcard("id-1"); typ != "*" {
+		t.Errorf("expected wildcard * for empty stored type, got %q", typ)
+	}
+	if _, ok := m.resolve("id-1"); ok {
+		t.Error("expected empty-type entry not to be stored")
 	}
 }
 
