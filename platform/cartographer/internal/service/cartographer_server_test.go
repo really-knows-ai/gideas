@@ -4251,6 +4251,85 @@ func TestCommitTransaction_WithSyncWorker_AckCallerDeadlineSurfacesDeadlineExcee
 	}
 }
 
+// TestCommitTransaction_WithSyncWorker_NoAckReturnsWithoutBlocking pins the
+// SPEC R10 commit branch "commit() returns immediately and sets the
+// push-needed flag" (SPEC:614-615 — the non-WithAck path): with a SyncWorker
+// wired via WithSyncWorker, a commit whose Ack is unset must set the push flag
+// and return without blocking for the sync cycle. Every other
+// CommitTransaction-with-sync-worker test uses Ack: true (the acked tests park
+// the woken cycle's push in the gate and assert the handler stays blocked); a
+// regression that made the handler wake-and-wait unconditionally would trip
+// this test's timeout while the cycle parks in the gate below.
+func TestCommitTransaction_WithSyncWorker_NoAckReturnsWithoutBlocking(t *testing.T) {
+	gs, err := gitstore.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("gitstore.New: %v", err)
+	}
+	syncGit := &syncMockGitStore{
+		GitStore:    gs,
+		pushEntered: make(chan struct{}),
+		pushRelease: make(chan struct{}),
+	}
+	srv, fc := newSyncServer(t, syncGit)
+	t.Cleanup(syncGit.releasePush)
+	waitFor(t, func() bool { return fc.tickers() >= 1 }, "startup cycle")
+
+	ctx := testCtx()
+	applyTestSchema(ctx, t, srv.store)
+	begin, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
+	if err != nil {
+		t.Fatalf("BeginTransaction: %v", err)
+	}
+	if _, err := srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
+		EntityType: "Component", Properties: map[string]string{"name": "no-ack"}, TransactionId: begin.TransactionId,
+	}); err != nil {
+		t.Fatalf("CreateEntity: %v", err)
+	}
+
+	// The non-acked commit must return immediately — SetPushNeeded fires but no
+	// WakeAndWait blocks for the cycle.
+	commitDone := make(chan error, 1)
+	go func() {
+		_, err := srv.CommitTransaction(ctx, &flowv1.CommitTransactionRequest{
+			TransactionId: begin.TransactionId,
+		})
+		commitDone <- err
+	}()
+	select {
+	case err := <-commitDone:
+		if err != nil {
+			t.Fatalf("CommitTransaction (no ack): %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("non-acked CommitTransaction blocked on the sync worker")
+	}
+
+	// No sync cycle ran during the commit, and the push flag is set for the
+	// worker to pick up on its next cycle.
+	syncGit.mu.Lock()
+	pushCalls := syncGit.pushCalls
+	syncGit.mu.Unlock()
+	if pushCalls != 0 {
+		t.Fatalf("non-acked commit ran the sync cycle (%d push attempts)", pushCalls)
+	}
+	if !srv.syncWorker.pushNeeded.Load() {
+		t.Fatal("push flag not set after the non-acked commit")
+	}
+
+	// Deliver the flag on the next timer-driven cycle: the push completes and
+	// the flag clears, proving the worker attached to the commit is live.
+	syncGit.releasePush()
+	fc.FireTicker()
+	waitFor(t, func() bool {
+		syncGit.mu.Lock()
+		defer syncGit.mu.Unlock()
+		return syncGit.pushCalls >= 1
+	}, "push on the next cycle after the non-acked commit")
+	if srv.syncWorker.pushNeeded.Load() {
+		t.Fatal("push flag not cleared after the next cycle delivered the push")
+	}
+}
+
 func TestRollbackTransaction_PartialCommitWithoutLadybugPathIsExplicit(t *testing.T) {
 	srv, _ := newTestServer(t)
 	srv.gitstore = &mergeFailingGitStore{GitStore: srv.gitstore, failMerge: true}
@@ -4427,6 +4506,52 @@ func TestEmptyTransaction_CommitNoOp(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("CommitTransaction (no-op) failed: %v", err)
+	}
+}
+
+// TestEmptyTransaction_CommitNoOpCreatesNoGitCommitAndNoPush pins the SPEC R10
+// zero-mutation branch ("zero-mutation commits produce no git commit and
+// therefore no remote push"; SPEC R9 step 5: "Commit() — if zero mutations,
+// no-op"): a CommitTransaction with an empty change log must succeed without
+// creating a git commit and without setting the sync-worker push-needed flag.
+// TestEmptyTransaction_CommitNoOp only asserts that the RPC succeeds; nothing
+// pins the git/push side of the no-op.
+func TestEmptyTransaction_CommitNoOpCreatesNoGitCommitAndNoPush(t *testing.T) {
+	base, err := ladybug.OpenInMemory()
+	if err != nil {
+		t.Fatalf("OpenInMemory: %v", err)
+	}
+	t.Cleanup(func() { _ = base.Close() })
+	gs, err := gitstore.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("gitstore.New: %v", err)
+	}
+	countingGit := &commitCountingGitStore{GitStore: gs}
+	opPub, _ := generateTestKey()
+	srv := NewCartographerServer(
+		base, countingGit, opPub, initTestKey(), nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000,
+	)
+	srv.MarkDBReady()
+	// Wire a (non-running) SyncWorker so the push flag is observable. No remote
+	// URL is configured, so BeginTransaction's implicit sync is skipped.
+	sw := NewSyncWorker("", gs, base, RealClock{})
+	srv.syncWorker = sw
+	ctx := testCtx()
+
+	begin, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
+	if err != nil {
+		t.Fatalf("BeginTransaction: %v", err)
+	}
+	if _, err = srv.CommitTransaction(ctx, &flowv1.CommitTransactionRequest{
+		TransactionId: begin.TransactionId,
+	}); err != nil {
+		t.Fatalf("CommitTransaction (no-op) failed: %v", err)
+	}
+	if countingGit.commits != 0 {
+		t.Fatalf("zero-mutation commit created %d git commits, want 0", countingGit.commits)
+	}
+	if sw.pushNeeded.Load() {
+		t.Fatal("zero-mutation commit set the sync-worker push-needed flag")
 	}
 }
 
@@ -5708,6 +5833,63 @@ func TestRefreshTransaction_NoConflicts(t *testing.T) {
 	}
 }
 
+// TestRefreshTransaction_DoesNotResetTimeoutTimer pins SPEC R9 step 4
+// ("Refresh() does not reset the transaction timeout timer — the timeout is an
+// absolute lifetime from BeginTransaction, not an idle timeout"): after a
+// successful RefreshTransaction, advancing the fake clock past the original
+// ExpiresAt must surface DEADLINE_EXCEEDED on the next transaction operation.
+// The handler never touches ExpiresAt, but a regression that re-armed the timer
+// inside Refresh (ExpiresAt = now + timeout) would keep the transaction alive
+// past its original absolute lifetime — this test fails if that happens.
+func TestRefreshTransaction_DoesNotResetTimeoutTimer(t *testing.T) {
+	base, err := ladybug.OpenInMemory()
+	if err != nil {
+		t.Fatalf("OpenInMemory: %v", err)
+	}
+	t.Cleanup(func() { _ = base.Close() })
+	ladybugPath := t.TempDir()
+	gs, err := gitstore.New(ladybugPath)
+	if err != nil {
+		t.Fatalf("gitstore.New: %v", err)
+	}
+	opPub, _ := generateTestKey()
+	srv := NewCartographerServer(
+		base, gs, opPub, initTestKey(), nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000,
+		WithLadybugPath(ladybugPath),
+	)
+	srv.MarkDBReady()
+	// Replace the tx manager with a fake clock so the absolute lifetime can be
+	// advanced deterministically without running the GC loop.
+	fc := newFakeClock(time.Now())
+	srv.txManager = NewTransactionManager(7*24*time.Hour, 100000, WithClock(fc))
+	ctx := testCtx()
+
+	begin, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{
+		Timeout: durationpb.New(1 * time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("BeginTransaction: %v", err)
+	}
+
+	// Refresh while the transaction is still within its absolute lifetime.
+	if _, err = srv.RefreshTransaction(ctx, &flowv1.RefreshTransactionRequest{
+		TransactionId: begin.TransactionId,
+	}); err != nil {
+		t.Fatalf("RefreshTransaction: %v", err)
+	}
+
+	// Advance past the original ExpiresAt (t0 + 1m). The refresh must not have
+	// re-armed the timer, so the next operation reports DEADLINE_EXCEEDED.
+	fc.Advance(2 * time.Minute)
+	_, err = srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
+		EntityType: "Component", Properties: map[string]string{"name": "late"},
+		TransactionId: begin.TransactionId,
+	})
+	if status.Code(err) != codes.DeadlineExceeded {
+		t.Fatalf("expected DeadlineExceeded after refresh and expiry, got %v (%v)", status.Code(err), err)
+	}
+}
+
 // TestRefreshTransaction_EmptyRefreshThenMutateAndCommit pins the SPEC R9
 // refresh flow for a zero-mutation refresh: the branch must be reset and
 // re-hydrated from latest main even when the change log is empty, so a
@@ -5959,6 +6141,87 @@ func TestRefreshTransaction_ConflictLeavesCleanRefreshedBranch(t *testing.T) {
 	}
 	if firstAfter.Properties["name"] != "one" || secondAfter.Properties["name"] != "main-two" {
 		t.Fatalf("conflicted refresh partially reapplied changes: first=%+v second=%+v", firstAfter, secondAfter)
+	}
+}
+
+// TestRefreshTransaction_AbortedRefreshPreservesDiff pins SPEC R9 step 3
+// ("Because Diff() reads the change log rather than querying the branch DB, it
+// returns the same result regardless of whether the branch DB reflects the
+// transaction's changes or has been re-hydrated to a clean state (e.g. after
+// an aborted Refresh())"): after an ABORTED refresh leaves the branch DB
+// re-hydrated to a clean state, GetTransactionDiff must return exactly the
+// pre-refresh diff — the change log is preserved, only the branch DB is
+// rebuilt. The existing aborted-refresh tests assert the branch DB contents but
+// never call GetTransactionDiff.
+func TestRefreshTransaction_AbortedRefreshPreservesDiff(t *testing.T) {
+	base, err := ladybug.OpenInMemory()
+	if err != nil {
+		t.Fatalf("OpenInMemory: %v", err)
+	}
+	t.Cleanup(func() { _ = base.Close() })
+	ladybugPath := t.TempDir()
+	gs, err := gitstore.New(ladybugPath)
+	if err != nil {
+		t.Fatalf("gitstore.New: %v", err)
+	}
+	opPub, _ := generateTestKey()
+	srv := NewCartographerServer(
+		base, gs, opPub, initTestKey(), nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000,
+		WithLadybugPath(ladybugPath),
+	)
+	srv.MarkDBReady()
+	ctx := testCtx()
+	applyTestSchema(ctx, t, base)
+	first, err := base.CreateEntity(ctx, "Component", "", map[string]string{"name": "one"}, nil, "main")
+	if err != nil {
+		t.Fatalf("create first main entity: %v", err)
+	}
+	second, err := base.CreateEntity(ctx, "Component", "", map[string]string{"name": "two"}, nil, "main")
+	if err != nil {
+		t.Fatalf("create second main entity: %v", err)
+	}
+	commitGitEntity(ctx, t, gs, first.Id, "one")
+	commitGitEntity(ctx, t, gs, second.Id, "two")
+	begin, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
+	if err != nil {
+		t.Fatalf("BeginTransaction: %v", err)
+	}
+	if _, err = srv.UpdateEntity(ctx, &flowv1.UpdateEntityRequest{
+		Id: first.Id, Properties: map[string]string{"name": "tx-one"}, TransactionId: begin.TransactionId,
+	}); err != nil {
+		t.Fatalf("update first transaction entity: %v", err)
+	}
+	if _, err = srv.UpdateEntity(ctx, &flowv1.UpdateEntityRequest{
+		Id: second.Id, Properties: map[string]string{"name": "tx-two"}, TransactionId: begin.TransactionId,
+	}); err != nil {
+		t.Fatalf("update second transaction entity: %v", err)
+	}
+	before, err := srv.GetTransactionDiff(ctx, &flowv1.GetTransactionDiffRequest{TransactionId: begin.TransactionId})
+	if err != nil {
+		t.Fatalf("GetTransactionDiff before refresh: %v", err)
+	}
+
+	// Main advances on the second entity while the transaction is open,
+	// forcing the refresh to abort (UUID-overlap conflict).
+	if _, err = base.UpdateEntity(ctx, second.Id, map[string]string{"name": "main-two"}, nil, "main"); err != nil {
+		t.Fatalf("update second main entity: %v", err)
+	}
+	commitGitEntity(ctx, t, gs, second.Id, "main-two")
+
+	if _, err = srv.RefreshTransaction(ctx, &flowv1.RefreshTransactionRequest{
+		TransactionId: begin.TransactionId,
+	}); status.Code(err) != codes.Aborted {
+		t.Fatalf("expected refresh conflict, got %v", err)
+	}
+	after, err := srv.GetTransactionDiff(ctx, &flowv1.GetTransactionDiffRequest{TransactionId: begin.TransactionId})
+	if err != nil {
+		t.Fatalf("GetTransactionDiff after aborted refresh: %v", err)
+	}
+	if !reflect.DeepEqual(after, before) {
+		t.Fatalf("aborted refresh changed the transaction diff: before=%+v after=%+v", before, after)
+	}
+	if len(after.ModifiedEntities) != 2 {
+		t.Fatalf("expected the two modified entities preserved in the diff, got %+v", after.ModifiedEntities)
 	}
 }
 
