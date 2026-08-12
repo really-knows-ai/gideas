@@ -651,9 +651,15 @@ func TestApplySchemaOnExistingApplySchemaFailure(t *testing.T) {
 
 // TestApplySchemaOnExistingDestructiveOrdering asserts the SPEC R6 destructive ordering:
 // HealthCheck succeeds, then WipeGraph is called, then ApplySchema — verified via call
-// interleaving and that WipeGraph precedes ApplySchema.
+// interleaving and that WipeGraph precedes ApplySchema. The destructive success path also
+// persists the last-applied-spec annotation between WipeGraph and ApplySchema (the
+// crash-idempotency fix), so the reconciler is given a Client with the FoundryGraph
+// seeded.
 func TestApplySchemaOnExistingDestructiveOrdering(t *testing.T) {
+	s := scheme.Scheme
+	_ = flowv1.AddToScheme(s)
 	fg := &flowv1.FoundryGraph{ObjectMeta: metav1.ObjectMeta{Name: defaultGraphName, Namespace: testNS}}
+	fakeCli := fake.NewClientBuilder().WithScheme(s).WithObjects(fg).Build()
 
 	var order []string
 	dialer := func(ctx context.Context, endpoint string) (CartographerClient, error) {
@@ -672,7 +678,7 @@ func TestApplySchemaOnExistingDestructiveOrdering(t *testing.T) {
 			},
 		}, nil
 	}
-	r := &FoundryGraphReconciler{CartographerDialer: dialer}
+	r := &FoundryGraphReconciler{CartographerDialer: dialer, Client: fakeCli, Scheme: s}
 
 	if err := r.applySchemaOnExisting(context.Background(), fg, true); err != nil {
 		t.Fatalf("applySchemaOnExisting: %v", err)
@@ -685,6 +691,17 @@ func TestApplySchemaOnExistingDestructiveOrdering(t *testing.T) {
 		if order[i] != want[i] {
 			t.Errorf("expected order[%d]=%s, got %s (full: %v)", i, want[i], order[i], order)
 		}
+	}
+
+	// The crash-idempotency fix: the annotation must be persisted by the destructive
+	// success path (between WipeGraph and ApplySchema), recording the spec the apply
+	// pushed — so a crash after the apply cannot re-detect the destructive diff.
+	var got flowv1.FoundryGraph
+	if err := fakeCli.Get(context.Background(), client.ObjectKeyFromObject(fg), &got); err != nil {
+		t.Fatalf("get FoundryGraph: %v", err)
+	}
+	if _, ok := got.Annotations[lastAppliedSpecAnnotation]; !ok {
+		t.Error("expected the last-applied-spec annotation to be persisted on the destructive path")
 	}
 }
 
@@ -2040,6 +2057,121 @@ func TestReconcileDestructiveSuccessReachesReady(t *testing.T) {
 	ready := meta.FindStatusCondition(got.Status.Conditions, "Ready")
 	if ready == nil || ready.Status != metav1.ConditionTrue || ready.Reason != reasonReconciled {
 		t.Errorf("expected Ready=True/Reconciled, got %v", ready)
+	}
+}
+
+// TestReconcileDestructiveCrashBetweenWipeApplyAndAnnotationPersist pins the
+// destructive-change crash window (SPEC R6): the last-applied-spec annotation must be
+// persisted BEFORE the destructive ApplySchema takes effect on the existing pod, so a
+// reconcile that returns between the existing-pod WipeGraph+ApplySchema and the
+// updateStatus annotation persist (a crash) cannot re-detect the destructive diff on
+// the next reconcile and re-run WipeGraph — silently wiping graph data written under
+// the newly-applied schema in the interim. Without the fix the annotation still records
+// the old spec after the crash, reconcile 2 re-detects the destructive diff, and
+// WipeGraph runs a second time over the converged graph.
+func TestReconcileDestructiveCrashBetweenWipeApplyAndAnnotationPersist(t *testing.T) {
+	s := scheme.Scheme
+	_ = flowv1.AddToScheme(s)
+	_ = appsv1.AddToScheme(s)
+	_ = corev1.AddToScheme(s)
+	_ = rbacv1.AddToScheme(s)
+
+	ns := testNS
+	// Destructive diff: the last-applied annotation records a Widget entity type that
+	// the current (empty) spec removes.
+	fg := &flowv1.FoundryGraph{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      defaultGraphName,
+			Namespace: ns,
+			Annotations: map[string]string{
+				lastAppliedSpecAnnotation: `{"entityTypes":[{"name":"Widget"}]}`,
+			},
+		},
+	}
+
+	// Operator-namespace signing secrets so reconcileSecrets succeeds.
+	osign := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: operatorSigningKeySecretName, Namespace: "operator-ns"}, Data: map[string][]byte{"key": []byte("op"), "private-key": []byte("op-p")}}
+	ssign := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: sidecarSigningKeySecretName, Namespace: "operator-ns"}, Data: map[string][]byte{"key": []byte("sd"), "private-key": []byte("sd-p")}}
+	// A ready Deployment so waitForReadiness returns immediately.
+	replicas := int32(1)
+	readyDeploy := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: cartographerSvcName, Namespace: ns},
+		Spec:       appsv1.DeploymentSpec{Replicas: &replicas},
+		Status:     appsv1.DeploymentStatus{AvailableReplicas: 1, ReadyReplicas: 1, UpdatedReplicas: 1},
+	}
+
+	fakeClient := fake.NewClientBuilder().WithScheme(s).WithObjects(fg, osign, ssign, readyDeploy).WithStatusSubresource(fg).Build()
+	ctx := context.Background()
+	nn := types.NamespacedName{Name: defaultGraphName, Namespace: ns}
+
+	// The first ApplySchema (existing pod) succeeds; the second (step 10, after the
+	// "new" pod's readiness) fails — the reconcile returns an error AFTER the
+	// existing-pod wipe+apply but BEFORE updateStatus's annotation persist, exactly the
+	// crash window under test.
+	applyCalls := 0
+	wipeCalls := 0
+	r := &FoundryGraphReconciler{
+		Client:            fakeClient,
+		Scheme:            s,
+		OperatorNamespace: "operator-ns",
+		CartographerPort:  50051,
+		CartographerImage: "cartographer:latest",
+		ReadinessTimeout:  time.Second,
+		ProxyRoutingTable: NewProxyRoutingTable(),
+		CartographerDialer: func(ctx context.Context, endpoint string) (CartographerClient, error) {
+			return &mockCartographerClient{
+				wipeGraphFn: func(context.Context, *flowv1gen.WipeGraphRequest) (*flowv1gen.WipeGraphResponse, error) {
+					wipeCalls++
+					return &flowv1gen.WipeGraphResponse{}, nil
+				},
+				applySchemaFn: func(context.Context, *flowv1gen.ApplySchemaRequest) (*flowv1gen.ApplySchemaResponse, error) {
+					applyCalls++
+					if applyCalls == 2 {
+						// Simulate the crash: reconcile 1 never reaches updateStatus.
+						return nil, status.Error(codes.Internal, "crash after existing-pod apply")
+					}
+					return &flowv1gen.ApplySchemaResponse{}, nil
+				},
+			}, nil
+		},
+	}
+
+	// Reconcile 1: HealthCheck → WipeGraph → ApplySchema on the existing pod, then a
+	// "crash" (error return) before the annotation persist in updateStatus.
+	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: nn}); err == nil {
+		t.Fatal("expected reconcile 1 to return an error (simulated crash after the existing-pod wipe+apply)")
+	}
+	if wipeCalls != 1 {
+		t.Fatalf("expected exactly 1 WipeGraph on reconcile 1, got %d", wipeCalls)
+	}
+
+	// The annotation must ALREADY record the new spec: it was persisted before the
+	// destructive ApplySchema took effect, so the crash cannot leave the old spec in
+	// place for the next reconcile to diff against.
+	var crashed flowv1.FoundryGraph
+	if err := fakeClient.Get(ctx, nn, &crashed); err != nil {
+		t.Fatalf("get FoundryGraph after reconcile 1: %v", err)
+	}
+	ann, ok := crashed.Annotations[lastAppliedSpecAnnotation]
+	if !ok {
+		t.Fatal("expected the last-applied-spec annotation to be persisted before the destructive apply (crash window closed)")
+	}
+	var recorded flowv1.FoundryGraphSpec
+	if err := json.Unmarshal([]byte(ann), &recorded); err != nil {
+		t.Fatalf("unmarshal annotation: %v", err)
+	}
+	if !specSemanticallyEqual(&recorded, &crashed.Spec) {
+		t.Errorf("expected the annotation to record the new spec before the crash, got %s", ann)
+	}
+
+	// Reconcile 2 (the restart after the crash): the annotation now equals the current
+	// spec, so no destructive diff is detected and WipeGraph must NOT run again — graph
+	// data written under the newly-applied schema in the interim is preserved.
+	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: nn}); err != nil {
+		t.Fatalf("reconcile 2: %v", err)
+	}
+	if wipeCalls != 1 {
+		t.Errorf("expected WipeGraph exactly once across both reconciles (no re-wipe after the crash), got %d", wipeCalls)
 	}
 }
 
