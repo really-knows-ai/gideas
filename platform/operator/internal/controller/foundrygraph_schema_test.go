@@ -498,11 +498,15 @@ func TestDiffSchema(t *testing.T) {
 			expected: SchemaDiffNone,
 		},
 		{
-			name: "entity property required toggled - destructive",
-			// SPEC R6 lists "removed or changed existing type properties" as destructive:
-			// a bare toggle of an existing property's Required flag changes the existing
-			// property's schema metadata (not just forward-only runtime enforcement), so it
-			// requires WipeGraph → destructive.
+			name: "entity property required toggled - non-destructive",
+			// The Required flag is application-only write-enforcement metadata: the
+			// store persists it in schema.json, never in the catalog/DDL
+			// (diffSchemaAgainstCatalog compares only the mapped column type), and
+			// SPEC R6 makes its enforcement forward-only. A bare toggle is
+			// DDL-neutral and safe — ApplySchema accepts it without WipeGraph — so
+			// the operator classifies it non-destructive (matching the store) and
+			// pushes it via ApplySchema to refresh the in-memory Required metadata.
+			// It must never be destructive, which would WipeGraph the whole graph.
 			old: &flowv1.FoundryGraphSpec{
 				EntityTypes: []flowv1.EntityTypeSpec{
 					{Name: "Component", Properties: []flowv1.PropertySpec{{Name: "name", Type: "string", Required: false}}},
@@ -513,13 +517,31 @@ func TestDiffSchema(t *testing.T) {
 					{Name: "Component", Properties: []flowv1.PropertySpec{{Name: "name", Type: "string", Required: true}}},
 				},
 			},
-			expected: SchemaDiffDestructive,
+			expected: SchemaDiffNonDestructive,
 		},
 		{
-			name: "edge type property required toggled - destructive",
-			// Same branch as above (foundrygraph_schema.go:175) for edge-type properties: a
-			// bare Required toggle on an existing edge property is a changed property
-			// → destructive.
+			name: "entity property required toggled false - non-destructive",
+			// Same branch as above, reverse direction: the required-toggle
+			// classification is symmetric (the comparison is inequality-based), so a
+			// true→false toggle must also be non-destructive.
+			old: &flowv1.FoundryGraphSpec{
+				EntityTypes: []flowv1.EntityTypeSpec{
+					{Name: "Component", Properties: []flowv1.PropertySpec{{Name: "name", Type: "string", Required: true}}},
+				},
+			},
+			new: &flowv1.FoundryGraphSpec{
+				EntityTypes: []flowv1.EntityTypeSpec{
+					{Name: "Component", Properties: []flowv1.PropertySpec{{Name: "name", Type: "string", Required: false}}},
+				},
+			},
+			expected: SchemaDiffNonDestructive,
+		},
+		{
+			name: "edge type property required toggled - non-destructive",
+			// Same classification as the entity-property toggle (the shared
+			// diffProperties branch): a bare Required toggle on an existing edge
+			// property is DDL-neutral application-only metadata — non-destructive,
+			// matching the store's diffSchemaAgainstCatalog edge-property check.
 			old: &flowv1.FoundryGraphSpec{
 				EdgeTypes: []flowv1.EdgeTypeSpec{
 					{Name: "DEPENDS_ON", Properties: []flowv1.PropertySpec{{Name: "weight", Type: "int", Required: false}}},
@@ -530,7 +552,7 @@ func TestDiffSchema(t *testing.T) {
 					{Name: "DEPENDS_ON", Properties: []flowv1.PropertySpec{{Name: "weight", Type: "int", Required: true}}},
 				},
 			},
-			expected: SchemaDiffDestructive,
+			expected: SchemaDiffNonDestructive,
 		},
 		{
 			name: "canConnectTo duplicate members - no diff (set-based membership)",
