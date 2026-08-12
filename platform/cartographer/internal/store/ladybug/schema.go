@@ -761,7 +761,6 @@ func collectFromToPairs(s *flowv1.Schema) map[string][]fromToPair {
 
 const (
 	colTypeString = "STRING"
-	colTypeInt64  = "INT64"
 	// untypedTableName is the internal placeholder NODE table created for
 	// edgeless rel types (createRelTableOnConn). The name is reserved for this
 	// purpose: schema.UntypedTableName is rejected as a user entity/edge type
@@ -772,21 +771,20 @@ const (
 	tableTypeRel     = "REL"
 )
 
-// ladybugType maps the proto property type string to a LadybugDB column type.
-// ponytail: Currently all user properties are "string"; if richer types are
-// added to the proto, this mapping must grow.
+// ladybugType maps a property type string to a LadybugDB column type. SPEC
+// R1/R7 mandate string-typed properties (the wire carries map<string,string>),
+// so "string" (proto form), "STRING" (catalog form), and "" map to STRING. Any
+// other input — reachable only as a drifted catalog column type — is returned
+// unchanged so the ApplySchema catalog diff still rejects a column whose
+// persisted type differs from the declared schema (SPEC error-table row "Table
+// structure mismatch"). The mapping is the single seam that must grow if a
+// richer proto property-type model is ever added.
 func ladybugType(protoType string) string {
 	switch strings.ToUpper(protoType) {
 	case colTypeString, "":
 		return colTypeString
-	case colTypeInt64:
-		return colTypeInt64
-	case "FLOAT", "DOUBLE":
-		return "DOUBLE"
-	case "BOOL":
-		return "BOOLEAN"
 	default:
-		return colTypeString
+		return protoType
 	}
 }
 

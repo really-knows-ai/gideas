@@ -37,6 +37,13 @@ const inferredValue = "inferred"
 // TestNonVectorTypeEmbeddingProperty_RoundTrips.
 const embeddingPropertyValue = "not-a-vector"
 
+// driftedColumnType is a non-"string" type used to simulate a catalog column
+// (or persisted schema metadata) whose type no longer matches the declared
+// "string": the ApplySchema catalog diff must reject it (SPEC error-table row
+// "Table structure mismatch") and reopen must fail closed on corrupted
+// metadata.
+const driftedColumnType = "INT64"
+
 func TestOpenClose(t *testing.T) {
 	s, err := OpenInMemory()
 	if err != nil {
@@ -2908,7 +2915,7 @@ func TestPersistence_CatalogMetadataMismatchFailsClosed(t *testing.T) {
 			metadata.EntityTypes[0].Properties[0].Name = "renamed"
 		}},
 		{"property type", func(metadata *schemaMetadata) {
-			metadata.EntityTypes[0].Properties[0].Type = colTypeInt64
+			metadata.EntityTypes[0].Properties[0].Type = driftedColumnType
 		}},
 		{"relationship endpoint", func(metadata *schemaMetadata) {
 			metadata.EntityTypes[1].Rules[0].CanConnectTo = []string{"Service"}
@@ -6630,7 +6637,7 @@ func TestApplySchema_ChangedEntityPropertyType_Rejected(t *testing.T) {
 	// the declared "string" (SPEC:930's different-column-type condition).
 	db := s.(*ladybugDB)
 	db.mu.Lock()
-	db.entityTypeDefs["Document"].Properties[1].Type = "INT64"
+	db.entityTypeDefs["Document"].Properties[1].Type = driftedColumnType
 	db.mu.Unlock()
 
 	err = s.ApplySchema(ctx, schema1)
@@ -6685,7 +6692,7 @@ func TestApplySchema_ChangedEdgePropertyType_Rejected(t *testing.T) {
 	// the declared "string".
 	db := s.(*ladybugDB)
 	db.mu.Lock()
-	db.edgeTypeDefs["DEPENDS_ON"].Properties[0].Type = "INT64"
+	db.edgeTypeDefs["DEPENDS_ON"].Properties[0].Type = driftedColumnType
 	db.mu.Unlock()
 
 	err = s.ApplySchema(ctx, schema1)
