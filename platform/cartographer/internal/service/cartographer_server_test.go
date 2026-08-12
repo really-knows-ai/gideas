@@ -10950,9 +10950,6 @@ func TestCommitTransaction_RecoveredPartialCommitRehydratesAfterStartupRebuild(t
 	if err := st.Close(); err != nil {
 		t.Fatalf("close store: %v", err)
 	}
-	if err := gs.Close(); err != nil {
-		t.Fatalf("close git store: %v", err)
-	}
 	reopened, err := ladybug.Open(dataPath)
 	if err != nil {
 		t.Fatalf("reopen store: %v", err)
@@ -10962,7 +10959,6 @@ func TestCommitTransaction_RecoveredPartialCommitRehydratesAfterStartupRebuild(t
 	if err != nil {
 		t.Fatalf("reopen git store: %v", err)
 	}
-	t.Cleanup(func() { _ = reopenedGit.Close() })
 	// Simulate the unconditional startup rebuild (rehydrateMainAfterRecovery):
 	// restore the working tree to main, then re-hydrate main.lbug from git
 	// main — which does NOT contain the un-merged transaction commit.
@@ -11024,7 +11020,6 @@ func TestRefreshTransaction_CrashSafeRebuildPreservesBranchDBOnFailure(t *testin
 	if err != nil {
 		t.Fatalf("open git store: %v", err)
 	}
-	t.Cleanup(func() { _ = gs.Close() })
 	// Fail the refresh's branch re-hydration (the 2nd HydrateBranchFromFiles
 	// call — the 1st is BeginTransaction's).
 	release := make(chan struct{})
@@ -11110,7 +11105,6 @@ func TestRefreshTransaction_FileBackedCrashSafeSwap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open git store: %v", err)
 	}
-	t.Cleanup(func() { _ = gs.Close() })
 	srv := NewCartographerServer(
 		st, gs, opPub, initTestKey(), nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000,
 		WithLadybugPath(dataPath),
@@ -11215,9 +11209,6 @@ func TestRecoverOpenTransactionsMissingStateRollsBack(t *testing.T) {
 	if err := st.Close(); err != nil {
 		t.Fatalf("close store: %v", err)
 	}
-	if err := gs.Close(); err != nil {
-		t.Fatalf("close git store: %v", err)
-	}
 
 	reopened, err := ladybug.Open(dataPath)
 	if err != nil {
@@ -11228,7 +11219,6 @@ func TestRecoverOpenTransactionsMissingStateRollsBack(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen git store: %v", err)
 	}
-	t.Cleanup(func() { _ = reopenedGit.Close() })
 	restarted := NewCartographerServer(
 		reopened, reopenedGit, opPub, initTestKey(), nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000,
 		WithLadybugPath(dataPath),
