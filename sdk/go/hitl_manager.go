@@ -164,6 +164,10 @@ func (qm *queueManagerImpl) Start(ctx context.Context, opts ...QueueManagerOptio
 	for _, opt := range opts {
 		opt(cfg)
 	}
+	// Apply the effective API port so a Start-time WithAPIPort (e.g. "0" for
+	// an ephemeral test port) actually takes effect instead of silently
+	// falling back to the NewQueueManager-time default.
+	qm.apiPort = cfg.apiPort
 
 	// Determine storage path.
 	storagePath := cfg.storagePath
