@@ -784,6 +784,13 @@ func entityFromNode(node lbug.Node, entityType string, vectorIndexed bool) *stor
 		if vectorIndexed && k == "embedding" {
 			continue
 		}
+		if v == nil {
+			// A declared-but-unset column is NULL in the DB. It is not a
+			// property value and must not surface as the literal string
+			// "<nil>"; the gitstore boundary and SPEC R11 export output both
+			// model an unset property as absent.
+			continue
+		}
 		e.Properties[k] = fmt.Sprintf("%v", v)
 	}
 	// Extract embedding. Only a vector-enabled type's embedding column is a
@@ -820,6 +827,11 @@ func edgeFromRel(rel lbug.Relationship, edgeType, fromID, toID string) *store.Ed
 	}
 	for k, v := range rel.Properties {
 		if k == "id" {
+			continue
+		}
+		if v == nil {
+			// Same NULL-column semantics as entityFromNode: an unset declared
+			// property is absent, never the string "<nil>".
 			continue
 		}
 		e.Properties[k] = fmt.Sprintf("%v", v)
