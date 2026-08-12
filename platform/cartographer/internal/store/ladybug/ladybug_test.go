@@ -2837,6 +2837,68 @@ func TestPersistence_MissingBranchSchemaMetadataFailsClosed(t *testing.T) {
 	}
 }
 
+// SPEC R9 recovery point 4 rolls back a transaction whose branch .lbug is
+// absent; this pins the sibling crash window: a crash between CreateBranchDB
+// and ReplicateSchemaToBranch leaves a present-but-empty branch .lbug with no
+// schema metadata (ReplicateSchemaToBranch writes branches/<txID>.schema.json
+// only after its DDL loop). In that window the branch has no tables and no
+// data — the transaction never made a durable change — so the reopen must
+// classify it exactly like the absent-.lbug case (ErrBranchNotFound, which
+// RecoverOpenTransactions turns into a rollback via cleanupTransaction/
+// DropBranchDB) instead of surfacing a hard error that bricks startup. The
+// non-empty-catalog sibling (TestPersistence_MissingBranchSchemaMetadataFailsClosed)
+// stays a loud failure.
+func TestBranch_EmptyBranchNoMetadataRollsBackOnReopen(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	ctx := context.Background()
+	applyTestSchema(t, s)
+
+	const branch = "tx-crash-window"
+	if err := s.CreateBranchDB(ctx, branch); err != nil {
+		t.Fatalf("CreateBranchDB: %v", err)
+	}
+	// Simulate the crash: ReplicateSchemaToBranch never runs, so the branch
+	// schema metadata file is never written and the branch catalog stays empty.
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	// Confirm the mid-sequence crash state on disk: present-but-empty .lbug,
+	// absent .schema.json.
+	if _, err := os.Stat(filepath.Join(dir, "branches", branch+".lbug")); err != nil {
+		t.Fatalf("expected persisted empty branch .lbug: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "branches", branch+".schema.json")); !os.IsNotExist(err) {
+		t.Fatalf("expected absent branch schema metadata: %v", err)
+	}
+
+	reopened, err := Open(dir)
+	if err != nil {
+		t.Fatalf("reopen main: %v", err)
+	}
+	defer closeStore(t, reopened)
+
+	if _, err := reopened.DumpAllEntities(ctx, branch); !errors.Is(err, store.ErrBranchNotFound) {
+		t.Fatalf("DumpAllEntities = %v, want ErrBranchNotFound (rollback classification)", err)
+	}
+	// The rollback path (RecoverOpenTransactions' cleanup) drops the branch via
+	// DropBranchDB; it must succeed and remove the persisted .lbug.
+	if err := reopened.DropBranchDB(ctx, branch); err != nil {
+		t.Fatalf("DropBranchDB: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "branches", branch+".lbug")); !os.IsNotExist(err) {
+		t.Fatalf("branch .lbug was not removed by rollback: %v", err)
+	}
+	// After the rollback the branch is fully absent: classification stays
+	// ErrBranchNotFound, never a resurrected empty branch.
+	if _, err := reopened.DumpAllEntities(ctx, branch); !errors.Is(err, store.ErrBranchNotFound) {
+		t.Fatalf("DumpAllEntities after rollback = %v, want ErrBranchNotFound", err)
+	}
+}
+
 func TestPersistence_CatalogMetadataMismatchFailsClosed(t *testing.T) {
 	for _, test := range []struct {
 		name   string
@@ -8985,6 +9047,94 @@ func TestRehydrateFiles_EmbeddedIDConflictsWithFilenameFailsLoudly(t *testing.T)
 			}
 			if !errors.Is(loadErr, tc.want) {
 				t.Fatalf("expected %v, got %v", tc.want, loadErr)
+			}
+		})
+	}
+}
+
+// nonCanonicalUUIDSpellings are the four spellings of a single valid RFC4122
+// v4 UUID that google/uuid.Parse accepts but the canonical RFC4122 §3 string
+// form (the lowercase 8-4-4-4-12 dashed string) does not. SPEC:162 requires
+// the canonical form; the gitstore sibling tests the same spellings against
+// its read/write paths (uuid_guard_test.go).
+var nonCanonicalUUIDSpellings = []string{
+	"550E8400-E29B-41D4-A716-446655440000",          // uppercase hex
+	"550e8400e29b41d4a716446655440000",              // 32-char no-hyphen
+	"{550e8400-e29b-41d4-a716-446655440000}",        // braced {...}
+	"urn:uuid:550e8400-e29b-41d4-a716-446655440000", // urn:uuid: prefix
+}
+
+// SPEC R2 requires entity and edge IDs to be the canonical RFC4122 §3 UUID v4
+// string form: the store's write path gates every ID through validateUUID
+// (store.ErrInvalidIDFormat), and the sibling gitstore read path rejects a
+// non-canonical embedded id with ErrInvalidUUID (entity.go/edge.go). The
+// re-hydration loaders must reject the same shape on every load path
+// (main/branch × entity/edge): a corrupt/hand-edited file whose embedded id is
+// a non-canonical spelling of a valid UUID (uppercase hex, no-hyphen, braced,
+// urn:uuid:) would otherwise load silently under that spelling — a second row
+// for one UUID the write path would never produce. Fail loudly instead (SPEC
+// R8). Each file's filename matches its embedded (non-canonical) id so the
+// filename↔id guard passes and the canonical-form guard is the one that fires.
+func TestRehydrateFiles_NonCanonicalUUIDFailsLoudly(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		branch bool
+		edge   bool
+	}{
+		{"main entity", false, false},
+		{"main edge", false, true},
+		{"branch entity", true, false},
+		{"branch edge", true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, id := range nonCanonicalUUIDSpellings {
+				t.Run(id, func(t *testing.T) {
+					s, err := OpenInMemory()
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer closeStore(t, s)
+					applyTestSchema(t, s)
+					ctx := context.Background()
+
+					const branch = "tx1"
+					if tc.branch {
+						if err := s.CreateBranchDB(ctx, branch); err != nil {
+							t.Fatalf("CreateBranchDB: %v", err)
+						}
+						if err := s.ReplicateSchemaToBranch(ctx, branch); err != nil {
+							t.Fatalf("ReplicateSchemaToBranch: %v", err)
+						}
+					}
+
+					root := t.TempDir()
+					entitiesDir := filepath.Join(root, "entities")
+					edgesDir := filepath.Join(root, "edges")
+					if tc.edge {
+						writeJSONFile(t, filepath.Join(edgesDir, "DependsOn", id+".json"), map[string]any{
+							"id": id, "type": "DependsOn",
+							"from": uuid.NewString(), "to": uuid.NewString(),
+						})
+					} else {
+						writeJSONFile(t, filepath.Join(entitiesDir, "Component", id+".json"), map[string]any{
+							"id": id, "type": "Component",
+							"properties": map[string]string{"name": "non-canonical"},
+						})
+					}
+
+					var loadErr error
+					if tc.branch {
+						loadErr = s.HydrateBranchFromFiles(ctx, branch, entitiesDir, edgesDir)
+					} else {
+						loadErr = s.RehydrateMainFromFiles(ctx, entitiesDir, edgesDir)
+					}
+					if loadErr == nil {
+						t.Fatal("expected loud failure for a file whose embedded id is a non-canonical UUID v4 spelling")
+					}
+					if !errors.Is(loadErr, store.ErrInvalidIDFormat) {
+						t.Fatalf("expected ErrInvalidIDFormat, got %v", loadErr)
+					}
+				})
 			}
 		})
 	}

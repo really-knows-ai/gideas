@@ -181,6 +181,24 @@ func (db *ladybugDB) branchLocked(txID string) (*branchDB, error) {
 		conn, db.branchMetadataPath(txID), catalogEntities, catalogEdges,
 	)
 	if err != nil {
+		// SPEC R9 recovery point 4 rolls back a transaction whose branch .lbug
+		// is absent; this closes the sibling crash window. A crash between
+		// CreateBranchDB and ReplicateSchemaToBranch leaves a present-but-empty
+		// branch .lbug with no schema metadata (ReplicateSchemaToBranch writes
+		// branches/<txID>.schema.json only after its DDL loop). In that window
+		// the branch has no tables and no data — the transaction never made a
+		// durable change — so it is classified exactly like the absent-.lbug
+		// case (ErrBranchNotFound → RecoverOpenTransactions rolls the
+		// transaction back via cleanupTransaction/DropBranchDB) instead of
+		// surfacing a hard error that bricks startup. A non-empty catalog with
+		// no metadata stays a loud failure (genuine state loss, mirroring
+		// restoreMainSchemaMetadataLocked), and so does a present-but-corrupt
+		// metadata file (this check matches only the not-exist read error).
+		if errors.Is(err, os.ErrNotExist) && len(catalogEntities) == 0 && len(catalogEdges) == 0 {
+			conn.Close()
+			database.Close()
+			return nil, fmt.Errorf("%w: branch for tx %q", store.ErrBranchNotFound, txID)
+		}
 		conn.Close()
 		database.Close()
 		return nil, fmt.Errorf("restore persisted branch schema %q: %w", txID, err)
@@ -1350,6 +1368,19 @@ func (db *ladybugDB) loadEntitiesFromDir(dir string, entDefs map[string]*store.E
 				return fmt.Errorf("%w: entity file %s embedded id %s conflicts with filename",
 					store.ErrInvalidEntityDir, f.Name(), je.ID)
 			}
+			// The embedded id must be a canonical RFC4122 §3 UUID v4 string —
+			// the same gate the write path applies (validateUUID →
+			// store.ErrInvalidIDFormat, crud.go) and the sibling gitstore read
+			// path enforces (ReadAllEntityFiles rejects a non-canonical embedded
+			// id with ErrInvalidUUID). A corrupt/hand-edited file whose id is a
+			// non-canonical spelling of a valid UUID (uppercase hex, no-hyphen,
+			// braced, urn:uuid:) would otherwise load silently under that
+			// spelling during re-hydration (SPEC R8) — a second row for one
+			// UUID the write path would never produce. Fail loudly instead.
+			if err := validateUUID(je.ID); err != nil {
+				return fmt.Errorf("%w: entity file %s embedded id %s is not a valid UUID v4",
+					err, filepath.Join(typeDir, f.Name()), je.ID)
+			}
 			// The directory-mismatch guard runs BEFORE the embedding-bootstrap
 			// DDL: a corrupt/hand-edited file declaring a type that differs from
 			// its directory must be rejected before ensureEmbeddingLoadSchema
@@ -1462,6 +1493,19 @@ func (db *ladybugDB) loadEdgesFromDir(dir string, edgeDefs map[string]*store.Edg
 				return fmt.Errorf("%w: edge file %s embedded id %s conflicts with filename",
 					store.ErrInvalidEdgeDir, f.Name(), je.ID)
 			}
+			// The embedded id must be a canonical RFC4122 §3 UUID v4 string —
+			// the same gate the write path applies (validateUUID →
+			// store.ErrInvalidIDFormat, crud.go) and the sibling gitstore read
+			// path enforces (ReadAllEdgeFiles rejects a non-canonical embedded
+			// id with ErrInvalidUUID). A corrupt/hand-edited file whose id is a
+			// non-canonical spelling of a valid UUID (uppercase hex, no-hyphen,
+			// braced, urn:uuid:) would otherwise load silently under that
+			// spelling during re-hydration (SPEC R8) — a second row for one
+			// UUID the write path would never produce. Fail loudly instead.
+			if err := validateUUID(je.ID); err != nil {
+				return fmt.Errorf("%w: edge file %s embedded id %s is not a valid UUID v4",
+					err, filepath.Join(typeDir, f.Name()), je.ID)
+			}
 			if je.Type != typeName {
 				return fmt.Errorf("%w: edge file %q declares type %q but is stored under directory %q",
 					store.ErrInvalidEdgeDir, filepath.Join(typeDir, f.Name()), je.Type, typeName)
@@ -1557,6 +1601,19 @@ func (db *ladybugDB) loadEntitiesFromDirOnConn(conn *lbug.Connection, dir string
 			if base := strings.TrimSuffix(f.Name(), ".json"); base != je.ID {
 				return fmt.Errorf("%w: entity file %s embedded id %s conflicts with filename",
 					store.ErrInvalidEntityDir, f.Name(), je.ID)
+			}
+			// The embedded id must be a canonical RFC4122 §3 UUID v4 string —
+			// the same gate the write path applies (validateUUID →
+			// store.ErrInvalidIDFormat, crud.go) and the sibling gitstore read
+			// path enforces (ReadAllEntityFiles rejects a non-canonical embedded
+			// id with ErrInvalidUUID). A corrupt/hand-edited file whose id is a
+			// non-canonical spelling of a valid UUID (uppercase hex, no-hyphen,
+			// braced, urn:uuid:) would otherwise load silently under that
+			// spelling during re-hydration (SPEC R8) — a second row for one
+			// UUID the write path would never produce. Fail loudly instead.
+			if err := validateUUID(je.ID); err != nil {
+				return fmt.Errorf("%w: entity file %s embedded id %s is not a valid UUID v4",
+					err, filepath.Join(typeDir, f.Name()), je.ID)
 			}
 			// The directory-mismatch guard runs BEFORE the embedding-bootstrap
 			// DDL: a corrupt/hand-edited file declaring a type that differs from
@@ -1670,6 +1727,19 @@ func (db *ladybugDB) loadEdgesFromDirOnConn(conn *lbug.Connection, dir string,
 			if base := strings.TrimSuffix(f.Name(), ".json"); base != je.ID {
 				return fmt.Errorf("%w: edge file %s embedded id %s conflicts with filename",
 					store.ErrInvalidEdgeDir, f.Name(), je.ID)
+			}
+			// The embedded id must be a canonical RFC4122 §3 UUID v4 string —
+			// the same gate the write path applies (validateUUID →
+			// store.ErrInvalidIDFormat, crud.go) and the sibling gitstore read
+			// path enforces (ReadAllEdgeFiles rejects a non-canonical embedded
+			// id with ErrInvalidUUID). A corrupt/hand-edited file whose id is a
+			// non-canonical spelling of a valid UUID (uppercase hex, no-hyphen,
+			// braced, urn:uuid:) would otherwise load silently under that
+			// spelling during re-hydration (SPEC R8) — a second row for one
+			// UUID the write path would never produce. Fail loudly instead.
+			if err := validateUUID(je.ID); err != nil {
+				return fmt.Errorf("%w: edge file %s embedded id %s is not a valid UUID v4",
+					err, filepath.Join(typeDir, f.Name()), je.ID)
 			}
 			if je.Type != typeName {
 				return fmt.Errorf("%w: edge file %q declares type %q but is stored under directory %q",
