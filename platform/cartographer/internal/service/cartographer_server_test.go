@@ -2878,8 +2878,9 @@ func (r *rehydrateTrackingStore) hydrateCalls() int {
 }
 
 // flakyRehydrateStore wraps a store.Store whose RehydrateMainFromFiles fails
-// for the first failAt calls, pinning the GIT_PLAN.md:139 retry contract: a
-// failed post-fetch re-hydration must be retried by the next sync cycle.
+// for the first failAt calls, pinning the next-cycle re-hydration retry
+// contract: a failed post-fetch re-hydration must be retried by the next sync
+// cycle.
 type flakyRehydrateStore struct {
 	store.Store
 	mu     sync.Mutex
@@ -2905,7 +2906,7 @@ func (f *flakyRehydrateStore) rehydrateCalls() int {
 }
 
 // TestSyncWorker_RehydrateOnlyWhenNewDataPulled pins the SPEC R10 re-hydration
-// condition ("if new data was pulled re-hydrates main.lbug"; GIT_PLAN.md:30,84):
+// condition ("if new data was pulled re-hydrates main.lbug"):
 // an up-to-date fetch (unchanged HEAD) must not re-hydrate, while a fetch that
 // advances HEAD must.
 func TestSyncWorker_RehydrateOnlyWhenNewDataPulled(t *testing.T) {
@@ -2962,9 +2963,9 @@ func TestSyncWorker_RehydrateOnlyWhenNewDataPulled(t *testing.T) {
 	})
 }
 
-// TestSyncWorker_RehydrateRetriesOnNextCycle pins the GIT_PLAN.md:139 retry
-// contract: "The next sync cycle retries the re-hydration — the git files are
-// already merged, re-hydration is a read from the working tree". A re-hydration
+// TestSyncWorker_RehydrateRetriesOnNextCycle pins the next-cycle re-hydration
+// retry contract: "The next sync cycle retries the re-hydration — the git files
+// are already merged, re-hydration is a read from the working tree". A re-hydration
 // that fails after a successful fetch (e.g. disk full) is retried by the next
 // cycle even though HEAD no longer advances.
 func TestSyncWorker_RehydrateRetriesOnNextCycle(t *testing.T) {
@@ -3003,7 +3004,7 @@ func TestSyncWorker_RehydrateRetriesOnNextCycle(t *testing.T) {
 
 	// Cycle 2: the remote is now up-to-date (fetch returns the unchanged HEAD),
 	// but the failed re-hydration must still be retried — and succeed once the
-	// underlying cause clears (GIT_PLAN.md:139).
+	// underlying cause clears.
 	syncGit.fetchHash = plumbing.NewHash(preHead) // unchanged local HEAD: new-data signal absent
 	sw.runSyncCycle()
 	if calls := flaky.rehydrateCalls(); calls != 2 {
@@ -3018,7 +3019,8 @@ func TestSyncWorker_RehydrateRetriesOnNextCycle(t *testing.T) {
 }
 
 // TestSyncWorker_RehydrateRestoresMainBeforeReadingTree pins the
-// transaction-isolation invariant (SPEC R10 / GIT_PLAN Phase 2 step 3): with
+// transaction-isolation invariant (SPEC R10 re-hydration: the working tree is
+// restored to main before files are read): with
 // the working tree checked out on a transaction branch carrying an uncommitted
 // entity file, a new-data cycle must restore main (and clean the tree) before
 // RehydrateMainFromFiles so the uncommitted file can never be published into
@@ -3130,9 +3132,8 @@ func TestSyncWorkerPushFailureLeavesFlagSet(t *testing.T) {
 	}
 }
 
-// TestSyncWorker_FailureEmitsTelemetry pins the SPEC R10 / GIT_PLAN telemetry
-// contract ("log loudly + telemetry": "An operator-visible telemetry event
-// fires on each permanent failure"): every permanent sync failure — a
+// TestSyncWorker_FailureEmitsTelemetry pins the SPEC R10 telemetry
+// contract ("log loudly + telemetry"): every permanent sync failure — a
 // non-recoverable error or retries exhausted, for fetch or push — emits
 // exactly one "cartographer.push_failed" Event Bus event.
 func TestSyncWorker_FailureEmitsTelemetry(t *testing.T) {
@@ -3507,7 +3508,7 @@ func TestSyncWorker_WithAck_ConcurrentWaitersBothComplete(t *testing.T) {
 }
 
 // TestSyncWorker_WithAck_TimerCycleInFlightDoesNotSatisfyFreshWaiter pins the
-// GIT_PLAN WithAck/timer-race edge case: a WithAck waiter registered while a
+// WithAck/timer-race edge case: a WithAck waiter registered while a
 // timer-driven cycle is in flight must not be satisfied by that cycle (whose
 // waiter snapshot predates the registration). The waiter stays blocked until a
 // push is actually delivered; the follow-up cycle then unblocks it.

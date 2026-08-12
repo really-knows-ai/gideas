@@ -5321,7 +5321,8 @@ func TestFetchAndMerge_Diverged(t *testing.T) {
 // up-to-date — so the sync worker and Sync() keep delivering the SPEC R10
 // "Sync diverged" failure (FAILED_PRECONDITION, SPEC error-table row 977)
 // and its telemetry on every cycle, and BeginTransaction's implicit sync
-// never sees a clean cycle over stale local state (GIT_PLAN.md:138).
+// never sees a clean cycle over stale local state (SPEC R10 BeginTransaction
+// implicit sync).
 func TestFetchAndMerge_DivergencePersistsAcrossCycles(t *testing.T) {
 	tmpDir := t.TempDir()
 	bareDir := filepath.Join(tmpDir, "remote.git")
@@ -5423,7 +5424,8 @@ func TestFetchAndMerge_DivergencePersistsAcrossCycles(t *testing.T) {
 
 // TestFetchAndMerge_LocalAhead pins the local-ahead (remote strictly behind)
 // classification of FetchAndMerge: local main has advanced past the remote
-// (e.g. a fire-and-forget push that failed transiently — GIT_PLAN.md:12), so there
+// (e.g. a fire-and-forget push that failed transiently — the SPEC R10 Commit
+// model defers delivery to the worker's next push), so there
 // is nothing to pull and the call must succeed as up-to-date, never fail with
 // ErrPullDiverged. The remote-behind state is reached with distinct
 // local/remote tips by dropping the remote-tracking ref first (simulating a

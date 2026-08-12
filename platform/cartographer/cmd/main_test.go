@@ -1070,8 +1070,8 @@ func TestTryRemotePullOnInitCloneFailurePublishesTelemetry(t *testing.T) {
 
 // TestTryRemotePullOnInitCatchUpPushEmitsNoTelemetry verifies the init path
 // publishes no "cartographer.push_failed" telemetry on the catch-up path: the
-// catch-up push is deferred to the sync worker's first cycle (SPEC R10 Init /
-// GIT_PLAN.md:33), which is the sole push-failure emitter, so a startup must
+// catch-up push is deferred to the sync worker's first cycle (SPEC R10 Init),
+// which is the sole push-failure emitter, so a startup must
 // not report the same push through two emitters.
 func TestTryRemotePullOnInitCatchUpPushEmitsNoTelemetry(t *testing.T) {
 	gs := &initPullGitStore{isEmpty: false}

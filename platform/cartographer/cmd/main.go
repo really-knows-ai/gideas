@@ -333,8 +333,10 @@ func main() {
 	} else if remoteURL != "" {
 		// pullOnInit=false (the common default): no clone runs, but the
 		// startup catch-up push still applies — unsent commits from a prior pod
-		// lifetime must be delivered by the worker's first cycle
-		// (SPEC.md:640-641; GIT_PLAN.md:136's restart rationale depends on it).
+		// lifetime must be delivered by the worker's first cycle (SPEC R10 Init:
+		// "pushes any locally-committed-but-unpushed data on its first cycle
+		// (startup catch-up push), including any unsent commits from a prior pod
+		// lifetime").
 		// A repo-state check failure is logged and non-blocking, mirroring
 		// tryRemotePullOnInit's IsEmpty handling (SPEC R10 Init).
 		initCatchUpPush = startupCatchUpPushNeeded(context.Background(), gs)
@@ -351,14 +353,14 @@ func main() {
 
 	// Create the background sync worker if a remote URL is configured. Its
 	// goroutine is started only after server construction and transaction
-	// recovery (see the SPEC R10 / GIT_PLAN Phase 2 item 8 note below).
+	// recovery (see the SPEC R10 note below).
 	var syncW *service.SyncWorker
 	if remoteURL != "" {
 		// Permanent sync failures emit an operator-visible Event Bus telemetry
-		// event (SPEC R10 / GIT_PLAN "log loudly + telemetry"), so the worker
-		// shares the server's audit publisher when one is configured, and stamps
-		// the same flow namespace (FlowNamespace: podNamespace) the server's
-		// publishTelemetry uses, so the two emitters stay consistent.
+		// event (SPEC R10 error classification "log loudly + telemetry"), so the
+		// worker shares the server's audit publisher when one is configured, and
+		// stamps the same flow namespace (FlowNamespace: podNamespace) the
+		// server's publishTelemetry uses, so the two emitters stay consistent.
 		var syncOpts []service.SyncWorkerOption
 		if auditPub != nil {
 			syncOpts = append(syncOpts, service.SyncWorkerWithAuditPublisher(auditPub))
@@ -411,9 +413,8 @@ func main() {
 	}
 	slog.Info("Open transactions recovered")
 
-	// SPEC R10 / GIT_PLAN Phase 2 item 8 ("after the Cartographer server is
-	// constructed, create and start the syncWorker"): the worker goroutine is
-	// started only after server construction AND transaction recovery. Run()
+	// SPEC R10 background sync worker: the worker goroutine is started only
+	// after server construction AND transaction recovery. Run()
 	// executes an immediate first cycle (fetch → restore-main → clean →
 	// re-hydrate), which must not run concurrently with the recovery path:
 	// recovery's main-file reads (buildMainFileLookups, cartographer_server.go)
@@ -569,9 +570,10 @@ func startupCatchUpPushNeeded(ctx context.Context, gs gitstore.GitStore) bool {
 // tryRemotePullOnInit performs the SPEC R10 Init pre-flight auth check and the
 // clone-vs-catch-up decision. It returns catchUpPush=true when the local repo
 // already has commits (non-empty) and the sync worker's first cycle must push
-// any locally-committed-but-unpushed data (SPEC R10 Init / GIT_PLAN.md:33);
-// the caller (main) sets the worker's push flag from this before the first
-// cycle runs. The push itself is deliberately NOT performed here: routing it
+// any locally-committed-but-unpushed data (SPEC R10 Init: "pushes any
+// locally-committed-but-unpushed data on its first cycle (startup catch-up
+// push)"); the caller (main) sets the worker's push flag from this before the
+// first cycle runs. The push itself is deliberately NOT performed here: routing it
 // through the worker's cycle keeps the R10 error-table retry contract.
 // podNamespace stamps the clone-failure telemetry event (FlowNamespace),
 // matching the server's publishTelemetry and the sync worker's publishFailure
@@ -714,10 +716,10 @@ func tryRemotePullOnInit(
 		// locally-committed-but-unpushed data to catch up, so no push flag.
 		return false, nil
 	}
-	// SPEC R10 Init / GIT_PLAN.md:33: when the local repo already has commits,
-	// the sync worker's first cycle pushes any locally-committed-but-unpushed
-	// data (startup catch-up push), including unsent commits from a prior pod
-	// lifetime. The push is NOT attempted here: the sync worker is constructed
+	// SPEC R10 Init: when the local repo already has commits, the sync worker's
+	// first cycle pushes any locally-committed-but-unpushed data (startup
+	// catch-up push), including unsent commits from a prior pod lifetime. The
+	// push is NOT attempted here: the sync worker is constructed
 	// after this init path, so this function only reports that a catch-up push
 	// is needed and main.go flags the worker (SetPushNeeded) before its first
 	// cycle runs. Routing the push through the worker keeps the R10 error-table
