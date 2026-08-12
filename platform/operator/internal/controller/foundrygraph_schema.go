@@ -29,8 +29,8 @@ type SchemaDiffResult int
 
 const (
 	SchemaDiffNone           SchemaDiffResult = iota // no schema change
-	SchemaDiffNonDestructive                         // additive-only: new types, new properties, rule changes preserving every edge type's FROM/TO endpoint set, enableVectorIndex false->true
-	SchemaDiffDestructive                            // removed types, removed/changed properties, edge-type FROM/TO endpoint-set changes, enableVectorIndex true->false
+	SchemaDiffNonDestructive                         // additive-only: new types, new properties, required-flag toggles on existing properties, rule changes preserving every edge type's FROM/TO endpoint set, enableVectorIndex false->true
+	SchemaDiffDestructive                            // removed types, removed properties, type-changed properties, edge-type FROM/TO endpoint-set changes, enableVectorIndex true->false
 )
 
 // diffSchema compares old and new FoundryGraphSpec and returns the type of schema change.
@@ -152,9 +152,17 @@ func diffEdgeTypes(oldSpec, newSpec *flowv1.FoundryGraphSpec) (destructive, nonD
 }
 
 // diffProperties reports whether a property-set change is destructive (a property was
-// removed or an existing property's Type/Required declaration changed) or
-// non-destructive (properties were added). SPEC R6 defines destructive as "removed or
-// changed existing type properties"; adding new properties is additive-only.
+// removed or an existing property's declared type changed) or non-destructive (a property
+// was added, or an existing property's Required flag was toggled). SPEC R6 defines
+// destructive as "removed or changed existing type properties" — a change the store cannot
+// express through ALTER. The Required flag is application-only write-enforcement metadata:
+// the store persists it in schema.json, never in the LadybugDB catalog/DDL (see
+// ladybug schema.go diffSchemaAgainstCatalog, which compares only the mapped column type,
+// and metadata.go validateCatalogProperties), and its enforcement is forward-only (SPEC
+// R6). A bare toggle is therefore DDL-neutral and safe — non-destructive, matching the
+// store's classification — but still a schema change, so it must push via ApplySchema to
+// refresh the store's in-memory Required metadata. It must never trigger WipeGraph, which
+// would destroy the whole graph for a change that touches no column.
 func diffProperties(oldProps, newProps []flowv1.PropertySpec) (destructive, nonDestructive bool) {
 	oldMap := make(map[string]flowv1.PropertySpec, len(oldProps))
 	for _, p := range oldProps {
@@ -169,8 +177,10 @@ func diffProperties(oldProps, newProps []flowv1.PropertySpec) (destructive, nonD
 		newP, exists := newMap[name]
 		if !exists {
 			destructive = true
-		} else if oldP.Type != newP.Type || oldP.Required != newP.Required {
+		} else if oldP.Type != newP.Type {
 			destructive = true
+		} else if oldP.Required != newP.Required {
+			nonDestructive = true
 		}
 	}
 	for name := range newMap {
