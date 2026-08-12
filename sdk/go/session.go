@@ -148,9 +148,9 @@ func (s *session) call(ctx context.Context, fn func(context.Context) error, key 
 	}
 	// Apply per-call timeout from the session config.
 	// ponytail: The timeout and maxRetries fields already exist on the
-	// session struct but are not consumed by any existing SDK method.
-	// This implementation consumes s.timeout as a per-call deadline.
-	// s.maxRetries is reserved for a future retry-with-backoff pass.
+	// session struct; this implementation consumes s.timeout as a per-call
+	// deadline, and s.maxRetries is reserved for a future retry-with-backoff
+	// pass.
 	if s.timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, s.timeout)
