@@ -1,7 +1,6 @@
 package flow
 
 import (
-	"context"
 	"fmt"
 
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
@@ -74,12 +73,8 @@ func (f *Feedback) PB() *flowv1.FeedbackItem {
 // GetDepth returns the current history depth (number of transitions)
 // for this feedback item. This is the only getter requiring a server
 // round-trip (Archivist GetFeedbackDepth RPC).
-//
-// ponytail: uses context.Background(); switch to per-session context when
-// the session struct carries one, so cancellation and timeout are
-// configurable at the client level (WithRequestTimeout ClientOption).
 func (f *Feedback) GetDepth() (int32, error) {
-	resp, err := f.session.Archivist.GetFeedbackDepth(context.Background(), &flowv1.GetFeedbackDepthRequest{
+	resp, err := f.session.Archivist.GetFeedbackDepth(f.session.ctx, &flowv1.GetFeedbackDepthRequest{
 		WorkitemId: f.session.workitemID,
 		FeedbackId: f.item.GetId(),
 	})
@@ -95,10 +90,8 @@ func (f *Feedback) GetDepth() (int32, error) {
 
 // Resolve transitions feedback from NEW/REJECTED to ACTIONED, indicating
 // a fix has been applied.
-//
-// ponytail: uses context.Background(); see GetDepth.
 func (f *Feedback) Resolve(message string) error {
-	_, err := f.session.Archivist.ResolveFeedback(context.Background(), &flowv1.ResolveFeedbackRequest{
+	_, err := f.session.Archivist.ResolveFeedback(f.session.ctx, &flowv1.ResolveFeedbackRequest{
 		WorkitemId: f.session.workitemID,
 		FeedbackId: f.item.GetId(),
 		Message:    message,
@@ -112,10 +105,8 @@ func (f *Feedback) Resolve(message string) error {
 // Refuse transitions feedback from NEW/REJECTED to WONT_FIX, indicating
 // the refining node refuses to fix the issue. The justification must be
 // either a Citation (referencing existing laws) or a NovelArgument.
-//
-// ponytail: uses context.Background(); see GetDepth.
 func (f *Feedback) Refuse(justification *flowv1.Justification) error {
-	_, err := f.session.Archivist.RefuseFeedback(context.Background(), &flowv1.RefuseFeedbackRequest{
+	_, err := f.session.Archivist.RefuseFeedback(f.session.ctx, &flowv1.RefuseFeedbackRequest{
 		WorkitemId:    f.session.workitemID,
 		FeedbackId:    f.item.GetId(),
 		Justification: justification,
@@ -128,10 +119,8 @@ func (f *Feedback) Refuse(justification *flowv1.Justification) error {
 
 // AcceptFix transitions feedback from ACTIONED to RESOLVED, indicating
 // the reviewer accepts the applied fix.
-//
-// ponytail: uses context.Background(); see GetDepth.
 func (f *Feedback) AcceptFix() error {
-	_, err := f.session.Archivist.AcceptFix(context.Background(), &flowv1.AcceptFixRequest{
+	_, err := f.session.Archivist.AcceptFix(f.session.ctx, &flowv1.AcceptFixRequest{
 		WorkitemId: f.session.workitemID,
 		FeedbackId: f.item.GetId(),
 	})
@@ -143,10 +132,8 @@ func (f *Feedback) AcceptFix() error {
 
 // RejectFix transitions feedback from ACTIONED to REJECTED, indicating
 // the reviewer finds the fix inadequate. The message explains why.
-//
-// ponytail: uses context.Background(); see GetDepth.
 func (f *Feedback) RejectFix(message string) error {
-	_, err := f.session.Archivist.RejectFix(context.Background(), &flowv1.RejectFixRequest{
+	_, err := f.session.Archivist.RejectFix(f.session.ctx, &flowv1.RejectFixRequest{
 		WorkitemId: f.session.workitemID,
 		FeedbackId: f.item.GetId(),
 		Message:    message,
@@ -159,10 +146,8 @@ func (f *Feedback) RejectFix(message string) error {
 
 // AcceptRefusal transitions feedback from WONT_FIX to RESOLVED,
 // indicating the reviewer accepts the refiner's justification.
-//
-// ponytail: uses context.Background(); see GetDepth.
 func (f *Feedback) AcceptRefusal() error {
-	_, err := f.session.Archivist.AcceptRefusal(context.Background(), &flowv1.AcceptRefusalRequest{
+	_, err := f.session.Archivist.AcceptRefusal(f.session.ctx, &flowv1.AcceptRefusalRequest{
 		WorkitemId: f.session.workitemID,
 		FeedbackId: f.item.GetId(),
 	})
@@ -175,10 +160,8 @@ func (f *Feedback) AcceptRefusal() error {
 // RejectRefusal transitions feedback from WONT_FIX to REJECTED,
 // indicating the reviewer finds the justification inadequate.
 // The message explains why the refusal is not acceptable.
-//
-// ponytail: uses context.Background(); see GetDepth.
 func (f *Feedback) RejectRefusal(message string) error {
-	_, err := f.session.Archivist.RejectRefusal(context.Background(), &flowv1.RejectRefusalRequest{
+	_, err := f.session.Archivist.RejectRefusal(f.session.ctx, &flowv1.RejectRefusalRequest{
 		WorkitemId: f.session.workitemID,
 		FeedbackId: f.item.GetId(),
 		Message:    message,
@@ -191,10 +174,8 @@ func (f *Feedback) RejectRefusal(message string) error {
 
 // Deadlock transitions feedback from any non-resolved, non-deadlocked
 // state to DEADLOCKED. Called when feedback depth exceeds threshold.
-//
-// ponytail: uses context.Background(); see GetDepth.
 func (f *Feedback) Deadlock() error {
-	_, err := f.session.Archivist.DeadlockFeedback(context.Background(), &flowv1.DeadlockFeedbackRequest{
+	_, err := f.session.Archivist.DeadlockFeedback(f.session.ctx, &flowv1.DeadlockFeedbackRequest{
 		WorkitemId: f.session.workitemID,
 		FeedbackId: f.item.GetId(),
 	})
@@ -207,10 +188,8 @@ func (f *Feedback) Deadlock() error {
 // LinkRuling atomically links a judiciary ruling to this feedback,
 // transitioning it to the specified target state. The feedback must
 // be in DEADLOCKED state. targetState must be WONT_FIX or REJECTED.
-//
-// ponytail: uses context.Background(); see GetDepth.
 func (f *Feedback) LinkRuling(lawID string, targetState FeedbackState) error {
-	_, err := f.session.Archivist.LinkRuling(context.Background(), &flowv1.LinkRulingRequest{
+	_, err := f.session.Archivist.LinkRuling(f.session.ctx, &flowv1.LinkRulingRequest{
 		WorkitemId:  f.session.workitemID,
 		FeedbackId:  f.item.GetId(),
 		LawId:       lawID,

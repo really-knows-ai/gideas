@@ -44,6 +44,7 @@ func setupGRPCTestEnv(
 	sess := &session{
 		workitemID:     workitemID,
 		conn:           conn,
+		ctx:            context.Background(),
 		Sidecar:        flowv1.NewSidecarServiceClient(conn),
 		Operator:       flowv1.NewOperatorServiceClient(conn),
 		Archivist:      flowv1.NewArchivistServiceClient(conn),
