@@ -112,6 +112,65 @@ func ftsIndexExists(conn *lbug.Connection, table string) (bool, error) {
 	return indexExistsOnConn(conn, table, table+"_fts")
 }
 
+// rebuildFTSIndexForTable drops and recreates the _fts index over the given
+// string property set. CREATE_FTS_INDEX is not idempotent (it errors if the
+// index already exists), so any existing _fts index is dropped first. Dropping
+// is only attempted when the index is known to exist, so a genuine
+// create/rebuild error — not the benign "already exists" collision —
+// propagates and cannot leave the type silently unsearchable (FTS search in
+// query.go silently skips index-less types). Intentionally NOT error-text
+// matched; the existence check is the discriminator.
+func rebuildFTSIndexForTable(conn *lbug.Connection, table string, allStringProps []string) error {
+	propsList := "'" + strings.Join(allStringProps, "', '") + "'"
+	if ok, err := ftsIndexExists(conn, table); err != nil {
+		return fmt.Errorf("check FTS index for %q: %w", table, err)
+	} else if ok {
+		r, err := conn.Query(fmt.Sprintf("CALL DROP_FTS_INDEX('%s', '%s_fts');", table, table))
+		if err != nil {
+			return fmt.Errorf("drop existing FTS index for %q: %w", table, err)
+		}
+		r.Close()
+	}
+	r, err := conn.Query(fmt.Sprintf("CALL CREATE_FTS_INDEX('%s', '%s_fts', [%s], stemmer := 'porter');",
+		table, table, propsList))
+	if err != nil {
+		return fmt.Errorf("rebuild FTS index for %q: %w", table, err)
+	}
+	r.Close()
+	return nil
+}
+
+// ensureFTSIndexOnConn creates the _fts index for the table when it is absent,
+// over the string properties of the given def, and reports whether it created
+// it. Used by the crash-repair path to close the window between CREATE NODE
+// TABLE and its CREATE_FTS_INDEX inside createNodeTableOnConn.
+func ensureFTSIndexOnConn(conn *lbug.Connection, table string, props []store.PropertyDef) (bool, error) {
+	var stringProps []string
+	for _, p := range props {
+		if ladybugType(p.Type) == colTypeString {
+			stringProps = append(stringProps, p.Name)
+		}
+	}
+	if len(stringProps) == 0 {
+		return false, nil
+	}
+	ok, err := ftsIndexExists(conn, table)
+	if err != nil {
+		return false, fmt.Errorf("check FTS index for %q: %w", table, err)
+	}
+	if ok {
+		return false, nil
+	}
+	propsList := "'" + strings.Join(stringProps, "', '") + "'"
+	r, err := conn.Query(fmt.Sprintf("CALL CREATE_FTS_INDEX('%s', '%s_fts', [%s], stemmer := 'porter');",
+		table, table, propsList))
+	if err != nil {
+		return false, fmt.Errorf("create FTS index for %q: %w", table, err)
+	}
+	r.Close()
+	return true, nil
+}
+
 // vectorIndexExists reports whether the table already carries its _vec vector
 // (HNSW) index, so DROP_VECTOR_INDEX is only issued when one is present.
 func vectorIndexExists(conn *lbug.Connection, table string) (bool, error) {
@@ -205,8 +264,15 @@ func quoteID(s string) string {
 // endpoint-set changes, type incompatibility) return ErrDestructiveSchemaChange
 // — the caller must WipeGraph first. Every destructive check runs in the
 // pre-DDL catalog diff (diffSchemaAgainstCatalog), so a schema mixing additive
-// and destructive changes is rejected all-or-nothing before any DDL executes;
-// the schema metadata is published only after the full apply succeeds.
+// and destructive changes is rejected all-or-nothing before any DDL executes.
+//
+// The schema metadata (schema.json) is published BEFORE the DDL loop — a
+// write-ahead ordering — so a crash or failure anywhere in the DDL leaves the
+// metadata describing the full intended schema while the catalog may be
+// partial. restoreMainSchemaMetadataLocked converges the catalog onto that
+// metadata on the next Open (creating the tables and columns the DDL never
+// reached), so no interruption of ApplySchema can leave the store in a state
+// that bricks every subsequent Open (SPEC R8 recoverability).
 func (db *ladybugDB) ApplySchema(ctx context.Context, s *flowv1.Schema) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
@@ -242,6 +308,20 @@ func (db *ladybugDB) ApplySchema(ctx context.Context, s *flowv1.Schema) error {
 		defer func() { _ = os.Remove(stagedMetadata) }()
 	}
 
+	// Publish the schema metadata before the DDL loop (write-ahead). If the
+	// process crashes after this rename, the metadata already describes the
+	// full intended schema and the next Open's restoreMainSchemaMetadataLocked
+	// converges the (possibly partial) catalog onto it; if the publish itself
+	// fails, no DDL has run and the store is left untouched. The reverse order
+	// (DDL then publish) left a crash window in which the catalog was advanced
+	// past the persisted metadata — a non-empty catalog with no matching
+	// schema.json — which Open refused forever with no recovery path.
+	if db.path != "" {
+		if err := db.publishMetadata(stagedMetadata, db.mainMetadataPath()); err != nil {
+			return fmt.Errorf("publish schema metadata: %w", err)
+		}
+	}
+
 	// Apply entity types — new tables or additive ALTER.
 	for _, et := range s.EntityTypes {
 		if existing, exists := db.entityTypeDefs[et.Name]; exists {
@@ -268,11 +348,6 @@ func (db *ladybugDB) ApplySchema(ctx context.Context, s *flowv1.Schema) error {
 		}
 	}
 
-	if db.path != "" {
-		if err := db.publishMetadata(stagedMetadata, db.mainMetadataPath()); err != nil {
-			return fmt.Errorf("publish schema metadata: %w", err)
-		}
-	}
 	db.entityTypeDefs, db.edgeTypeDefs, db.ruleIndex, db.edgePairs = applySchemaMetadata(metadata)
 	db.schemaApplied = true
 	return nil
@@ -511,31 +586,9 @@ func (db *ladybugDB) alterNodeTable(et *flowv1.EntityType, existing *store.Entit
 			}
 		}
 		allStringProps = append(allStringProps, newStringProps...)
-		propsList := "'" + strings.Join(allStringProps, "', '") + "'"
-		ftsDDL := fmt.Sprintf("CALL CREATE_FTS_INDEX('%s', '%s_fts', [%s], stemmer := 'porter');",
-			et.Name, et.Name, propsList)
-		// CREATE_FTS_INDEX is not idempotent (it errors if the index already
-		// exists), so drop any existing _fts index first and then recreate it
-		// over the full property set. Dropping is only attempted when the index
-		// is known to exist, so a genuine create/rebuild error — not the benign
-		// "already exists" collision — propagates and cannot leave the type
-		// silently unsearchable (FTS search in query.go silently skips
-		// index-less types). Intentionally NOT error-text matched; the
-		// existence check is the discriminator.
-		if ok, err := ftsIndexExists(db.conn, et.Name); err != nil {
-			return fmt.Errorf("check FTS index for %q: %w", et.Name, err)
-		} else if ok {
-			r, err := db.conn.Query(fmt.Sprintf("CALL DROP_FTS_INDEX('%s', '%s_fts');", et.Name, et.Name))
-			if err != nil {
-				return fmt.Errorf("drop existing FTS index for %q: %w", et.Name, err)
-			}
-			r.Close()
+		if err := rebuildFTSIndexForTable(db.conn, et.Name, allStringProps); err != nil {
+			return err
 		}
-		r, err := db.conn.Query(ftsDDL)
-		if err != nil {
-			return fmt.Errorf("rebuild FTS index for %q: %w", et.Name, err)
-		}
-		r.Close()
 	}
 	return nil
 }

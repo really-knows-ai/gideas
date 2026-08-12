@@ -362,6 +362,15 @@ func (db *ladybugDB) branchMetadataPath(txID string) string {
 	return filepath.Join(db.path, "branches", txID+".schema.json")
 }
 
+// restoreMainSchemaMetadataLocked restores main's schema on Open: when the
+// catalog is empty the persisted metadata rebuilds every table (SPEC R8
+// recovery); when the catalog is partial or missing tables/columns the
+// metadata drives a convergent repair (an ApplySchema interrupted between the
+// schema.json publish and the DDL completion). A non-empty catalog with NO
+// metadata at all fails loudly — the schema intent cannot be reconstructed
+// from the catalog (vector enablement for un-bootstrapped types, connection
+// rules), so it is a genuine state-loss event, not a repair. Caller must hold
+// db.mu.
 func (db *ladybugDB) restoreMainSchemaMetadataLocked() error {
 	if db.path == "" {
 		return nil
@@ -377,37 +386,20 @@ func (db *ladybugDB) restoreMainSchemaMetadataLocked() error {
 		return nil
 	}
 	entities, edges, rules, pairs := applySchemaMetadata(metadata)
-	if len(db.entityTypeDefs) == 0 && len(db.edgeTypeDefs) == 0 {
-		for _, name := range sortedKeys(entities) {
-			if err := createNodeTableOnConn(db.conn, name, entities[name].Properties); err != nil {
-				return fmt.Errorf("restore node table %q from metadata: %w", name, err)
-			}
-			if dimension := metadata.VectorDimensions[name]; dimension > 0 {
-				r, err := db.conn.Query(fmt.Sprintf(
-					"ALTER TABLE %s ADD embedding FLOAT[%d];", quoteID(name), dimension,
-				))
-				if err != nil {
-					return fmt.Errorf("restore embedding column %q from metadata: %w", name, err)
-				}
-				r.Close()
-				if metadata.VectorIndexes[name] {
-					r, err := db.conn.Query(fmt.Sprintf(
-						"CALL CREATE_VECTOR_INDEX('%s', '%s_vec', 'embedding', metric := 'cosine');", name, name,
-					))
-					if err != nil {
-						return fmt.Errorf("restore vector index %q from metadata: %w", name, err)
-					}
-					r.Close()
-				}
-			}
-		}
-		for _, name := range sortedKeys(edges) {
-			if err := createRelTableOnConn(db.conn, name, edges[name].Properties, pairs[name]); err != nil {
-				return fmt.Errorf("restore edge table %q from metadata: %w", name, err)
-			}
-		}
+	// Converge the catalog onto the persisted metadata. The metadata file is
+	// published before the DDL loop in ApplySchema (write-ahead), so an
+	// interrupted apply can leave the catalog missing tables or columns the
+	// metadata already declares; the repair creates them. It is idempotent —
+	// on a catalog that already matches the metadata it issues no DDL — so it
+	// also serves the empty-catalog recovery (a wiped/recreated main.lbug with
+	// surviving metadata) that used to be a separate branch.
+	changed, err := db.repairCatalogAgainstMetadataLocked(metadata, entities, edges, pairs)
+	if err != nil {
+		return err
+	}
+	if changed {
 		if err := db.rebuildSchemaCacheLocked(); err != nil {
-			return fmt.Errorf("rebuild restored schema catalog: %w", err)
+			return fmt.Errorf("rebuild repaired schema catalog: %w", err)
 		}
 	}
 	if err := validateMetadataAgainstCatalog(
@@ -419,6 +411,123 @@ func (db *ladybugDB) restoreMainSchemaMetadataLocked() error {
 	db.ruleIndex, db.edgePairs = rules, pairs
 	db.schemaApplied = true
 	return nil
+}
+
+// repairCatalogAgainstMetadataLocked converges the physical catalog onto the
+// persisted schema metadata after an ApplySchema interrupted between the
+// schema.json publish and the DDL completion (the crash-atomicity window):
+// tables the DDL never reached are created (including any embedding column and
+// vector index the metadata records), columns an interrupted ALTER never added
+// are added, and node tables whose string-property set the repair extended get
+// their _fts index rebuilt over the full set — or created if the crash caught
+// the window between CREATE NODE TABLE and its CREATE_FTS_INDEX. Idempotent:
+// a catalog that already matches the metadata triggers no DDL. Returns whether
+// any DDL was issued, so the caller can refresh the schema cache before
+// validation. Caller must hold db.mu and pass the defs applySchemaMetadata
+// derived from the metadata.
+func (db *ladybugDB) repairCatalogAgainstMetadataLocked(
+	metadata schemaMetadata,
+	entities map[string]*store.EntityTypeDef,
+	edges map[string]*store.EdgeTypeDef,
+	pairs map[string][]fromToPair,
+) (bool, error) {
+	changed := false
+	for _, name := range sortedKeys(entities) {
+		def := entities[name]
+		existing, ok := db.entityTypeDefs[name]
+		if !ok {
+			if err := createNodeTableOnConn(db.conn, name, def.Properties); err != nil {
+				return changed, fmt.Errorf("restore node table %q from metadata: %w", name, err)
+			}
+			if dimension := metadata.VectorDimensions[name]; dimension > 0 {
+				r, err := db.conn.Query(fmt.Sprintf(
+					"ALTER TABLE %s ADD embedding FLOAT[%d];", quoteID(name), dimension,
+				))
+				if err != nil {
+					return changed, fmt.Errorf("restore embedding column %q from metadata: %w", name, err)
+				}
+				r.Close()
+				if metadata.VectorIndexes[name] {
+					r, err := db.conn.Query(fmt.Sprintf(
+						"CALL CREATE_VECTOR_INDEX('%s', '%s_vec', 'embedding', metric := 'cosine');", name, name,
+					))
+					if err != nil {
+						return changed, fmt.Errorf("restore vector index %q from metadata: %w", name, err)
+					}
+					r.Close()
+				}
+			}
+			changed = true
+			continue
+		}
+		newStrings, err := db.addMissingColumnsLocked(name, existing.Properties, def.Properties)
+		if err != nil {
+			return changed, fmt.Errorf("repair node table %q from metadata: %w", name, err)
+		}
+		if len(newStrings) > 0 {
+			var allStringProps []string
+			for _, p := range existing.Properties {
+				if ladybugType(p.Type) == colTypeString {
+					allStringProps = append(allStringProps, p.Name)
+				}
+			}
+			allStringProps = append(allStringProps, newStrings...)
+			if err := rebuildFTSIndexForTable(db.conn, name, allStringProps); err != nil {
+				return changed, fmt.Errorf("rebuild FTS index for repaired node table %q: %w", name, err)
+			}
+			changed = true
+		} else if created, err := ensureFTSIndexOnConn(db.conn, name, def.Properties); err != nil {
+			return changed, fmt.Errorf("ensure FTS index for node table %q: %w", name, err)
+		} else if created {
+			changed = true
+		}
+	}
+	for _, name := range sortedKeys(edges) {
+		def := edges[name]
+		existing, ok := db.edgeTypeDefs[name]
+		if !ok {
+			if err := createRelTableOnConn(db.conn, name, def.Properties, pairs[name]); err != nil {
+				return changed, fmt.Errorf("restore edge table %q from metadata: %w", name, err)
+			}
+			changed = true
+			continue
+		}
+		newStrings, err := db.addMissingColumnsLocked(name, existing.Properties, def.Properties)
+		if err != nil {
+			return changed, fmt.Errorf("repair edge table %q from metadata: %w", name, err)
+		}
+		if len(newStrings) > 0 {
+			changed = true
+		}
+	}
+	return changed, nil
+}
+
+// addMissingColumnsLocked issues ALTER TABLE ADD for metadata properties the
+// catalog table lacks, returning the names of any string columns added (for
+// the caller's FTS rebuild). Idempotent and DDL-free when the catalog already
+// matches the metadata.
+func (db *ladybugDB) addMissingColumnsLocked(table string, existing, wanted []store.PropertyDef) ([]string, error) {
+	existingByName := make(map[string]bool, len(existing))
+	for _, p := range existing {
+		existingByName[p.Name] = true
+	}
+	var newStrings []string
+	for _, p := range wanted {
+		if existingByName[p.Name] {
+			continue
+		}
+		ddl := fmt.Sprintf("ALTER TABLE %s ADD %s %s;", quoteID(table), quoteID(p.Name), ladybugType(p.Type))
+		r, err := db.conn.Query(ddl)
+		if err != nil {
+			return nil, fmt.Errorf("add column %q: %w", p.Name, err)
+		}
+		r.Close()
+		if ladybugType(p.Type) == colTypeString {
+			newStrings = append(newStrings, p.Name)
+		}
+	}
+	return newStrings, nil
 }
 
 func restoreBranchSchemaMetadata(
