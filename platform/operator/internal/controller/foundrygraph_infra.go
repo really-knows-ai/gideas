@@ -400,7 +400,25 @@ func (r *FoundryGraphReconciler) reconcileDeployment(ctx context.Context, fg *fl
 				},
 			},
 			Spec: corev1.PodSpec{
-				// ponytail: PSa "restricted"-level SecurityContext
+				// ponytail: PSa "restricted"-level SecurityContext — the image must
+				// run as non-root UID 65532:65532 (Dockerfile USER 65532:65532) under
+				// seccomp (RuntimeDefault), and this pod-level profile enforces that
+				// contract at the cluster boundary. Consequences of weakening it:
+				// RunAsUser/RunAsGroup/FSGroup 65532 make a root-owned PVC
+				// (hostpath / EBS static PVs) group-owned by 65532 and thus writable —
+				// dropping or changing them makes /data unwritable from UID 65532 and
+				// main.lbug/graph-repo/ creation fails at startup (ladybug.Open at
+				// cmd/main.go:113), and dropping SeccompProfile removes the
+				// kernel-syscall isolation RuntimeDefault provides. Failure mode: if
+				// the cluster cannot satisfy the profile — an admission-time Pod
+				// Security admission / Gatekeeper policy that rejects RuntimeDefault
+				// seccomp or the non-root UID choice — the pod is refused at admission
+				// or fails at container start and the FoundryGraph never becomes ready
+				// until the cluster policy is aligned. Ceiling: the profile is
+				// hardcoded here rather than derived from cluster policy. Upgrade
+				// path: harden toward the PSA "restricted" profile only (never weaken
+				// to "baseline" or drop seccomp); extend the profile only if a
+				// cluster enforces an even stricter policy this one must match.
 				SecurityContext: &corev1.PodSecurityContext{
 					RunAsNonRoot:        new(true),
 					RunAsUser:           new(int64(65532)),
@@ -420,7 +438,24 @@ func (r *FoundryGraphReconciler) reconcileDeployment(ctx context.Context, fg *fl
 					Name:            "cartographer",
 					Image:           r.CartographerImage,
 					ImagePullPolicy: corev1.PullIfNotPresent,
-					// ponytail: restricted SecurityContext
+					// ponytail: restricted SecurityContext — ReadOnlyRootFilesystem=true
+					// makes the container rootfs unwritable (only the /data volumeMount
+					// is writable), with privilege escalation denied and ALL capabilities
+					// dropped. Consequence: any image write outside /data fails with
+					// EROFS. This is a live constraint today: main.go's SSH known_hosts
+					// handling calls os.CreateTemp("", "known_hosts-*") (cmd/main.go:792),
+					// which writes to the container's /tmp on the rootfs — so a remote
+					// auth secret carrying a known_hosts key fails at temp-file creation
+					// under this profile (auth construction errors out and the remote
+					// pull / pull-on-init fails) unless TMPDIR points at a writable
+					// mount. Failure mode: silent at render time — a rootfs-writing image
+					// change compiles and deploys but breaks only at runtime (EROFS on
+					// the write: startup or remote-sync failure), never surfacing in the
+					// rendered Deployment. Ceiling: writable locations are implicit
+					// (only /data), so the constraint is invisible until a write hits it.
+					// Upgrade path: if the image needs scratch space, mount an explicit
+					// emptyDir (e.g. at /tmp) or write to /data and keep the rootfs
+					// read-only.
 					SecurityContext: &corev1.SecurityContext{
 						ReadOnlyRootFilesystem:   new(true),
 						AllowPrivilegeEscalation: new(false),
@@ -442,7 +477,23 @@ func (r *FoundryGraphReconciler) reconcileDeployment(ctx context.Context, fg *fl
 						InitialDelaySeconds: 5,
 						PeriodSeconds:       10,
 					},
-					// ponytail: Provisional resource requests/limits
+					// ponytail: Provisional resource requests/limits — 10m CPU request,
+					// 64Mi memory request, 500m CPU limit, 128Mi memory limit are
+					// placeholders chosen before production measurement. Consequences:
+					// at the 128Mi memory limit the kernel OOM-killer kills the
+					// container once in-memory LadybugDB data, transaction state, or
+					// sync buffering exceeds 128Mi (CrashLoopBackOff); at the 10m CPU
+					// request the scheduler can co-locate the pod on a contended node
+					// where it is throttled to ~1% of a core, stalling startup (schema
+					// apply, re-hydration) and the sync cycle. Failure mode: both
+					// limits fail silently — an OOM-killed container restarts without a
+					// reconcile error and CPU throttling degrades latency without any
+					// event, so the readiness probe (unavailable pod) is the only
+					// visible symptom. Ceiling: no measured baseline. Upgrade path:
+					// measure steady-state and peak usage (metrics-server / kubectl top)
+					// under representative load, then set requests to observed p50/p95
+					// usage and limits to bounded headroom above peak, re-verifying the
+					// readiness probe stays green.
 					Resources: corev1.ResourceRequirements{
 						Requests: corev1.ResourceList{
 							corev1.ResourceCPU:    resource.MustParse("10m"),
