@@ -309,16 +309,17 @@ func (s *ProxyServer) ExportGraph(req *flowv1gen.ExportGraphRequest, stream flow
 			return nil
 		}
 		if err != nil {
-			// SPEC R11/error table: a mid-stream export failure is INTERNAL. A
-			// transport-level break (Unavailable) after the stream has started is such a
-			// failure, so surface it as INTERNAL rather than the dial-style Unavailable.
-			if st, ok := status.FromError(err); ok && st.Code() != codes.Unavailable {
-				return st.Err()
-			}
+			// SPEC error table: "ExportGraph mid-stream failure → INTERNAL". Any failure
+			// after the stream has started — a transport-level break (Unavailable), a
+			// non-conforming upstream status, or a raw error — is a mid-stream failure
+			// (partial data may already have been sent), so surface it as INTERNAL rather
+			// than the dial-style Unavailable or a verbatim upstream status.
 			return status.Errorf(codes.Internal, "export stream failed: %v", err)
 		}
 		if err := stream.Send(chunk); err != nil {
-			return status.Errorf(codes.Canceled, "client cancelled: %v", err)
+			// SPEC error table: a downstream stream break during export is the same
+			// mid-stream failure (partial data may already have been sent) → INTERNAL.
+			return status.Errorf(codes.Internal, "export stream failed: %v", err)
 		}
 	}
 }
