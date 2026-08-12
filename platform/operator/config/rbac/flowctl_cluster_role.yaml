@@ -55,6 +55,12 @@ rules:
 - apiGroups:
   - flow.foundry.io
   resources:
+  - foundrygraphs
+  verbs:
+  - get
+- apiGroups:
+  - flow.foundry.io
+  resources:
   - foundrynodes
   verbs:
   - get
