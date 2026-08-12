@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"sync"
 	"time"
 
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
@@ -20,9 +21,12 @@ var ErrTransactionRolledBack = fmt.Errorf("flow sdk: transaction has been rolled
 var ErrTransactionCommitted = fmt.Errorf("flow sdk: transaction has been committed")
 
 // Transaction wraps a Cartographer transaction with an isolated graph context.
+// The handle is safe to share across goroutines: the terminal/lifecycle
+// fields (timeout, rolledBack, committed) are guarded by mu.
 type Transaction struct {
 	session    *session
 	id         string
+	mu         sync.Mutex // guards timeout, rolledBack, committed
 	timeout    time.Duration
 	idTypeMap  *idTypeMap
 	rolledBack bool
@@ -37,6 +41,8 @@ type Transaction struct {
 // `tx.Rollback()` after a successful `tx.Commit()` would surface a spurious
 // discarded error.
 func (tx *Transaction) checkTerminal() error {
+	tx.mu.Lock()
+	defer tx.mu.Unlock()
 	if tx.rolledBack {
 		return ErrTransactionRolledBack
 	}
@@ -52,7 +58,11 @@ func (tx *Transaction) ID() string { return tx.id }
 // Timeout returns the server-applied transaction timeout — the value the
 // Cartographer granted in the applied_timeout of the BeginTransaction or
 // ExtendTimeout response (SPEC R9/R2; no silent capping).
-func (tx *Transaction) Timeout() time.Duration { return tx.timeout }
+func (tx *Transaction) Timeout() time.Duration {
+	tx.mu.Lock()
+	defer tx.mu.Unlock()
+	return tx.timeout
+}
 
 // ---------------------------------------------------------------------------
 // Read path methods (with transactionId injection)
@@ -532,13 +542,18 @@ func (tx *Transaction) Commit(opts ...CommitOption) error {
 	if err != nil {
 		return err
 	}
+	tx.mu.Lock()
 	tx.committed = true
+	tx.mu.Unlock()
 	return nil
 }
 
 // Rollback discards the transaction branch.
 func (tx *Transaction) Rollback() error {
-	if tx.rolledBack || tx.committed {
+	tx.mu.Lock()
+	terminal := tx.rolledBack || tx.committed
+	tx.mu.Unlock()
+	if terminal {
 		return nil // idempotent — nothing to discard once terminal
 	}
 	err := tx.session.call(tx.session.ctx, func(ctx context.Context) error {
@@ -550,7 +565,9 @@ func (tx *Transaction) Rollback() error {
 	if err != nil {
 		return err
 	}
+	tx.mu.Lock()
 	tx.rolledBack = true
+	tx.mu.Unlock()
 	return nil
 }
 
@@ -585,7 +602,9 @@ func (tx *Transaction) ExtendTimeout(d time.Duration) (time.Duration, error) {
 		return 0, err
 	}
 
+	tx.mu.Lock()
 	tx.timeout = applied
+	tx.mu.Unlock()
 	return applied, nil
 }
 
