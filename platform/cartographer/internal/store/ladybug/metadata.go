@@ -366,11 +366,14 @@ func (db *ladybugDB) branchMetadataPath(txID string) string {
 // catalog is empty the persisted metadata rebuilds every table (SPEC R8
 // recovery); when the catalog is partial or missing tables/columns the
 // metadata drives a convergent repair (an ApplySchema interrupted between the
-// schema.json publish and the DDL completion). A non-empty catalog with NO
-// metadata at all fails loudly — the schema intent cannot be reconstructed
-// from the catalog (vector enablement for un-bootstrapped types, connection
-// rules), so it is a genuine state-loss event, not a repair. Caller must hold
-// db.mu.
+// schema.json publish and the DDL completion). The restore also reconciles the
+// reverse direction — a vector bootstrap interrupted between its DDL and its
+// metadata publish leaves the catalog carrying vector state the metadata does
+// not record, which reconcileVectorStateFromCatalog adopts back into the
+// metadata before validation. A non-empty catalog with NO metadata at all
+// fails loudly — the schema intent cannot be reconstructed from the catalog
+// (vector enablement for un-bootstrapped types, connection rules), so it is a
+// genuine state-loss event, not a repair. Caller must hold db.mu.
 func (db *ladybugDB) restoreMainSchemaMetadataLocked() error {
 	if db.path == "" {
 		return nil
@@ -386,6 +389,20 @@ func (db *ladybugDB) restoreMainSchemaMetadataLocked() error {
 		return nil
 	}
 	entities, edges, rules, pairs := applySchemaMetadata(metadata)
+	// Adopt the catalog's actual vector state into the metadata before the
+	// convergent repair: a vector bootstrap interrupted between its DDL and
+	// its metadata publish (the CreateEntity/UpdateEntity/re-hydration
+	// bootstrap paths) leaves the catalog carrying an embedding column (with
+	// or without its vector index) that schema.json does not record, and
+	// validateMetadataAgainstCatalog would otherwise fail closed, bricking
+	// every subsequent Open. The reverse direction (metadata ahead of the
+	// catalog) is converged by repairCatalogAgainstMetadataLocked below, so
+	// the two passes together make every mid-bootstrap crash state
+	// recoverable.
+	reconciled, reconcileDDL, err := reconcileVectorStateFromCatalog(db.conn, &metadata, entities)
+	if err != nil {
+		return err
+	}
 	// Converge the catalog onto the persisted metadata. The metadata file is
 	// published before the DDL loop in ApplySchema (write-ahead), so an
 	// interrupted apply can leave the catalog missing tables or columns the
@@ -397,7 +414,7 @@ func (db *ladybugDB) restoreMainSchemaMetadataLocked() error {
 	if err != nil {
 		return err
 	}
-	if changed {
+	if reconcileDDL || changed {
 		if err := db.rebuildSchemaCacheLocked(); err != nil {
 			return fmt.Errorf("rebuild repaired schema catalog: %w", err)
 		}
@@ -407,10 +424,98 @@ func (db *ladybugDB) restoreMainSchemaMetadataLocked() error {
 	); err != nil {
 		return err
 	}
+	if reconciled {
+		// Persist the healed metadata so the adopted vector state is durable
+		// and the next Open validates without re-reconciling.
+		if err := db.writeMetadata(db.mainMetadataPath(), metadata); err != nil {
+			return fmt.Errorf("persist reconciled schema metadata: %w", err)
+		}
+	}
 	db.entityTypeDefs, db.edgeTypeDefs = entities, edges
 	db.ruleIndex, db.edgePairs = rules, pairs
 	db.schemaApplied = true
 	return nil
+}
+
+// reconcileVectorStateFromCatalog adopts the catalog's actual vector state
+// into the schema metadata when the catalog is AHEAD of the persisted
+// metadata. A vector bootstrap interrupted between its DDL and its metadata
+// publish (the CreateEntity/UpdateEntity/re-hydration bootstrap paths) leaves
+// a FLOAT[n] embedding column — with or without its vector index — in the
+// catalog that schema.json does not record, and validateMetadataAgainstCatalog
+// would otherwise fail closed ("vector index does not match schema metadata"),
+// bricking every subsequent Open (the store fails startup). Adoption is safe
+// because the only creators of a FLOAT[n] embedding column and HNSW vector
+// index are the bootstrap paths themselves (legitimate dimension-lock intent,
+// SPEC R7), so the catalog is authoritative for the vector state. The reverse
+// direction (metadata ahead of the catalog) is converged by
+// repairCatalogAgainstMetadataLocked, so the two passes make every
+// mid-bootstrap crash state recoverable.
+//
+// An interrupted index creation (the crash caught between ALTER TABLE ADD
+// embedding and CREATE_VECTOR_INDEX) is completed here so the adopted state
+// validates; a type whose schema def was not declared vector-enabled is
+// promoted to vector-enabled in both the metadata and the derived defs
+// (mirroring ensureEmbeddingLoadSchema's promotion on the re-hydration paths),
+// because validateSchemaMetadata rejects vector state on a disabled type.
+//
+// Returns whether the metadata was changed (the caller re-persists it) and
+// whether any DDL was issued (the caller refreshes the schema cache before
+// validation).
+func reconcileVectorStateFromCatalog(
+	conn *lbug.Connection,
+	metadata *schemaMetadata,
+	entities map[string]*store.EntityTypeDef,
+) (changed, ddlIssued bool, err error) {
+	if metadata.VectorIndexes == nil {
+		metadata.VectorIndexes = make(map[string]bool)
+	}
+	if metadata.VectorDimensions == nil {
+		metadata.VectorDimensions = make(map[string]int)
+	}
+	for name := range entities {
+		// vectorIndexed=false keeps a non-vector type's legitimate STRING
+		// `embedding` property from being misread as a bootstrap: only a
+		// FLOAT[n] column parses as a dimension (getEmbeddingDimension), so a
+		// STRING column reports "not bootstrapped".
+		catalogDim, derr := getEmbeddingDimension(conn, name, false)
+		if derr != nil {
+			return changed, ddlIssued, fmt.Errorf("read catalog vector dimension for %q: %w", name, derr)
+		}
+		if catalogDim <= 0 {
+			continue
+		}
+		if metadata.VectorIndexes[name] && metadata.VectorDimensions[name] == catalogDim {
+			continue
+		}
+		metadata.VectorIndexes[name] = true
+		metadata.VectorDimensions[name] = catalogDim
+		for i := range metadata.EntityTypes {
+			def := &metadata.EntityTypes[i]
+			if def.Name != name {
+				continue
+			}
+			if !def.EnableVectorIndex {
+				def.EnableVectorIndex = true
+				entities[name].EnableVectorIndex = true
+			}
+			break
+		}
+		changed = true
+		// Complete an interrupted bootstrap: a FLOAT[n] column whose vector
+		// index never got created (the crash caught between the two DDL
+		// statements) is adopted as indexed, so the index must exist for the
+		// adopted state to validate against the catalog.
+		if ok, ierr := vectorIndexExists(conn, name); ierr != nil {
+			return changed, ddlIssued, fmt.Errorf("check vector index for %q: %w", name, ierr)
+		} else if !ok {
+			if cerr := createVectorIndexOnConn(conn, name); cerr != nil {
+				return changed, ddlIssued, fmt.Errorf("complete vector index for %q: %w", name, cerr)
+			}
+			ddlIssued = true
+		}
+	}
+	return changed, ddlIssued, nil
 }
 
 // repairCatalogAgainstMetadataLocked converges the physical catalog onto the
@@ -539,8 +644,32 @@ func restoreBranchSchemaMetadata(
 		return nil, nil, err
 	}
 	entities, edges, _, _ := applySchemaMetadata(metadata)
+	// Adopt the branch catalog's vector state into the branch metadata,
+	// mirroring restoreMainSchemaMetadataLocked: a branch whose embedding
+	// column/index bootstrap DDL landed before its metadata write (branch
+	// CreateEntity/UpdateEntity, HydrateBranchFromFiles) would otherwise fail
+	// validation on every reopen, and RecoverOpenTransactions treats that as
+	// a hard startup failure instead of a recoverable branch state.
+	reconciled, ddlIssued, err := reconcileVectorStateFromCatalog(conn, &metadata, entities)
+	if err != nil {
+		return nil, nil, err
+	}
+	if ddlIssued {
+		// The completed index changed the branch catalog, so refresh the
+		// catalog defs the validation compares against.
+		refreshedEntities, refreshedEdges, rerr := rebuildBranchSchemaCache(conn)
+		if rerr != nil {
+			return nil, nil, rerr
+		}
+		catalogEntities, catalogEdges = refreshedEntities, refreshedEdges
+	}
 	if err := validateMetadataAgainstCatalog(conn, metadata, entities, edges, catalogEntities, catalogEdges); err != nil {
 		return nil, nil, err
+	}
+	if reconciled {
+		if err := writeSchemaMetadata(path, metadata); err != nil {
+			return nil, nil, fmt.Errorf("persist reconciled branch schema metadata: %w", err)
+		}
 	}
 	return entities, edges, nil
 }
