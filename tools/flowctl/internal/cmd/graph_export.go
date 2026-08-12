@@ -24,22 +24,39 @@ import (
 )
 
 const (
+	// defaultGraphName is the conventional singleton FoundryGraph resource
+	// name (SPEC R1).
+	//
+	// ponytail: "flow-graph" is an operational knob duplicated across two
+	// surfaces — this CLI constant and the operator proxy's defaultGraphName
+	// (platform/operator/internal/controller/foundrygraph_proxyserver.go:82).
+	// The two live in separate Go modules, and the operator's constant sits
+	// in an internal package, so a shared source of truth would require
+	// exporting a new non-internal constant and adding a cross-module
+	// dependency. The CLI sends this value as x-flow-graph-name metadata and
+	// the proxy falls back to its own constant only when the metadata is
+	// absent, so a drift between the two is not caught at the constant level:
+	// it surfaces late as a confusing "FoundryGraph <name> not found"
+	// FAILED_PRECONDITION from the CLI's CR lookup (or a proxy route miss).
+	// Upgrade path: export the operator's constant into a shared non-internal
+	// package and reference it from both binaries.
 	defaultGraphName = "flow-graph"
 
 	// operatorProxyPort is the default operator gRPC proxy port forwarded to
 	// by the CLI.
 	//
 	// ponytail: the proxy port is an operational knob with multiple drift
-	// surfaces. On the operator side it is set by --proxy-bind-address, then
-	// overridden by the OPERATOR_PROXY_PORT env var, then falls back to
-	// :50053; the CLI side reads OPERATOR_PROXY_PORT from the user's local
-	// machine, which cannot observe the operator deployment's configured
-	// proxy port, then falls back to the same hard-coded 50053. An operator
-	// started with a different --proxy-bind-address (e.g. :50054) is silently
-	// unreachable and the CLI cannot detect the divergence. Upgrade path: a
-	// discovery mechanism that queries the operator for its bound proxy
-	// address, or a shared source of truth for the port, instead of the env
-	// var + hard-coded fallback.
+	// surfaces. On the operator side (platform/operator/cmd/main.go) the
+	// precedence is --proxy-bind-address if set, else the
+	// OPERATOR_PROXY_PORT env var, else :50053 — the env var is a fallback
+	// consulted only when the flag is empty, never an override. The CLI side
+	// reads OPERATOR_PROXY_PORT from the user's local machine, which cannot
+	// observe the operator deployment's configured proxy port, then falls
+	// back to the same hard-coded 50053. An operator started with a different
+	// --proxy-bind-address (e.g. :50054) is silently unreachable and the CLI
+	// cannot detect the divergence. Upgrade path: a discovery mechanism that
+	// queries the operator for its bound proxy address, or a shared source of
+	// truth for the port, instead of the env var + hard-coded fallback.
 	operatorProxyPort = 50053
 
 	// supportedExportFormats matches the Cartographer's accepted formats
