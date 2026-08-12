@@ -18,6 +18,10 @@ import (
 	"google.golang.org/grpc/status"
 )
 
+// entityTypeComponent is the entity type used across the mode-1/mode-2
+// capability wire tests (goconst: shared literal).
+const entityTypeComponent = "Component"
+
 // captureCartographerServer is a fake CartographerServiceServer that records
 // the node-facing requests and the metadata they arrived with, so the tests
 // can assert the SDK → Sidecar → Cartographer wire path end to end (SPEC R5:
@@ -30,6 +34,13 @@ type captureCartographerServer struct {
 	method     string
 	capturedMD metadata.MD
 	exportReq  *flowv1.ExportGraphRequest
+
+	// createEntityID and createEntityType optionally override the fake
+	// Cartographer's CreateEntity response. Tests use them to seed a specific
+	// (possibly stale — SPEC R3:252) ID→type mapping into the SDK's cache:
+	// the SDK records the response type keyed by the response ID.
+	createEntityID   string
+	createEntityType string
 }
 
 func (s *captureCartographerServer) record(ctx context.Context, method string) {
@@ -60,7 +71,42 @@ func (s *captureCartographerServer) CreateEntity(
 	ctx context.Context, req *flowv1.CreateEntityRequest,
 ) (*flowv1.CreateEntityResponse, error) {
 	s.record(ctx, "CreateEntity")
-	return &flowv1.CreateEntityResponse{EntityId: "entity-1", EntityType: req.GetEntityType()}, nil
+	s.mu.Lock()
+	entityID, entityType := "entity-1", req.GetEntityType()
+	if s.createEntityID != "" {
+		entityID = s.createEntityID
+	}
+	if s.createEntityType != "" {
+		entityType = s.createEntityType
+	}
+	s.mu.Unlock()
+	return &flowv1.CreateEntityResponse{EntityId: entityID, EntityType: entityType}, nil
+}
+
+func (s *captureCartographerServer) UpdateEntity(
+	ctx context.Context, req *flowv1.UpdateEntityRequest,
+) (*flowv1.UpdateEntityResponse, error) {
+	s.record(ctx, "UpdateEntity")
+	return &flowv1.UpdateEntityResponse{EntityId: req.GetId()}, nil
+}
+
+func (s *captureCartographerServer) DeleteEntity(
+	ctx context.Context, req *flowv1.DeleteEntityRequest,
+) (*flowv1.DeleteEntityResponse, error) {
+	s.record(ctx, "DeleteEntity")
+	return &flowv1.DeleteEntityResponse{EntityId: req.GetId()}, nil
+}
+
+func (s *captureCartographerServer) CreateEdge(
+	ctx context.Context, req *flowv1.CreateEdgeRequest,
+) (*flowv1.CreateEdgeResponse, error) {
+	s.record(ctx, "CreateEdge")
+	return &flowv1.CreateEdgeResponse{
+		EdgeId:       "edge-1",
+		EdgeType:     req.GetEdgeType(),
+		FromEntityId: req.GetFromEntityId(),
+		ToEntityId:   req.GetToEntityId(),
+	}, nil
 }
 
 func (s *captureCartographerServer) DeleteEdge(
@@ -227,7 +273,7 @@ func TestCartographerProxy_E2E_Mode1_BlocksWrongType(t *testing.T) {
 		t.Fatalf("BeginTransaction: %v", err)
 	}
 	before := capture.count()
-	_, err = tx.CreateEntity("Component", nil, nil, nil)
+	_, err = tx.CreateEntity(entityTypeComponent, nil, nil, nil)
 	if err == nil {
 		t.Fatal("expected CreateEntity to be blocked by the mode-1 capability check")
 	}
@@ -251,11 +297,11 @@ func TestCartographerProxy_E2E_Mode1_PassesWithWildcardGrant(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BeginTransaction: %v", err)
 	}
-	entity, err := tx.CreateEntity("Component", nil, nil, nil)
+	entity, err := tx.CreateEntity(entityTypeComponent, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("CreateEntity with WRITE:graph/entity/* should pass mode-1: %v", err)
 	}
-	if entity.ID != "entity-1" || entity.Type != "Component" {
+	if entity.ID != "entity-1" || entity.Type != entityTypeComponent {
 		t.Fatalf("unexpected forwarded entity: %+v", entity)
 	}
 	if capture.lastMethod() != "CreateEntity" {
@@ -276,12 +322,12 @@ func TestCartographerProxy_E2E_Mode2_PassesThrough(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BeginTransaction: %v", err)
 	}
-	edge, err := tx.DeleteEdge("edge-1")
+	edge, err := tx.DeleteEdge("f47ac10b-58cc-4372-a567-0e02b2c3d479")
 	if err != nil {
 		t.Fatalf("DeleteEdge mode-2 pass-through failed: %v", err)
 	}
-	if edge.ID != "edge-1" {
-		t.Fatalf("expected forwarded edge id edge-1, got %q", edge.ID)
+	if edge.ID != "f47ac10b-58cc-4372-a567-0e02b2c3d479" {
+		t.Fatalf("expected forwarded edge id, got %q", edge.ID)
 	}
 	if capture.lastMethod() != "DeleteEdge" {
 		t.Fatalf("expected the Cartographer to receive DeleteEdge, got %q", capture.lastMethod())
@@ -357,4 +403,167 @@ func TestCartographerProxy_E2E_ExportGraph_StreamsWithSignedCapabilities(t *test
 		t.Fatal("expected the Cartographer to receive the ExportGraph request")
 	}
 	assertSignedCapabilitiesOnMD(t, pub, capture.metadata(), caps)
+}
+
+// TestCartographerProxy_E2E_Mode1_MetadataType_PassesToCartographer pins the
+// metadata-driven mode-1 WRITE gate for UpdateEntity/DeleteEntity/CreateEdge
+// (SPEC R3:252): the SDK resolves the entity type from its local ID-to-type
+// mapping and annotates entity_type metadata; a node holding
+// WRITE:graph/entity/Component passes the Sidecar's mode-1 check and each
+// request reaches the Cartographer carrying the resolved type.
+func TestCartographerProxy_E2E_Mode1_MetadataType_PassesToCartographer(t *testing.T) {
+	const caps = "WRITE:graph/entity/Component,WRITE:graph/tx"
+	const (
+		entityID = "550e8400-e29b-41d4-a716-446655440000"
+		targetID = "f47ac10b-58cc-4372-a567-0e02b2c3d479"
+	)
+	capture, client, _ := setupCartographerWire(t, caps)
+	// The fake Cartographer must return a canonical UUID v4: the SDK's
+	// UpdateEntity/DeleteEntity/CreateEdge validate ID format client-side.
+	capture.createEntityID = entityID
+
+	graph := client.GetGraph()
+	tx, err := graph.BeginTransaction()
+	if err != nil {
+		t.Fatalf("BeginTransaction: %v", err)
+	}
+
+	// CreateEntity seeds the SDK's ID-to-type map: entityID → Component.
+	entity, err := tx.CreateEntity(entityTypeComponent, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("CreateEntity: %v", err)
+	}
+	if entity.ID != entityID || entity.Type != entityTypeComponent {
+		t.Fatalf("unexpected created entity: %+v", entity)
+	}
+
+	if _, err := tx.UpdateEntity(entityID, map[string]string{"name": "x"}, nil); err != nil {
+		t.Fatalf("UpdateEntity with held type should pass mode-1: %v", err)
+	}
+	if capture.lastMethod() != "UpdateEntity" {
+		t.Fatalf("expected UpdateEntity to reach the Cartographer, got %q", capture.lastMethod())
+	}
+
+	if _, err := tx.CreateEdge("DEPENDS_ON", entityID, targetID, nil); err != nil {
+		t.Fatalf("CreateEdge with held source type should pass mode-1: %v", err)
+	}
+	if capture.lastMethod() != "CreateEdge" {
+		t.Fatalf("expected CreateEdge to reach the Cartographer, got %q", capture.lastMethod())
+	}
+
+	if _, err := tx.DeleteEntity(entityID); err != nil {
+		t.Fatalf("DeleteEntity with held type should pass mode-1: %v", err)
+	}
+	if capture.lastMethod() != "DeleteEntity" {
+		t.Fatalf("expected DeleteEntity to reach the Cartographer, got %q", capture.lastMethod())
+	}
+
+	// The forwarded request carries the entity_type metadata the Sidecar
+	// consumed for its mode-1 check.
+	if got := capture.metadata().Get("entity_type"); len(got) != 1 || got[0] != entityTypeComponent {
+		t.Fatalf("expected entity_type=Component forwarded to Cartographer, got %v", got)
+	}
+}
+
+// TestCartographerProxy_E2E_Mode1_MetadataType_BlocksUnheldType pins the
+// mode-1 block for UpdateEntity/DeleteEntity/CreateEdge when the metadata
+// resolves to a specific type the node does not hold (SPEC R3:252). The SDK's
+// ID-to-type mapping is best-effort and can be stale, so a request whose
+// entity_type metadata names an unheld type must be denied at the Sidecar
+// before it reaches the Cartographer.
+func TestCartographerProxy_E2E_Mode1_MetadataType_BlocksUnheldType(t *testing.T) {
+	const caps = "WRITE:graph/entity/Component,WRITE:graph/tx"
+	const (
+		entityID = "550e8400-e29b-41d4-a716-446655440000"
+		targetID = "f47ac10b-58cc-4372-a567-0e02b2c3d479"
+	)
+	capture, client, _ := setupCartographerWire(t, caps)
+	// Plant a stale mapping: the fake Cartographer reports the created entity
+	// as type Service while the node only holds WRITE:graph/entity/Component.
+	capture.createEntityID = entityID
+	capture.createEntityType = "Service"
+
+	graph := client.GetGraph()
+	tx, err := graph.BeginTransaction()
+	if err != nil {
+		t.Fatalf("BeginTransaction: %v", err)
+	}
+	// The request body type (Component) is held, so CreateEntity passes; the
+	// response seeds entityID → Service in the SDK's mapping.
+	if _, err := tx.CreateEntity(entityTypeComponent, nil, nil, nil); err != nil {
+		t.Fatalf("CreateEntity (request body type Component, held): %v", err)
+	}
+
+	before := capture.count()
+	assertBlocked := func(name string, call func() error) {
+		t.Helper()
+		if err := call(); err == nil {
+			t.Fatalf("%s: expected mode-1 PERMISSION_DENIED for unheld type Service", name)
+		} else if st, ok := status.FromError(err); !ok || st.Code() != codes.PermissionDenied {
+			t.Fatalf("%s: expected PermissionDenied, got %v", name, err)
+		}
+		if capture.count() != before {
+			t.Fatalf("%s: mode-1 block must prevent the request from reaching the Cartographer", name)
+		}
+	}
+	assertBlocked("UpdateEntity", func() error {
+		_, err := tx.UpdateEntity(entityID, nil, nil)
+		return err
+	})
+	assertBlocked("DeleteEntity", func() error {
+		_, err := tx.DeleteEntity(entityID)
+		return err
+	})
+	assertBlocked("CreateEdge", func() error {
+		_, err := tx.CreateEdge("DEPENDS_ON", entityID, targetID, nil)
+		return err
+	})
+}
+
+// TestCartographerProxy_E2E_Mode2_UnresolvableType_PassesThrough pins the
+// mode-2 wildcard fallback for UpdateEntity/DeleteEntity/CreateEdge (SPEC
+// R3:252): when the SDK cannot resolve the entity type it annotates
+// entity_type="*", and the Sidecar's wildcard check is best-effort — it never
+// blocks, even when the node holds no WRITE:graph/entity/* grant. The
+// Cartographer is the authoritative per-type enforcer, so the request reaches
+// it carrying entity_type="*".
+func TestCartographerProxy_E2E_Mode2_UnresolvableType_PassesThrough(t *testing.T) {
+	const caps = "WRITE:graph/entity/Component,WRITE:graph/tx"
+	const (
+		entityID = "550e8400-e29b-41d4-a716-446655440000"
+		targetID = "f47ac10b-58cc-4372-a567-0e02b2c3d479"
+	)
+	capture, client, _ := setupCartographerWire(t, caps)
+
+	graph := client.GetGraph()
+	tx, err := graph.BeginTransaction()
+	if err != nil {
+		t.Fatalf("BeginTransaction: %v", err)
+	}
+
+	// No entity was created, so no ID is in the SDK's mapping: each RPC
+	// resolves to entity_type="*" and falls back to the mode-2 wildcard check.
+	if _, err := tx.UpdateEntity(entityID, nil, nil); err != nil {
+		t.Fatalf("UpdateEntity wildcard fallback should pass through: %v", err)
+	}
+	if capture.lastMethod() != "UpdateEntity" {
+		t.Fatalf("expected UpdateEntity to reach the Cartographer, got %q", capture.lastMethod())
+	}
+	if got := capture.metadata().Get("entity_type"); len(got) != 1 || got[0] != "*" {
+		t.Fatalf("expected entity_type=* forwarded to Cartographer, got %v", got)
+	}
+
+	if _, err := tx.DeleteEntity(entityID); err != nil {
+		t.Fatalf("DeleteEntity wildcard fallback should pass through: %v", err)
+	}
+	if capture.lastMethod() != "DeleteEntity" {
+		t.Fatalf("expected DeleteEntity to reach the Cartographer, got %q", capture.lastMethod())
+	}
+
+	if _, err := tx.CreateEdge("DEPENDS_ON", entityID, targetID, nil); err != nil {
+		t.Fatalf("CreateEdge wildcard fallback should pass through: %v", err)
+	}
+	if capture.lastMethod() != "CreateEdge" {
+		t.Fatalf("expected CreateEdge to reach the Cartographer, got %q", capture.lastMethod())
+	}
 }
