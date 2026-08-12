@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"math"
+	"strings"
 	"testing"
 	"time"
 
@@ -97,12 +98,12 @@ func TestUpdateEntity_NoTransaction_Rejected(t *testing.T) {
 	}
 
 	tx := newMockTx(mock)
-	if _, err := tx.UpdateEntity("e1", nil, nil); err != nil {
+	if _, err := tx.UpdateEntity(testUUIDEntity, nil, nil); err != nil {
 		t.Fatalf("UpdateEntity through a Transaction handle should succeed: %v", err)
 	}
 
 	noTx := newMockTxWithID(mock, "")
-	_, err := noTx.UpdateEntity("e1", nil, nil)
+	_, err := noTx.UpdateEntity(testUUIDEntity, nil, nil)
 	if err == nil {
 		t.Fatal("expected rejection for UpdateEntity without an active transaction")
 	}
@@ -126,12 +127,12 @@ func TestDeleteEntity_NoTransaction_Rejected(t *testing.T) {
 	}
 
 	tx := newMockTx(mock)
-	if _, err := tx.DeleteEntity("e1"); err != nil {
+	if _, err := tx.DeleteEntity(testUUIDEntity); err != nil {
 		t.Fatalf("DeleteEntity through a Transaction handle should succeed: %v", err)
 	}
 
 	noTx := newMockTxWithID(mock, "")
-	_, err := noTx.DeleteEntity("e1")
+	_, err := noTx.DeleteEntity(testUUIDEntity)
 	if err == nil {
 		t.Fatal("expected rejection for DeleteEntity without an active transaction")
 	}
@@ -156,12 +157,12 @@ func TestCreateEdge_NoTransaction_Rejected(t *testing.T) {
 	}
 
 	tx := newMockTx(mock)
-	if _, err := tx.CreateEdge("DEPENDS_ON", "from-1", "to-1", nil); err != nil {
+	if _, err := tx.CreateEdge("DEPENDS_ON", testUUIDFrom, testUUIDTo, nil); err != nil {
 		t.Fatalf("CreateEdge through a Transaction handle should succeed: %v", err)
 	}
 
 	noTx := newMockTxWithID(mock, "")
-	_, err := noTx.CreateEdge("DEPENDS_ON", "from-1", "to-1", nil)
+	_, err := noTx.CreateEdge("DEPENDS_ON", testUUIDFrom, testUUIDTo, nil)
 	if err == nil {
 		t.Fatal("expected rejection for CreateEdge without an active transaction")
 	}
@@ -185,12 +186,12 @@ func TestDeleteEdge_NoTransaction_Rejected(t *testing.T) {
 	}
 
 	tx := newMockTx(mock)
-	if _, err := tx.DeleteEdge("edge-1"); err != nil {
+	if _, err := tx.DeleteEdge(testUUIDEdge); err != nil {
 		t.Fatalf("DeleteEdge through a Transaction handle should succeed: %v", err)
 	}
 
 	noTx := newMockTxWithID(mock, "")
-	_, err := noTx.DeleteEdge("edge-1")
+	_, err := noTx.DeleteEdge(testUUIDEdge)
 	if err == nil {
 		t.Fatal("expected rejection for DeleteEdge without an active transaction")
 	}
@@ -232,8 +233,8 @@ func TestUpdateEntityInTx(t *testing.T) {
 		},
 	}
 	tx := newMockTx(mock)
-	tx.idTypeMap.store("e1", "Component")
-	_, err := tx.UpdateEntity("e1", nil, nil)
+	tx.idTypeMap.store(testUUIDEntity, "Component")
+	_, err := tx.UpdateEntity(testUUIDEntity, nil, nil)
 	if err != nil {
 		t.Fatalf("UpdateEntity returned error: %v", err)
 	}
@@ -251,7 +252,7 @@ func TestDeleteEntityInTx(t *testing.T) {
 		},
 	}
 	tx := newMockTx(mock)
-	_, err := tx.DeleteEntity("e1")
+	_, err := tx.DeleteEntity(testUUIDEntity)
 	if err != nil {
 		t.Fatalf("DeleteEntity returned error: %v", err)
 	}
@@ -273,7 +274,7 @@ func TestCreateEdgeInTx(t *testing.T) {
 		},
 	}
 	tx := newMockTx(mock)
-	_, err := tx.CreateEdge("DEPENDS_ON", "from-1", "to-1", nil)
+	_, err := tx.CreateEdge("DEPENDS_ON", testUUIDFrom, testUUIDTo, nil)
 	if err != nil {
 		t.Fatalf("CreateEdge returned error: %v", err)
 	}
@@ -291,7 +292,7 @@ func TestDeleteEdgeInTx(t *testing.T) {
 		},
 	}
 	tx := newMockTx(mock)
-	_, err := tx.DeleteEdge("edge-1")
+	_, err := tx.DeleteEdge(testUUIDEdge)
 	if err != nil {
 		t.Fatalf("DeleteEdge returned error: %v", err)
 	}
@@ -505,7 +506,7 @@ func TestTxEmbeddingNaNInfinityRejection(t *testing.T) {
 			return err
 		}},
 		{"UpdateEntity", func(tx *Transaction, emb []float32) error {
-			_, err := tx.UpdateEntity("entity-1", nil, emb)
+			_, err := tx.UpdateEntity(testUUIDEntity, nil, emb)
 			return err
 		}},
 		{"SearchNeighbors", func(tx *Transaction, emb []float32) error {
@@ -520,6 +521,74 @@ func TestTxEmbeddingNaNInfinityRejection(t *testing.T) {
 					tx := newMockTx(&mockCartographerClient{})
 					if err := m.fn(tx, tc.emb); err == nil {
 						t.Errorf("expected error for NaN/infinity embedding on %s", m.name)
+					}
+				})
+			}
+		})
+	}
+}
+
+// TestTransaction_RejectsNonCanonicalUUID pins the SDK's client-side
+// canonical RFC4122 §3 UUID v4 validation on the write path (SPEC:162;
+// error-table row "Invalid entity or edge ID format"): non-canonical
+// spellings that still parse as UUIDs — uppercase hex, 32-char no-hyphen,
+// braced {...}, urn:uuid: — plus outright non-UUIDs are rejected before they
+// reach the wire, mirroring the validateEmbedding client-side guard. Without
+// this guard the Cartographer would persist each spelling verbatim as a
+// distinct <id>.json file, creating two entities for one UUID and bypassing
+// the CreateEntity ALREADY_EXISTS check. The mock's RPC fields are left nil,
+// so a rejection that slips through would panic here rather than pass.
+func TestTransaction_RejectsNonCanonicalUUID(t *testing.T) {
+	bad := []struct {
+		name string
+		id   string
+	}{
+		{"uppercase-hex", "550E8400-E29B-41D4-A716-446655440000"},
+		{"no-hyphen", "550e8400e29b41d4a716446655440000"},
+		{"braced", "{550e8400-e29b-41d4-a716-446655440000}"},
+		{"urn-prefixed", "urn:uuid:550e8400-e29b-41d4-a716-446655440000"},
+		{"not-a-uuid", "entity-1"},
+	}
+	methods := []struct {
+		name string
+		fn   func(tx *Transaction, id string) error
+	}{
+		{"CreateEntity", func(tx *Transaction, id string) error {
+			_, err := tx.CreateEntity(componentType, &id, nil, nil)
+			return err
+		}},
+		{"UpdateEntity", func(tx *Transaction, id string) error {
+			_, err := tx.UpdateEntity(id, nil, nil)
+			return err
+		}},
+		{"DeleteEntity", func(tx *Transaction, id string) error {
+			_, err := tx.DeleteEntity(id)
+			return err
+		}},
+		{"CreateEdge-from", func(tx *Transaction, id string) error {
+			_, err := tx.CreateEdge("DEPENDS_ON", id, testUUIDTo, nil)
+			return err
+		}},
+		{"CreateEdge-to", func(tx *Transaction, id string) error {
+			_, err := tx.CreateEdge("DEPENDS_ON", testUUIDFrom, id, nil)
+			return err
+		}},
+		{"DeleteEdge", func(tx *Transaction, id string) error {
+			_, err := tx.DeleteEdge(id)
+			return err
+		}},
+	}
+	for _, m := range methods {
+		t.Run(m.name, func(t *testing.T) {
+			for _, tc := range bad {
+				t.Run(tc.name, func(t *testing.T) {
+					tx := newMockTx(&mockCartographerClient{})
+					err := m.fn(tx, tc.id)
+					if err == nil {
+						t.Fatalf("expected client-side rejection of %q", tc.id)
+					}
+					if !strings.Contains(err.Error(), "canonical") {
+						t.Errorf("expected canonical-form rejection error, got %v", err)
 					}
 				})
 			}
@@ -1262,8 +1331,8 @@ func TestTxUpdateEntity_UnknownIDSendsWildcard(t *testing.T) {
 		},
 	}
 	tx := newMockTx(mock)
-	// entity-1 is NOT in the tx map -> should produce wildcard
-	_, err := tx.UpdateEntity("entity-1", nil, nil)
+	// testUUIDEntity is NOT in the tx map -> should produce wildcard
+	_, err := tx.UpdateEntity(testUUIDEntity, nil, nil)
 	if err != nil {
 		t.Fatalf("UpdateEntity returned error: %v", err)
 	}
@@ -1298,9 +1367,9 @@ func TestTxUpdateEntity_ResolvedTypeAnnotation(t *testing.T) {
 		},
 	}
 	tx := newMockTx(mock)
-	// entity-1 IS in the tx map -> annotation must carry the resolved type.
-	tx.idTypeMap.store("entity-1", componentType)
-	_, err := tx.UpdateEntity("entity-1", nil, nil)
+	// testUUIDEntity IS in the tx map -> annotation must carry the resolved type.
+	tx.idTypeMap.store(testUUIDEntity, componentType)
+	_, err := tx.UpdateEntity(testUUIDEntity, nil, nil)
 	if err != nil {
 		t.Fatalf("UpdateEntity returned error: %v", err)
 	}
@@ -1330,8 +1399,8 @@ func TestTxDeleteEntity_UnknownIDSendsWildcard(t *testing.T) {
 		},
 	}
 	tx := newMockTx(mock)
-	// entity-1 is NOT in the tx map -> should produce wildcard
-	_, err := tx.DeleteEntity("entity-1")
+	// testUUIDEntity is NOT in the tx map -> should produce wildcard
+	_, err := tx.DeleteEntity(testUUIDEntity)
 	if err != nil {
 		t.Fatalf("DeleteEntity returned error: %v", err)
 	}
@@ -1363,8 +1432,8 @@ func TestTxCreateEdge_UnknownFromIDSendsWildcard(t *testing.T) {
 		},
 	}
 	tx := newMockTx(mock)
-	// from-1 is NOT in the tx map -> should produce wildcard
-	_, err := tx.CreateEdge("DEPENDS_ON", "from-1", "to-1", nil)
+	// testUUIDFrom is NOT in the tx map -> should produce wildcard
+	_, err := tx.CreateEdge("DEPENDS_ON", testUUIDFrom, testUUIDTo, nil)
 	if err != nil {
 		t.Fatalf("CreateEdge returned error: %v", err)
 	}
@@ -1401,9 +1470,9 @@ func TestTxDeleteEntity_ResolvedTypeAnnotation(t *testing.T) {
 		},
 	}
 	tx := newMockTx(mock)
-	// entity-1 IS in the tx map -> annotation must carry the resolved type.
-	tx.idTypeMap.store("entity-1", componentType)
-	_, err := tx.DeleteEntity("entity-1")
+	// testUUIDEntity IS in the tx map -> annotation must carry the resolved type.
+	tx.idTypeMap.store(testUUIDEntity, componentType)
+	_, err := tx.DeleteEntity(testUUIDEntity)
 	if err != nil {
 		t.Fatalf("DeleteEntity returned error: %v", err)
 	}
@@ -1441,9 +1510,9 @@ func TestTxCreateEdge_ResolvedTypeAnnotation(t *testing.T) {
 		},
 	}
 	tx := newMockTx(mock)
-	// from-1 IS in the tx map -> annotation must carry the resolved type.
-	tx.idTypeMap.store("from-1", componentType)
-	_, err := tx.CreateEdge("DEPENDS_ON", "from-1", "to-1", nil)
+	// testUUIDFrom IS in the tx map -> annotation must carry the resolved type.
+	tx.idTypeMap.store(testUUIDFrom, componentType)
+	_, err := tx.CreateEdge("DEPENDS_ON", testUUIDFrom, testUUIDTo, nil)
 	if err != nil {
 		t.Fatalf("CreateEdge returned error: %v", err)
 	}
@@ -1475,7 +1544,7 @@ func TestTxDeleteEdge_SendsKeyAndWildcard(t *testing.T) {
 		},
 	}
 	tx := newMockTx(mock)
-	_, err := tx.DeleteEdge("edge-1")
+	_, err := tx.DeleteEdge(testUUIDEdge)
 	if err != nil {
 		t.Fatalf("DeleteEdge returned error: %v", err)
 	}

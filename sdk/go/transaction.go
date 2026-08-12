@@ -3,6 +3,7 @@ package flow
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"time"
 
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
@@ -233,6 +234,9 @@ func (tx *Transaction) CreateEntity(
 		TransactionId: tx.id,
 	}
 	if id != nil {
+		if err := validateUUIDOrEmpty(*id); err != nil {
+			return nil, err
+		}
 		req.Id = *id
 	}
 
@@ -259,6 +263,9 @@ func (tx *Transaction) CreateEntity(
 // UpdateEntity partially updates an entity within the transaction.
 func (tx *Transaction) UpdateEntity(id string, properties map[string]string, embedding []float32) (*Entity, error) {
 	if err := tx.checkRolled(); err != nil {
+		return nil, err
+	}
+	if err := validateUUIDOrEmpty(id); err != nil {
 		return nil, err
 	}
 	if err := validateEmbedding(embedding); err != nil {
@@ -301,6 +308,9 @@ func (tx *Transaction) DeleteEntity(id string) (*Entity, error) {
 	if err := tx.checkRolled(); err != nil {
 		return nil, err
 	}
+	if err := validateUUIDOrEmpty(id); err != nil {
+		return nil, err
+	}
 
 	req := &flowv1.DeleteEntityRequest{
 		Id:            id,
@@ -333,6 +343,12 @@ func (tx *Transaction) CreateEdge(
 	edgeType, fromEntityID, toEntityID string, properties map[string]string,
 ) (*Edge, error) {
 	if err := tx.checkRolled(); err != nil {
+		return nil, err
+	}
+	if err := validateUUIDOrEmpty(fromEntityID); err != nil {
+		return nil, err
+	}
+	if err := validateUUIDOrEmpty(toEntityID); err != nil {
 		return nil, err
 	}
 
@@ -368,6 +384,9 @@ func (tx *Transaction) CreateEdge(
 // DeleteEdge deletes an edge within the transaction.
 func (tx *Transaction) DeleteEdge(id string) (*Edge, error) {
 	if err := tx.checkRolled(); err != nil {
+		return nil, err
+	}
+	if err := validateUUIDOrEmpty(id); err != nil {
 		return nil, err
 	}
 
@@ -570,4 +589,40 @@ func diffEntryToEdge(e *flowv1.DiffEntry) Edge {
 		Properties:   e.GetProperties(),
 		Suspected:    e.GetSuspected(),
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Client-side input validation helpers
+// ---------------------------------------------------------------------------
+
+// canonicalUUIDV4Re matches the canonical RFC4122 §3 UUID v4 string form:
+// the 8-4-4-4-12 lowercase dashed form produced by the standard library's
+// String() (SPEC:162). The Cartographer persists IDs verbatim as <id>.json
+// file names, so a non-canonical spelling of an already valid UUID (uppercase
+// hex, 32-char no-hyphen, braced {...}, urn:uuid:) would create a second
+// entity for the same UUID and bypass the CreateEntity ALREADY_EXISTS check.
+var canonicalUUIDV4Re = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+
+// validateUUIDOrEmpty reports whether id is the canonical RFC4122 §3 UUID v4
+// string form, mirroring the Cartographer store's uuidutil.Validate at the
+// SDK's write-path boundary (SPEC:162; error-table row "Invalid entity or
+// edge ID format"). An empty id passes (optional parameters); every other
+// spelling — including non-canonical ones that parse as UUIDs — is rejected
+// before it reaches the wire, matching the validateEmbedding client-side
+// guard precedent.
+func validateUUIDOrEmpty(id string) error {
+	if id == "" {
+		return nil
+	}
+	// The regex pins the canonical lowercase dashed form. The version nibble
+	// (third group) must be 4 and the variant nibble (fourth group) must be
+	// 8, 9, a, or b (RFC 4122) — mirroring uuidutil.Validate exactly.
+	if !canonicalUUIDV4Re.MatchString(id) ||
+		id[14] != '4' ||
+		(id[19] != '8' && id[19] != '9' && id[19] != 'a' && id[19] != 'b') {
+		return fmt.Errorf(
+			"flow sdk: entity ID must be canonical lowercase dashed UUID v4 form " +
+				"(e.g. 550e8400-e29b-41d4-a716-446655440000)")
+	}
+	return nil
 }
