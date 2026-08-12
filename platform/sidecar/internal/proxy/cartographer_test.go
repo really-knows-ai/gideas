@@ -8,12 +8,14 @@ import (
 	"net"
 	"sync"
 	"testing"
+	"time"
 
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
 	flow "github.com/foundry/flow/sdk/go"
 	"github.com/foundry/flow/sidecar/internal/service"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
@@ -24,12 +26,29 @@ const entityTypeComponent = "Component"
 
 // methodUpdateEntity, methodDeleteEntity and methodCreateEdge are the
 // Cartographer RPC names asserted via captureCartographerServer.lastMethod in
-// the metadata-type wire tests (goconst: shared literals).
+// the metadata-type wire tests (goconst: shared literals). The remaining
+// method* constants name the transaction, admin, and read RPCs pinned by the
+// capability-gate wire tests.
 const (
-	methodUpdateEntity = "UpdateEntity"
-	methodDeleteEntity = "DeleteEntity"
-	methodCreateEdge   = "CreateEdge"
+	methodUpdateEntity        = "UpdateEntity"
+	methodDeleteEntity        = "DeleteEntity"
+	methodCreateEdge          = "CreateEdge"
+	methodBeginTransaction    = "BeginTransaction"
+	methodCommitTransaction   = "CommitTransaction"
+	methodRollbackTransaction = "RollbackTransaction"
+	methodRefreshTransaction  = "RefreshTransaction"
+	methodExtendTimeout       = "ExtendTimeout"
+	methodGetTransactionDiff  = "GetTransactionDiff"
+	methodSync                = "Sync"
+	methodSearchNeighbors     = "SearchNeighbors"
+	methodFullTextSearch      = "FullTextSearch"
+	methodListEntities        = "ListEntities"
 )
+
+// txID is the fake transaction ID used by raw-RPC capability-gate tests
+// (goconst: shared literal). Blocked requests never reach the Cartographer,
+// so the value is only a placeholder.
+const txID = "tx-wire-test"
 
 // captureCartographerServer is a fake CartographerServiceServer that records
 // the node-facing requests and the metadata they arrived with, so the tests
@@ -72,8 +91,43 @@ func (s *captureCartographerServer) ExecuteCypher(
 func (s *captureCartographerServer) BeginTransaction(
 	ctx context.Context, req *flowv1.BeginTransactionRequest,
 ) (*flowv1.BeginTransactionResponse, error) {
-	s.record(ctx, "BeginTransaction")
-	return &flowv1.BeginTransactionResponse{TransactionId: "tx-wire-test"}, nil
+	s.record(ctx, methodBeginTransaction)
+	return &flowv1.BeginTransactionResponse{TransactionId: txID}, nil
+}
+
+func (s *captureCartographerServer) CommitTransaction(
+	ctx context.Context, req *flowv1.CommitTransactionRequest,
+) (*flowv1.CommitTransactionResponse, error) {
+	s.record(ctx, methodCommitTransaction)
+	return &flowv1.CommitTransactionResponse{}, nil
+}
+
+func (s *captureCartographerServer) RollbackTransaction(
+	ctx context.Context, req *flowv1.RollbackTransactionRequest,
+) (*flowv1.RollbackTransactionResponse, error) {
+	s.record(ctx, methodRollbackTransaction)
+	return &flowv1.RollbackTransactionResponse{}, nil
+}
+
+func (s *captureCartographerServer) RefreshTransaction(
+	ctx context.Context, req *flowv1.RefreshTransactionRequest,
+) (*flowv1.RefreshTransactionResponse, error) {
+	s.record(ctx, methodRefreshTransaction)
+	return &flowv1.RefreshTransactionResponse{}, nil
+}
+
+func (s *captureCartographerServer) ExtendTimeout(
+	ctx context.Context, req *flowv1.ExtendTimeoutRequest,
+) (*flowv1.ExtendTimeoutResponse, error) {
+	s.record(ctx, methodExtendTimeout)
+	return &flowv1.ExtendTimeoutResponse{}, nil
+}
+
+func (s *captureCartographerServer) GetTransactionDiff(
+	ctx context.Context, req *flowv1.GetTransactionDiffRequest,
+) (*flowv1.GetTransactionDiffResponse, error) {
+	s.record(ctx, methodGetTransactionDiff)
+	return &flowv1.GetTransactionDiffResponse{}, nil
 }
 
 func (s *captureCartographerServer) CreateEntity(
@@ -128,8 +182,29 @@ func (s *captureCartographerServer) DeleteEdge(
 func (s *captureCartographerServer) SearchNeighbors(
 	ctx context.Context, req *flowv1.SearchNeighborsRequest,
 ) (*flowv1.SearchNeighborsResponse, error) {
-	s.record(ctx, "SearchNeighbors")
+	s.record(ctx, methodSearchNeighbors)
 	return &flowv1.SearchNeighborsResponse{}, nil
+}
+
+func (s *captureCartographerServer) FullTextSearch(
+	ctx context.Context, req *flowv1.FullTextSearchRequest,
+) (*flowv1.FullTextSearchResponse, error) {
+	s.record(ctx, methodFullTextSearch)
+	return &flowv1.FullTextSearchResponse{}, nil
+}
+
+func (s *captureCartographerServer) ListEntities(
+	ctx context.Context, req *flowv1.ListEntitiesRequest,
+) (*flowv1.ListEntitiesResponse, error) {
+	s.record(ctx, methodListEntities)
+	return &flowv1.ListEntitiesResponse{}, nil
+}
+
+func (s *captureCartographerServer) Sync(
+	ctx context.Context, req *flowv1.SyncRequest,
+) (*flowv1.SyncResponse, error) {
+	s.record(ctx, methodSync)
+	return &flowv1.SyncResponse{}, nil
 }
 
 func (s *captureCartographerServer) ExportGraph(
@@ -168,14 +243,26 @@ func (s *captureCartographerServer) metadata() metadata.MD {
 	return s.capturedMD
 }
 
-// setupCartographerWire spins up an in-process fake Cartographer, a real
+// cartographerWire is the full wire-harness result from
+// setupCartographerWireFull: the capture server, the SDK client, the Sidecar's
+// public key (for signature verification), the Sidecar server (for session
+// injection), and a raw Cartographer client dialing the Sidecar (for direct
+// RPC invocation without the SDK).
+type cartographerWire struct {
+	capture    *captureCartographerServer
+	client     *flow.Client
+	sidecarPub ed25519.PublicKey
+	sidecarSrv *service.SidecarServer
+	rawClient  flowv1.CartographerServiceClient
+}
+
+// setupCartographerWireFull spins up an in-process fake Cartographer, a real
 // Sidecar gRPC server with the CartographerProxy + identity interceptors +
-// signing key, and a real SDK client dialing the Sidecar. It returns the
-// capture server, the SDK client, and the Sidecar's public key for signature
-// verification.
-func setupCartographerWire(
-	t *testing.T, nodeCaps string,
-) (*captureCartographerServer, *flow.Client, ed25519.PublicKey) {
+// signing key, and a real SDK client dialing the Sidecar, plus a raw
+// Cartographer client dialing the Sidecar directly. It returns the capture
+// server, the SDK client, and the Sidecar's public key for signature
+// verification along with the Sidecar server and raw client.
+func setupCartographerWireFull(t *testing.T, nodeCaps string) *cartographerWire {
 	t.Helper()
 
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
@@ -221,7 +308,35 @@ func setupCartographerWire(
 	}
 	t.Cleanup(func() { _ = client.Close() })
 
-	return capture, client, pub
+	// Raw Cartographer client dialing the Sidecar directly, for RPCs the SDK
+	// cannot issue without a transaction handle (fixed-gate block tests).
+	rawConn, err := grpc.NewClient(
+		sidecarLis.Addr().String(),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		t.Fatalf("dial Sidecar with raw client: %v", err)
+	}
+	t.Cleanup(func() { _ = rawConn.Close() })
+
+	return &cartographerWire{
+		capture:    capture,
+		client:     client,
+		sidecarPub: pub,
+		sidecarSrv: sidecarSrv,
+		rawClient:  flowv1.NewCartographerServiceClient(rawConn),
+	}
+}
+
+// setupCartographerWire spins up the wire harness and returns the capture
+// server, the SDK client, and the Sidecar's public key for signature
+// verification. It is the convenience form used by the SDK-path wire tests.
+func setupCartographerWire(
+	t *testing.T, nodeCaps string,
+) (*captureCartographerServer, *flow.Client, ed25519.PublicKey) {
+	t.Helper()
+	w := setupCartographerWireFull(t, nodeCaps)
+	return w.capture, w.client, w.sidecarPub
 }
 
 // assertSignedCapabilitiesOnMD verifies that the metadata carries the given
@@ -429,7 +544,7 @@ func TestCartographerProxy_E2E_Mode1_AllTypesSearch_PassesWithWildcardGrant(t *t
 	if _, err := client.GetGraph().SearchNeighbors([]float32{0.1, 0.2}, "", 10); err != nil {
 		t.Fatalf("all-types SearchNeighbors with READ:graph/entity/* should pass mode-1: %v", err)
 	}
-	if capture.lastMethod() != "SearchNeighbors" {
+	if capture.lastMethod() != methodSearchNeighbors {
 		t.Fatalf("expected the Cartographer to receive SearchNeighbors, got %q", capture.lastMethod())
 	}
 }
@@ -636,5 +751,286 @@ func TestCartographerProxy_E2E_Mode2_UnresolvableType_PassesThrough(t *testing.T
 	}
 	if capture.lastMethod() != methodCreateEdge {
 		t.Fatalf("expected CreateEdge to reach the Cartographer, got %q", capture.lastMethod())
+	}
+}
+
+// TestCartographerProxy_E2E_TxLifecycle_PassesWithTxGrants pins the
+// transaction-family fixed gates (SPEC R3): a node holding WRITE:graph/tx (and
+// READ:graph/tx for GetTransactionDiff) has every transaction RPC forwarded to
+// the Cartographer — BeginTransaction, CommitTransaction, RollbackTransaction,
+// RefreshTransaction, ExtendTimeout, and GetTransactionDiff.
+func TestCartographerProxy_E2E_TxLifecycle_PassesWithTxGrants(t *testing.T) {
+	const caps = "WRITE:graph/tx,READ:graph/tx"
+	capture, client, _ := setupCartographerWire(t, caps)
+	graph := client.GetGraph()
+
+	tx, err := graph.BeginTransaction()
+	if err != nil {
+		t.Fatalf("BeginTransaction with WRITE:graph/tx: %v", err)
+	}
+	if capture.lastMethod() != methodBeginTransaction {
+		t.Fatalf("expected the Cartographer to receive BeginTransaction, got %q", capture.lastMethod())
+	}
+
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("CommitTransaction with WRITE:graph/tx: %v", err)
+	}
+	if capture.lastMethod() != methodCommitTransaction {
+		t.Fatalf("expected the Cartographer to receive CommitTransaction, got %q", capture.lastMethod())
+	}
+
+	tx2, err := graph.BeginTransaction()
+	if err != nil {
+		t.Fatalf("BeginTransaction: %v", err)
+	}
+	if err := tx2.Rollback(); err != nil {
+		t.Fatalf("RollbackTransaction with WRITE:graph/tx: %v", err)
+	}
+	if capture.lastMethod() != methodRollbackTransaction {
+		t.Fatalf("expected the Cartographer to receive RollbackTransaction, got %q", capture.lastMethod())
+	}
+
+	tx3, err := graph.BeginTransaction()
+	if err != nil {
+		t.Fatalf("BeginTransaction: %v", err)
+	}
+	if err := tx3.Refresh(); err != nil {
+		t.Fatalf("RefreshTransaction with WRITE:graph/tx: %v", err)
+	}
+	if capture.lastMethod() != methodRefreshTransaction {
+		t.Fatalf("expected the Cartographer to receive RefreshTransaction, got %q", capture.lastMethod())
+	}
+
+	tx4, err := graph.BeginTransaction()
+	if err != nil {
+		t.Fatalf("BeginTransaction: %v", err)
+	}
+	if _, err := tx4.ExtendTimeout(time.Hour); err != nil {
+		t.Fatalf("ExtendTimeout with WRITE:graph/tx: %v", err)
+	}
+	if capture.lastMethod() != methodExtendTimeout {
+		t.Fatalf("expected the Cartographer to receive ExtendTimeout, got %q", capture.lastMethod())
+	}
+
+	tx5, err := graph.BeginTransaction()
+	if err != nil {
+		t.Fatalf("BeginTransaction: %v", err)
+	}
+	if _, err := tx5.Diff(); err != nil {
+		t.Fatalf("GetTransactionDiff with READ:graph/tx: %v", err)
+	}
+	if capture.lastMethod() != methodGetTransactionDiff {
+		t.Fatalf("expected the Cartographer to receive GetTransactionDiff, got %q", capture.lastMethod())
+	}
+}
+
+// TestCartographerProxy_E2E_TxGate_BlocksWithoutTxGrants pins the fixed-gate
+// block side (SPEC R3): a node holding no WRITE:graph/tx or READ:graph/tx
+// grant is denied at the Sidecar with PERMISSION_DENIED for every transaction
+// RPC, and no request reaches the Cartographer. The RPCs are issued with a raw
+// client because the SDK cannot obtain a transaction handle without the
+// WRITE:graph/tx grant (BeginTransaction is itself gated).
+func TestCartographerProxy_E2E_TxGate_BlocksWithoutTxGrants(t *testing.T) {
+	const caps = "READ:graph/entity/*"
+	w := setupCartographerWireFull(t, caps)
+	ctx := context.Background()
+
+	txRPCCalls := []struct {
+		name string
+		call func() error
+	}{
+		{methodBeginTransaction, func() error {
+			_, err := w.rawClient.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
+			return err
+		}},
+		{methodCommitTransaction, func() error {
+			_, err := w.rawClient.CommitTransaction(ctx, &flowv1.CommitTransactionRequest{TransactionId: txID})
+			return err
+		}},
+		{methodRollbackTransaction, func() error {
+			_, err := w.rawClient.RollbackTransaction(ctx, &flowv1.RollbackTransactionRequest{TransactionId: txID})
+			return err
+		}},
+		{methodRefreshTransaction, func() error {
+			_, err := w.rawClient.RefreshTransaction(ctx, &flowv1.RefreshTransactionRequest{TransactionId: txID})
+			return err
+		}},
+		{methodGetTransactionDiff, func() error {
+			_, err := w.rawClient.GetTransactionDiff(ctx, &flowv1.GetTransactionDiffRequest{TransactionId: txID})
+			return err
+		}},
+		{methodExtendTimeout, func() error {
+			_, err := w.rawClient.ExtendTimeout(ctx, &flowv1.ExtendTimeoutRequest{TransactionId: txID})
+			return err
+		}},
+	}
+	for _, c := range txRPCCalls {
+		if err := c.call(); err == nil {
+			t.Fatalf("%s: expected PERMISSION_DENIED without a tx grant, got nil error", c.name)
+		} else if st, ok := status.FromError(err); !ok || st.Code() != codes.PermissionDenied {
+			t.Fatalf("%s: expected PermissionDenied, got %v", c.name, err)
+		}
+	}
+	if w.capture.count() != 0 {
+		t.Fatalf("fixed tx gate must prevent every RPC from reaching the Cartographer, got %d requests", w.capture.count())
+	}
+}
+
+// TestCartographerProxy_E2E_Sync_PassesWithWildcardWrite pins the WRITE
+// admin-gate success path (SPEC R3): Sync requires WRITE:graph/entity/*, and a
+// node holding the wildcard grant has the request forwarded to the
+// Cartographer.
+func TestCartographerProxy_E2E_Sync_PassesWithWildcardWrite(t *testing.T) {
+	const caps = "WRITE:graph/entity/*"
+	capture, client, _ := setupCartographerWire(t, caps)
+
+	if err := client.GetGraph().Sync(); err != nil {
+		t.Fatalf("Sync with WRITE:graph/entity/* should pass the fixed gate: %v", err)
+	}
+	if capture.lastMethod() != methodSync {
+		t.Fatalf("expected the Cartographer to receive Sync, got %q", capture.lastMethod())
+	}
+}
+
+// TestCartographerProxy_E2E_Sync_BlocksWithoutWildcardWrite pins the WRITE
+// admin-gate block side (SPEC R3): a node holding READ capabilities but no
+// WRITE:graph/entity/* grant is denied at the Sidecar with PERMISSION_DENIED
+// and Sync never reaches the Cartographer.
+func TestCartographerProxy_E2E_Sync_BlocksWithoutWildcardWrite(t *testing.T) {
+	const caps = "READ:graph/entity/*"
+	capture, client, _ := setupCartographerWire(t, caps)
+	before := capture.count()
+
+	if err := client.GetGraph().Sync(); err == nil {
+		t.Fatal("expected Sync to be blocked without WRITE:graph/entity/*")
+	} else if st, ok := status.FromError(err); !ok || st.Code() != codes.PermissionDenied {
+		t.Fatalf("expected PermissionDenied, got %v", err)
+	}
+	if capture.count() != before {
+		t.Fatal("fixed gate block must prevent Sync from reaching the Cartographer")
+	}
+}
+
+// TestCartographerProxy_E2E_ExportGraph_BlocksWithoutWildcardRead pins the
+// READ admin-gate block side (SPEC R3): ExportGraph requires READ:graph/entity/*,
+// and a node holding no read grant is denied at the Sidecar with
+// PERMISSION_DENIED before the stream is established — the Cartographer never
+// receives the request.
+func TestCartographerProxy_E2E_ExportGraph_BlocksWithoutWildcardRead(t *testing.T) {
+	const caps = "WRITE:graph/entity/*"
+	capture, client, _ := setupCartographerWire(t, caps)
+
+	// ExportGraph is server-streaming: the Sidecar's status error is delivered
+	// on the stream (Recv), not on the establishment call itself.
+	stream, err := client.GetGraph().ExportGraph("json")
+	if err == nil {
+		defer stream.Stop()
+		_, err = stream.Recv()
+	}
+	if err == nil {
+		t.Fatal("expected ExportGraph to be blocked without READ:graph/entity/*")
+	} else if st, ok := status.FromError(err); !ok || st.Code() != codes.PermissionDenied {
+		t.Fatalf("expected PermissionDenied, got %v", err)
+	}
+	if capture.lastExportReq() != nil {
+		t.Fatal("fixed gate block must prevent ExportGraph from reaching the Cartographer")
+	}
+}
+
+// TestCartographerProxy_E2E_Mode1_SpecificTypeRead_PassesWithHeldType pins the
+// mode-1 specific-type READ branch (SPEC R3:262): a node holding
+// READ:graph/entity/Component has SearchNeighbors, FullTextSearch, and
+// ListEntities for that type forwarded to the Cartographer.
+func TestCartographerProxy_E2E_Mode1_SpecificTypeRead_PassesWithHeldType(t *testing.T) {
+	const caps = "READ:graph/entity/Component"
+	capture, client, _ := setupCartographerWire(t, caps)
+	graph := client.GetGraph()
+
+	if _, err := graph.SearchNeighbors([]float32{0.1, 0.2}, entityTypeComponent, 10); err != nil {
+		t.Fatalf("SearchNeighbors with held type should pass mode-1: %v", err)
+	}
+	if capture.lastMethod() != methodSearchNeighbors {
+		t.Fatalf("expected the Cartographer to receive SearchNeighbors, got %q", capture.lastMethod())
+	}
+
+	if _, err := graph.FullTextSearch("auth service", entityTypeComponent); err != nil {
+		t.Fatalf("FullTextSearch with held type should pass mode-1: %v", err)
+	}
+	if capture.lastMethod() != methodFullTextSearch {
+		t.Fatalf("expected the Cartographer to receive FullTextSearch, got %q", capture.lastMethod())
+	}
+
+	if _, err := graph.ListEntities(entityTypeComponent); err != nil {
+		t.Fatalf("ListEntities with held type should pass mode-1: %v", err)
+	}
+	if capture.lastMethod() != methodListEntities {
+		t.Fatalf("expected the Cartographer to receive ListEntities, got %q", capture.lastMethod())
+	}
+}
+
+// TestCartographerProxy_E2E_Mode1_SpecificTypeRead_BlocksUnheldType pins the
+// mode-1 specific-type READ block side (SPEC R3:262): a node holding only
+// READ:graph/entity/Service cannot read entities of type Component — each
+// request is denied at the Sidecar with PERMISSION_DENIED and never reaches
+// the Cartographer.
+func TestCartographerProxy_E2E_Mode1_SpecificTypeRead_BlocksUnheldType(t *testing.T) {
+	const caps = "READ:graph/entity/Service"
+	capture, client, _ := setupCartographerWire(t, caps)
+	graph := client.GetGraph()
+	before := capture.count()
+
+	readCalls := []struct {
+		name string
+		call func() error
+	}{
+		{methodSearchNeighbors, func() error {
+			_, err := graph.SearchNeighbors([]float32{0.1, 0.2}, entityTypeComponent, 10)
+			return err
+		}},
+		{methodFullTextSearch, func() error {
+			_, err := graph.FullTextSearch("auth service", entityTypeComponent)
+			return err
+		}},
+		{methodListEntities, func() error {
+			_, err := graph.ListEntities(entityTypeComponent)
+			return err
+		}},
+	}
+	for _, c := range readCalls {
+		if err := c.call(); err == nil {
+			t.Fatalf("%s: expected PERMISSION_DENIED for an unheld type, got nil error", c.name)
+		} else if st, ok := status.FromError(err); !ok || st.Code() != codes.PermissionDenied {
+			t.Fatalf("%s: expected PermissionDenied, got %v", c.name, err)
+		}
+	}
+	if capture.count() != before {
+		t.Fatal("mode-1 block must prevent the requests from reaching the Cartographer")
+	}
+}
+
+// TestCartographerProxy_E2E_SessionMode_SignsCapabilitiesWithKey pins the
+// identity interceptor's session-mode enrichment branch (SPEC R3 / Capability
+// Authorisation Chain): when the SDK's workitem has an active assignment
+// session, the interceptor resolves the node identity from the session and
+// signs the attested capabilities with the Sidecar's configured key. The
+// session's node identity differs from the Sidecar's entry-bound fallback
+// identity, so the test proves the session branch (not the fallback) produced
+// the signed metadata.
+func TestCartographerProxy_E2E_SessionMode_SignsCapabilitiesWithKey(t *testing.T) {
+	const caps = "READ:graph/entity/*"
+	w := setupCartographerWireFull(t, caps)
+	// Register the SDK's workitem as an active assignment whose session node
+	// identity differs from the Sidecar's fallback node identity.
+	w.sidecarSrv.InjectSessionForTest("wi-1", "session-node")
+
+	if _, err := w.client.GetGraph().ExecuteCypher("MATCH (c:Component) RETURN c", nil); err != nil {
+		t.Fatalf("session-mode ExecuteCypher via SDK→Sidecar→Cartographer failed: %v", err)
+	}
+	if w.capture.count() == 0 {
+		t.Fatal("expected the fake Cartographer to receive the ExecuteCypher request")
+	}
+	assertSignedCapabilitiesOnMD(t, w.sidecarPub, w.capture.metadata(), caps)
+	if got := w.capture.metadata().Get(service.MetadataKeyNodeID); len(got) != 1 || got[0] != "session-node" {
+		t.Fatalf("expected the session's node identity to be injected, got %v", got)
 	}
 }
