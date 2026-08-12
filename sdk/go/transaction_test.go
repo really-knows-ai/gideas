@@ -1060,7 +1060,9 @@ func TestCommit(t *testing.T) {
 // layer: WithAck() carries ack=true on the CommitTransactionRequest wire
 // (synchronous push delivery — the worker wakes immediately and the call
 // blocks until the sync cycle completes), while a plain Commit() carries
-// ack=false (deferred push on the worker's next timer cycle).
+// ack=false (deferred push on the worker's next timer cycle). Each variant
+// uses a fresh transaction handle: a successful Commit marks the handle
+// terminal, so the second Commit on the same handle is rejected locally.
 func TestCommit_WithAck(t *testing.T) {
 	var capturedAck bool
 	mock := &mockCartographerClient{
@@ -1069,8 +1071,8 @@ func TestCommit_WithAck(t *testing.T) {
 			return &flowv1.CommitTransactionResponse{}, nil
 		},
 	}
-	tx := newMockTx(mock)
 
+	tx := newMockTx(mock)
 	if err := tx.Commit(); err != nil {
 		t.Fatalf("Commit returned error: %v", err)
 	}
@@ -1078,11 +1080,116 @@ func TestCommit_WithAck(t *testing.T) {
 		t.Error("expected ack=false on plain Commit, got true")
 	}
 
+	tx = newMockTx(mock)
 	if err := tx.Commit(WithAck()); err != nil {
 		t.Fatalf("Commit(WithAck()) returned error: %v", err)
 	}
 	if !capturedAck {
 		t.Error("expected ack=true on Commit(WithAck()), got false")
+	}
+}
+
+// TestCommit_MarksTerminal pins that a successful Commit marks the handle
+// terminal (SPEC R4's example defers `tx.Rollback()` around a flow that ends
+// in `tx.Commit()`): a post-commit mutation and a second Commit are rejected
+// locally with ErrTransactionCommitted and never reach the wire with the
+// committed transaction ID — which the server would reject with NOT_FOUND
+// (SPEC error-table row "Transaction not found": "already committed/rolled
+// back") — mirroring Rollback's local rolledBack guard.
+func TestCommit_MarksTerminal(t *testing.T) {
+	wireCalls := 0
+	mock := &mockCartographerClient{
+		createEntity: func(ctx context.Context, req *flowv1.CreateEntityRequest) (*flowv1.CreateEntityResponse, error) {
+			wireCalls++
+			return &flowv1.CreateEntityResponse{EntityId: "entity-1", EntityType: componentType}, nil
+		},
+		commitTx: func(ctx context.Context, req *flowv1.CommitTransactionRequest) (*flowv1.CommitTransactionResponse, error) {
+			return &flowv1.CommitTransactionResponse{}, nil
+		},
+	}
+	tx := newMockTx(mock)
+
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("Commit returned error: %v", err)
+	}
+	if !tx.committed {
+		t.Fatal("expected committed flag to be set after successful Commit")
+	}
+
+	// A post-commit mutation must be rejected locally, not sent to the wire
+	// with the committed transaction ID.
+	if _, err := tx.CreateEntity(componentType, nil, nil, nil); !errors.Is(err, ErrTransactionCommitted) {
+		t.Fatalf("expected ErrTransactionCommitted after commit, got %v", err)
+	}
+	if wireCalls != 0 {
+		t.Errorf("expected no wire calls after commit, got %d", wireCalls)
+	}
+
+	// A second Commit is likewise a local rejection.
+	if err := tx.Commit(); !errors.Is(err, ErrTransactionCommitted) {
+		t.Fatalf("expected ErrTransactionCommitted on second Commit, got %v", err)
+	}
+}
+
+// TestRollback_AfterCommit_Noop pins the R4 example's deferred
+// `tx.Rollback()` after a successful `tx.Commit()`: the rollback is an
+// idempotent no-op that never reaches the wire with the committed
+// transaction ID (which the server would reject with NOT_FOUND), matching
+// the Rollback-after-Rollback idempotency.
+func TestRollback_AfterCommit_Noop(t *testing.T) {
+	rollbackCalls := 0
+	mock := &mockCartographerClient{
+		commitTx: func(ctx context.Context, req *flowv1.CommitTransactionRequest) (*flowv1.CommitTransactionResponse, error) {
+			return &flowv1.CommitTransactionResponse{}, nil
+		},
+		rollbackTx: func(
+			ctx context.Context,
+			req *flowv1.RollbackTransactionRequest,
+		) (*flowv1.RollbackTransactionResponse, error) {
+			rollbackCalls++
+			return &flowv1.RollbackTransactionResponse{}, nil
+		},
+	}
+	tx := newMockTx(mock)
+
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("Commit returned error: %v", err)
+	}
+	if err := tx.Rollback(); err != nil {
+		t.Fatalf("Rollback after Commit returned error: %v", err)
+	}
+	if rollbackCalls != 0 {
+		t.Errorf("expected no RollbackTransaction wire call after Commit, got %d", rollbackCalls)
+	}
+}
+
+// TestCommit_FailedLeavesOpen pins that the committed flag is set only on
+// success: a Commit that fails on the wire leaves the transaction open and
+// retryable (SPEC error-table row "Commit serialisation or re-hydration
+// failed": "transaction remains open for retry").
+func TestCommit_FailedLeavesOpen(t *testing.T) {
+	attempts := 0
+	mock := &mockCartographerClient{
+		commitTx: func(ctx context.Context, req *flowv1.CommitTransactionRequest) (*flowv1.CommitTransactionResponse, error) {
+			attempts++
+			if attempts == 1 {
+				return nil, status.Error(codes.Internal, "serialisation failed")
+			}
+			return &flowv1.CommitTransactionResponse{}, nil
+		},
+	}
+	tx := newMockTx(mock)
+
+	if err := tx.Commit(); err == nil {
+		t.Fatal("expected first Commit to fail on the wire")
+	}
+	if tx.committed {
+		t.Fatal("expected committed flag NOT to be set after a failed Commit")
+	}
+
+	// The transaction remains open: a retry succeeds.
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("expected retry Commit to succeed, got %v", err)
 	}
 }
 
