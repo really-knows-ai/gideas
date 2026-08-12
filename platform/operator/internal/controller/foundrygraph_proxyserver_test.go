@@ -729,6 +729,69 @@ func TestExportGraphNonConformingUpstreamStatusIsInternal(t *testing.T) {
 	}
 }
 
+// TestExportGraphPreStreamRejectionPassesThrough asserts that a pre-stream rejection — a
+// status the Cartographer returns BEFORE sending any chunk (SPEC error table rows
+// "Unsupported export format" → INVALID_ARGUMENT and "ExportGraph buffer allocation
+// failure" → RESOURCE_EXHAUSTED, both "no data sent") — surfaces through the proxy
+// verbatim rather than being flattened to INTERNAL. These statuses arrive at the proxy's
+// first Recv with no chunk forwarded, so the documented CLI error codes must reach the
+// caller (the sidecar relay preserves upstream statuses identically).
+func TestExportGraphPreStreamRejectionPassesThrough(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		code codes.Code
+	}{
+		{"unsupported format", codes.InvalidArgument},
+		{"buffer allocation failure", codes.ResourceExhausted},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rt := NewProxyRoutingTable()
+			rt.Register("ns", "graph", "cartographer-graph.ns.svc.cluster.local:50051")
+
+			_, priv, err := ed25519.GenerateKey(rand.Reader)
+			if err != nil {
+				t.Fatalf("generate signing key: %v", err)
+			}
+
+			upstreamErr := status.Error(tc.code, "rejected before any chunk was sent")
+			s := &ProxyServer{
+				routingTable: rt,
+				k8sClient:    authProxyClient(t, true, true),
+				authCache:    newAuthCache(30 * time.Second),
+				dialer: func(ctx context.Context, endpoint string) (CartographerClient, error) {
+					return &mockCartographerClient{
+						exportGraphFn: func(ctx context.Context, in *flowv1gen.ExportGraphRequest) (flowv1gen.CartographerService_ExportGraphClient, error) {
+							return &mockExportClientErr{err: upstreamErr}, nil
+						},
+					}, nil
+				},
+				operatorSigningKey: priv,
+			}
+
+			stream := &mockExportStream{}
+			md := metadata.Pairs(
+				"x-flow-namespace", "ns",
+				"x-flow-graph-name", "graph",
+				"authorization", "Bearer valid",
+			)
+			stream.ctx = metadata.NewIncomingContext(context.Background(), md)
+
+			err = s.ExportGraph(&flowv1gen.ExportGraphRequest{Format: "bogus"}, stream)
+			if err == nil {
+				t.Fatal("expected an error on a pre-stream rejection")
+			}
+			// The pre-stream rejection code must pass through verbatim, not be flattened
+			// to INTERNAL (SPEC error table: no data was sent before the rejection).
+			if status.Code(err) != tc.code {
+				t.Errorf("expected %v to pass through verbatim, got %v", tc.code, status.Code(err))
+			}
+			if len(stream.sends) != 0 {
+				t.Error("expected no chunks forwarded for a pre-stream rejection")
+			}
+		})
+	}
+}
+
 // TestSignCapabilitiesValidSignature (item 9) verifies signCapabilities produces an
 // Ed25519 signature over {cap}|{ts} that verifies against the operator public key.
 func TestSignCapabilitiesValidSignature(t *testing.T) {
