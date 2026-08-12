@@ -5739,6 +5739,285 @@ func TestRefreshTransaction_EmbeddingDimensionConflict(t *testing.T) {
 	}
 }
 
+// TestRefreshTransaction_CreatedThenModifiedWithinTransaction pins SPEC R9
+// refresh step 3 for a create-then-update of the same entity within one
+// transaction. The map-based change log records ChangeAddEntity then
+// ChangeModEntity for an ID that has no baseline file on the branch tree (the
+// entity was created inside the transaction), and validateRefresh must not
+// treat the missing baseline as a UUID-overlap conflict against main when main
+// is untouched — the refresh must succeed and re-apply both entries so the
+// entity survives with its updated content.
+func TestRefreshTransaction_CreatedThenModifiedWithinTransaction(t *testing.T) {
+	base, err := ladybug.OpenInMemory()
+	if err != nil {
+		t.Fatalf("OpenInMemory: %v", err)
+	}
+	t.Cleanup(func() { _ = base.Close() })
+	ladybugPath := t.TempDir()
+	gs, err := gitstore.New(ladybugPath)
+	if err != nil {
+		t.Fatalf("gitstore.New: %v", err)
+	}
+	opPub, _ := generateTestKey()
+	srv := NewCartographerServer(
+		base, gs, opPub, initTestKey(), nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000,
+		WithLadybugPath(ladybugPath),
+	)
+	srv.MarkDBReady()
+	ctx := testCtx()
+	applyTestSchema(ctx, t, base)
+	begin, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
+	if err != nil {
+		t.Fatalf("BeginTransaction: %v", err)
+	}
+	if _, err = srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
+		EntityType: "Component", Id: testMutationEntityID, Properties: map[string]string{"name": "created"},
+		TransactionId: begin.TransactionId,
+	}); err != nil {
+		t.Fatalf("CreateEntity: %v", err)
+	}
+	if _, err = srv.UpdateEntity(ctx, &flowv1.UpdateEntityRequest{
+		Id: testMutationEntityID, Properties: map[string]string{"name": "updated"},
+		TransactionId: begin.TransactionId,
+	}); err != nil {
+		t.Fatalf("UpdateEntity: %v", err)
+	}
+	if _, err = srv.RefreshTransaction(ctx, &flowv1.RefreshTransactionRequest{
+		TransactionId: begin.TransactionId,
+	}); err != nil {
+		t.Fatalf("RefreshTransaction must not conflict on a same-transaction create-then-update: %v", err)
+	}
+	ent, err := base.GetEntity(ctx, testMutationEntityID, begin.TransactionId)
+	if err != nil {
+		t.Fatalf("refreshed entity missing: %v", err)
+	}
+	if ent.Properties["name"] != "updated" {
+		t.Fatalf("expected the re-applied update to win, got %+v", ent.Properties)
+	}
+}
+
+// TestRefreshTransaction_CreatedThenDeletedWithinTransaction pins SPEC R9
+// refresh step 3 for a create-then-delete of the same entity within one
+// transaction: the ChangeDelEntity entry has no baseline file (the entity was
+// created inside the transaction), and with main untouched the refresh must
+// succeed and re-apply both entries, leaving the branch without the entity.
+func TestRefreshTransaction_CreatedThenDeletedWithinTransaction(t *testing.T) {
+	base, err := ladybug.OpenInMemory()
+	if err != nil {
+		t.Fatalf("OpenInMemory: %v", err)
+	}
+	t.Cleanup(func() { _ = base.Close() })
+	ladybugPath := t.TempDir()
+	gs, err := gitstore.New(ladybugPath)
+	if err != nil {
+		t.Fatalf("gitstore.New: %v", err)
+	}
+	opPub, _ := generateTestKey()
+	srv := NewCartographerServer(
+		base, gs, opPub, initTestKey(), nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000,
+		WithLadybugPath(ladybugPath),
+	)
+	srv.MarkDBReady()
+	ctx := testCtx()
+	applyTestSchema(ctx, t, base)
+	begin, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
+	if err != nil {
+		t.Fatalf("BeginTransaction: %v", err)
+	}
+	if _, err = srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
+		EntityType: "Component", Id: testMutationEntityID, Properties: map[string]string{"name": "created"},
+		TransactionId: begin.TransactionId,
+	}); err != nil {
+		t.Fatalf("CreateEntity: %v", err)
+	}
+	if _, err = srv.DeleteEntity(ctx, &flowv1.DeleteEntityRequest{
+		Id: testMutationEntityID, TransactionId: begin.TransactionId,
+	}); err != nil {
+		t.Fatalf("DeleteEntity: %v", err)
+	}
+	if _, err = srv.RefreshTransaction(ctx, &flowv1.RefreshTransactionRequest{
+		TransactionId: begin.TransactionId,
+	}); err != nil {
+		t.Fatalf("RefreshTransaction must not conflict on a same-transaction create-then-delete: %v", err)
+	}
+	if _, err := base.GetEntity(ctx, testMutationEntityID, begin.TransactionId); !errors.Is(err, store.ErrEntityNotFound) {
+		t.Fatalf("expected the re-applied create-then-delete to leave the entity absent, got %v", err)
+	}
+}
+
+// TestRefreshTransaction_CreatedThenDeleted_ConflictsWhenMainHasUUID is the
+// positive control for the create-then-delete fix: the missing baseline must
+// not conflict when main is untouched, but the same change MUST still abort
+// when main advances with an entity holding the same UUID (SPEC R9 refresh
+// step 3 UUID-overlap rule). The ChangeAddEntity entry is what detects the
+// overlap.
+func TestRefreshTransaction_CreatedThenDeleted_ConflictsWhenMainHasUUID(t *testing.T) {
+	base, err := ladybug.OpenInMemory()
+	if err != nil {
+		t.Fatalf("OpenInMemory: %v", err)
+	}
+	t.Cleanup(func() { _ = base.Close() })
+	ladybugPath := t.TempDir()
+	gs, err := gitstore.New(ladybugPath)
+	if err != nil {
+		t.Fatalf("gitstore.New: %v", err)
+	}
+	opPub, _ := generateTestKey()
+	srv := NewCartographerServer(
+		base, gs, opPub, initTestKey(), nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000,
+		WithLadybugPath(ladybugPath),
+	)
+	srv.MarkDBReady()
+	ctx := testCtx()
+	applyTestSchema(ctx, t, base)
+	begin, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
+	if err != nil {
+		t.Fatalf("BeginTransaction: %v", err)
+	}
+	if _, err = srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
+		EntityType: "Component", Id: testMutationEntityID, Properties: map[string]string{"name": "created"},
+		TransactionId: begin.TransactionId,
+	}); err != nil {
+		t.Fatalf("CreateEntity: %v", err)
+	}
+	if _, err = srv.DeleteEntity(ctx, &flowv1.DeleteEntityRequest{
+		Id: testMutationEntityID, TransactionId: begin.TransactionId,
+	}); err != nil {
+		t.Fatalf("DeleteEntity: %v", err)
+	}
+	// Main advances with an entity holding the same UUID while the transaction
+	// is open.
+	commitGitEntity(ctx, t, gs, testMutationEntityID, "main-owned")
+	if _, err = srv.RefreshTransaction(ctx, &flowv1.RefreshTransactionRequest{
+		TransactionId: begin.TransactionId,
+	}); status.Code(err) != codes.Aborted {
+		t.Fatalf("expected ABORTED refresh conflict when main holds the same UUID, got %v", err)
+	}
+}
+
+// TestCommitTransaction_DeleteThenRecreateSameID_Survives pins the commit
+// path's final-state semantics for delete-then-recreate of the same explicit
+// entity ID within one transaction. The map-based change log records both a
+// ChangeDelEntity and a ChangeAddEntity for the ID; the commit path writes
+// added files before removing deleted ones, so without same-ID resolution the
+// recreated <id>.json would be written then removed — the committed tree (and
+// main, which is re-hydrated from the tree per SPEC R9 commit step 8) would
+// lack the entity while the branch LadybugDB's final state still holds it:
+// silent data loss. The recreated entity must survive both the git tree and
+// main.
+func TestCommitTransaction_DeleteThenRecreateSameID_Survives(t *testing.T) {
+	base, err := ladybug.OpenInMemory()
+	if err != nil {
+		t.Fatalf("OpenInMemory: %v", err)
+	}
+	t.Cleanup(func() { _ = base.Close() })
+	ladybugPath := t.TempDir()
+	gs, err := gitstore.New(ladybugPath)
+	if err != nil {
+		t.Fatalf("gitstore.New: %v", err)
+	}
+	opPub, _ := generateTestKey()
+	srv := NewCartographerServer(
+		base, gs, opPub, initTestKey(), nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000,
+		WithLadybugPath(ladybugPath),
+	)
+	srv.MarkDBReady()
+	ctx := testCtx()
+	applyTestSchema(ctx, t, base)
+	// Main holds the entity at begin — a delete requires an existing entity.
+	commitGitEntity(ctx, t, gs, testMutationEntityID, "original")
+	begin, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
+	if err != nil {
+		t.Fatalf("BeginTransaction: %v", err)
+	}
+	if _, err = srv.DeleteEntity(ctx, &flowv1.DeleteEntityRequest{
+		Id: testMutationEntityID, TransactionId: begin.TransactionId,
+	}); err != nil {
+		t.Fatalf("DeleteEntity: %v", err)
+	}
+	if _, err = srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
+		EntityType: "Component", Id: testMutationEntityID, Properties: map[string]string{"name": "recreated"},
+		TransactionId: begin.TransactionId,
+	}); err != nil {
+		t.Fatalf("recreate entity: %v", err)
+	}
+	if _, err = srv.CommitTransaction(ctx, &flowv1.CommitTransactionRequest{
+		TransactionId: begin.TransactionId,
+	}); err != nil {
+		t.Fatalf("CommitTransaction: %v", err)
+	}
+	mainEnt, err := base.GetEntity(ctx, testMutationEntityID, "main")
+	if err != nil {
+		t.Fatalf("recreated entity lost from main after commit: %v", err)
+	}
+	if mainEnt.Properties["name"] != "recreated" {
+		t.Fatalf("expected the recreated entity content on main, got %+v", mainEnt.Properties)
+	}
+	files, err := gs.ReadAllEntityFiles(ctx, "Component")
+	if err != nil {
+		t.Fatalf("ReadAllEntityFiles: %v", err)
+	}
+	if len(files) != 1 || files[0].ID != testMutationEntityID || files[0].Properties["name"] != "recreated" {
+		t.Fatalf("expected the recreated <id>.json to survive in the committed tree, got %+v", files)
+	}
+}
+
+// TestCommitTransaction_CreateThenDeleteSameID_LeavesNoTrace pins the other
+// half of the same-ID ambiguity: create-then-delete within one transaction is
+// a net no-op and must commit with no entity on main and no file in the
+// committed tree — the same-ID resolution must not resurrect the deleted
+// entity.
+func TestCommitTransaction_CreateThenDeleteSameID_LeavesNoTrace(t *testing.T) {
+	base, err := ladybug.OpenInMemory()
+	if err != nil {
+		t.Fatalf("OpenInMemory: %v", err)
+	}
+	t.Cleanup(func() { _ = base.Close() })
+	ladybugPath := t.TempDir()
+	gs, err := gitstore.New(ladybugPath)
+	if err != nil {
+		t.Fatalf("gitstore.New: %v", err)
+	}
+	opPub, _ := generateTestKey()
+	srv := NewCartographerServer(
+		base, gs, opPub, initTestKey(), nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000,
+		WithLadybugPath(ladybugPath),
+	)
+	srv.MarkDBReady()
+	ctx := testCtx()
+	applyTestSchema(ctx, t, base)
+	begin, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
+	if err != nil {
+		t.Fatalf("BeginTransaction: %v", err)
+	}
+	if _, err = srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
+		EntityType: "Component", Id: testMutationEntityID, Properties: map[string]string{"name": "created"},
+		TransactionId: begin.TransactionId,
+	}); err != nil {
+		t.Fatalf("CreateEntity: %v", err)
+	}
+	if _, err = srv.DeleteEntity(ctx, &flowv1.DeleteEntityRequest{
+		Id: testMutationEntityID, TransactionId: begin.TransactionId,
+	}); err != nil {
+		t.Fatalf("DeleteEntity: %v", err)
+	}
+	if _, err = srv.CommitTransaction(ctx, &flowv1.CommitTransactionRequest{
+		TransactionId: begin.TransactionId,
+	}); err != nil {
+		t.Fatalf("CommitTransaction: %v", err)
+	}
+	if _, err := base.GetEntity(ctx, testMutationEntityID, "main"); !errors.Is(err, store.ErrEntityNotFound) {
+		t.Fatalf("expected create-then-delete to leave no entity on main, got %v", err)
+	}
+	files, err := gs.ReadAllEntityFiles(ctx, "Component")
+	if err != nil {
+		t.Fatalf("ReadAllEntityFiles: %v", err)
+	}
+	if len(files) != 0 {
+		t.Fatalf("expected no entity files in the committed tree after create-then-delete, got %+v", files)
+	}
+}
+
 func TestRecoveryDiffPropagatesSuspectedDeletions(t *testing.T) {
 	srv, _ := newTestServer(t)
 	ctx := testCtx()

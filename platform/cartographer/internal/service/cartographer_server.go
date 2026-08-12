@@ -1686,6 +1686,10 @@ func (s *CartographerServer) CommitTransaction(
 		}
 		if !state.CommitCreated {
 			tc := groupChanges(state.ChangeLog)
+			if err := s.resolveSameIDSequences(ctx, req.TransactionId, &tc); err != nil {
+				commitErr = fmt.Errorf("resolve same-id change sequences: %w", err)
+				return nil
+			}
 			for et, entries := range tc.addedEntities {
 				if err := s.gitstore.WriteEntityFiles(ctx, et, s.toGitEntities(entries)); err != nil {
 					commitErr = fmt.Errorf("write entity files: %w", err)
@@ -2022,7 +2026,15 @@ func (s *CartographerServer) validateRefresh(
 		case gitstore.ChangeModEntity, gitstore.ChangeDelEntity:
 			oldFile, existed := before.entities[entry.ID]
 			newFile, exists := current.entities[entry.ID]
-			if !existed || !exists || !reflect.DeepEqual(oldFile, newFile) {
+			// The change log is map-based and loses operation order, so an
+			// entity created then updated (or created then deleted) within the
+			// transaction has no baseline file on the branch tree. SPEC R9
+			// refresh step 3 conflicts only on UUID overlap against main ("same
+			// entity/edge modified on main", SPEC:979) or an embedding-dimension
+			// mismatch; both-absent (no baseline AND no main file) is no overlap
+			// and must not conflict. Conflict fires only when main's file differs
+			// from the transaction's baseline (present↔absent or content change).
+			if existed != exists || !reflect.DeepEqual(oldFile, newFile) {
 				return errRefreshConflict(state.ID)
 			}
 		case gitstore.ChangeAddEdge:
@@ -2032,7 +2044,10 @@ func (s *CartographerServer) validateRefresh(
 		case gitstore.ChangeModEdge, gitstore.ChangeDelEdge:
 			oldFile, existed := before.edges[entry.ID]
 			newFile, exists := current.edges[entry.ID]
-			if !existed || !exists || !reflect.DeepEqual(oldFile, newFile) {
+			// Mirrors the entity case above: an edge created then deleted within
+			// the transaction has no baseline file, and both-absent must not
+			// conflict (SPEC R9 refresh step 3 — UUID overlap against main only).
+			if existed != exists || !reflect.DeepEqual(oldFile, newFile) {
 				return errRefreshConflict(state.ID)
 			}
 		}
@@ -2461,6 +2476,71 @@ func groupChanges(cl *gitstore.ChangeLog) typeChanges {
 		}
 	}
 	return tc
+}
+
+// resolveSameIDSequences applies final-state semantics to change-log entries
+// whose entity ID appears in both the added and deleted buckets. The change log
+// is map-based and loses operation order, so DeleteEntity followed by
+// CreateEntity with the same explicit ID (delete-then-recreate) is
+// indistinguishable from CreateEntity followed by DeleteEntity
+// (create-then-delete) — both record the ID in AddedEntities and
+// DeletedEntities. The commit path writes added files before removing deleted
+// ones, so a naive write-then-remove would drop the recreated <id>.json from
+// the committed tree while the branch LadybugDB's final state still contains
+// the entity; main is then re-hydrated from the committed tree (SPEC R9 commit
+// step 8), silently losing it. The branch DB holds the authoritative final
+// state, so each same-ID add/delete pair is resolved against it: a present
+// entity keeps its file (dropped from the removal bucket, so the removal does
+// not undo the write), an absent one is dropped from the write bucket (the
+// removal is then a no-op on the absent file). Edges are not resolved:
+// CreateEdge always generates a fresh UUID (the RPC takes no ID), so an edge
+// ID can only appear in both buckets via create-then-delete, where the
+// write-then-remove ordering already produces the correct absent final state.
+func (s *CartographerServer) resolveSameIDSequences(
+	ctx context.Context, branch string, tc *typeChanges,
+) error {
+	for et, deletes := range tc.deletedEntities {
+		adds, ok := tc.addedEntities[et]
+		if !ok {
+			continue
+		}
+		addByID := make(map[string]*gitstore.EntityEntry, len(adds))
+		for _, e := range adds {
+			addByID[e.ID] = e
+		}
+		kept := deletes[:0]
+		for _, id := range deletes {
+			if _, overlapped := addByID[id]; !overlapped {
+				kept = append(kept, id)
+				continue
+			}
+			if _, err := s.store.GetEntity(ctx, id, branch); err != nil {
+				if errors.Is(err, store.ErrEntityNotFound) {
+					// create-then-delete: the final state is absent — drop the
+					// write; the removal is a no-op on the absent file.
+					tc.addedEntities[et] = withoutEntityEntry(tc.addedEntities[et], id)
+					kept = append(kept, id)
+					continue
+				}
+				return fmt.Errorf("resolve final state of entity %q on branch %q: %w", id, branch, err)
+			}
+			// delete-then-recreate: the final state is present — keep the
+			// write and drop the removal so the recreated file survives.
+		}
+		tc.deletedEntities[et] = kept
+	}
+	return nil
+}
+
+// withoutEntityEntry returns entries with the entry whose ID matches id removed.
+func withoutEntityEntry(entries []*gitstore.EntityEntry, id string) []*gitstore.EntityEntry {
+	out := entries[:0]
+	for _, e := range entries {
+		if e.ID != id {
+			out = append(out, e)
+		}
+	}
+	return out
 }
 
 // toGitEntities converts change-log entity entries to gitstore.Entity values
