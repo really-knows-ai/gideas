@@ -1582,6 +1582,43 @@ func TestFullTextSearch_Valid(t *testing.T) {
 	}
 }
 
+// TestFullTextSearch_ReturnsEmbedding pins the Entity wire contract
+// (proto/flow/v1/cartographer.proto: Entity.embedding): the FullTextSearch
+// handler must populate the embedding field from the store result (the store
+// returns embeddings via entityFromNode for vector-indexed types) instead of
+// silently dropping it, so SDK callers reading GetEmbedding() receive the
+// stored vector.
+func TestFullTextSearch_ReturnsEmbedding(t *testing.T) {
+	srv, st := newTestServer(t)
+	ctx := testCtx()
+
+	schema := &flowv1.Schema{
+		EntityTypes: []*flowv1.EntityType{
+			{
+				Name:              "VectorType",
+				EnableVectorIndex: true,
+				Properties:        []*flowv1.Property{{Name: "name", Type: "string"}},
+			},
+		},
+	}
+	if err := st.ApplySchema(ctx, schema); err != nil {
+		t.Fatalf("ApplySchema failed: %v", err)
+	}
+	_, _ = srv.store.CreateEntity(ctx, "VectorType", "", map[string]string{"name": "apple"}, []float32{0.1, 0.2, 0.3}, "")
+
+	resp, err := srv.FullTextSearch(ctx, &flowv1.FullTextSearchRequest{Query: "apple"})
+	if err != nil {
+		t.Fatalf("FullTextSearch failed: %v", err)
+	}
+	if len(resp.Results) == 0 {
+		t.Fatal("expected at least one result")
+	}
+	if len(resp.Results[0].Embedding) != 3 ||
+		resp.Results[0].Embedding[0] != 0.1 || resp.Results[0].Embedding[2] != 0.3 {
+		t.Fatalf("expected embedding [0.1 0.2 0.3] on result, got %v", resp.Results[0].Embedding)
+	}
+}
+
 // TestFullTextSearch_SingleTypeSpecificCapabilityPasses pins SPEC R3
 // (SPEC:240): a caller holding only READ:graph/entity/<type> is authorised
 // for a FullTextSearch scoped to that type (the per-type branch, not the
@@ -1635,6 +1672,42 @@ func TestListEntities_Valid(t *testing.T) {
 	}
 	if len(resp.Entities) != 2 {
 		t.Fatalf("expected 2 entities, got %d", len(resp.Entities))
+	}
+}
+
+// TestListEntities_ReturnsEmbedding pins the Entity wire contract
+// (proto/flow/v1/cartographer.proto: Entity.embedding): the ListEntities
+// handler must populate the embedding field from the store result instead of
+// silently dropping it, so SDK callers reading GetEmbedding() receive the
+// stored vector.
+func TestListEntities_ReturnsEmbedding(t *testing.T) {
+	srv, st := newTestServer(t)
+	ctx := testCtx()
+
+	schema := &flowv1.Schema{
+		EntityTypes: []*flowv1.EntityType{
+			{
+				Name:              "VectorType",
+				EnableVectorIndex: true,
+				Properties:        []*flowv1.Property{{Name: "name", Type: "string"}},
+			},
+		},
+	}
+	if err := st.ApplySchema(ctx, schema); err != nil {
+		t.Fatalf("ApplySchema failed: %v", err)
+	}
+	_, _ = srv.store.CreateEntity(ctx, "VectorType", "", map[string]string{"name": "a"}, []float32{0.4, 0.5}, "")
+
+	resp, err := srv.ListEntities(ctx, &flowv1.ListEntitiesRequest{EntityType: "VectorType", PageSize: 10})
+	if err != nil {
+		t.Fatalf("ListEntities failed: %v", err)
+	}
+	if len(resp.Entities) != 1 {
+		t.Fatalf("expected 1 entity, got %d", len(resp.Entities))
+	}
+	if len(resp.Entities[0].Embedding) != 2 ||
+		resp.Entities[0].Embedding[0] != 0.4 || resp.Entities[0].Embedding[1] != 0.5 {
+		t.Fatalf("expected embedding [0.4 0.5] on entity, got %v", resp.Entities[0].Embedding)
 	}
 }
 
@@ -1884,6 +1957,40 @@ func TestDeleteEntity_Valid(t *testing.T) {
 	}
 }
 
+// TestDeleteEntity_ReturnsEmbedding pins the DeleteEntityResponse wire
+// contract (proto/flow/v1/cartographer.proto: DeleteEntityResponse.embedding):
+// the handler must populate the embedding field from the store's
+// read-before-delete result instead of silently dropping it, so SDK callers
+// reading GetEmbedding() receive the deleted entity's stored vector.
+func TestDeleteEntity_ReturnsEmbedding(t *testing.T) {
+	srv, st := newTestServer(t)
+	ctx := testCtx()
+
+	schema := &flowv1.Schema{
+		EntityTypes: []*flowv1.EntityType{
+			{
+				Name:              "VectorType",
+				EnableVectorIndex: true,
+				Properties:        []*flowv1.Property{{Name: "name", Type: "string"}},
+			},
+		},
+	}
+	if err := st.ApplySchema(ctx, schema); err != nil {
+		t.Fatalf("ApplySchema failed: %v", err)
+	}
+	txID := beginTestTx(t, srv, ctx)
+	ent, _ := srv.store.CreateEntity(ctx, "VectorType", "", map[string]string{"name": "a"}, []float32{0.1, 0.2, 0.3}, txID)
+
+	resp, err := srv.DeleteEntity(ctx, &flowv1.DeleteEntityRequest{Id: ent.Id, TransactionId: txID})
+	if err != nil {
+		t.Fatalf("DeleteEntity failed: %v", err)
+	}
+	if len(resp.Embedding) != 3 ||
+		resp.Embedding[0] != 0.1 || resp.Embedding[2] != 0.3 {
+		t.Fatalf("expected embedding [0.1 0.2 0.3] on deleted entity, got %v", resp.Embedding)
+	}
+}
+
 // TestDeleteEntity_TransactionRecordsCascadeEdgeDeletion verifies SPEC R7 §4
 // atomicity is preserved across a commit: deleting an entity inside a
 // transaction must also record the cascade-removed edges in the change log so
@@ -2097,6 +2204,68 @@ func TestCreateEntity_InvalidIDWinsOverMissingCapability(t *testing.T) {
 	}
 	if status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("expected structural InvalidArgument to win over capability check, got %v (%v)", status.Code(err), err)
+	}
+}
+
+// TestCreateEntity_UnknownPropertyWinsOverMissingCapability asserts the SPEC
+// CreateEntity validation order (SPEC:1004: structural validation →
+// data-integrity; R7 §1: unknown property → INVALID_ARGUMENT): a caller
+// lacking WRITE capabilities but supplying an unknown property gets
+// INVALID_ARGUMENT (not PERMISSION_DENIED) — mirroring
+// TestCreateEdge_UnknownEdgeTypeWinsOverMissingCapability. The transaction is
+// begun with full capabilities; the mutation call itself carries only READ
+// capabilities.
+func TestCreateEntity_UnknownPropertyWinsOverMissingCapability(t *testing.T) {
+	srv, _ := newTestServer(t)
+	ctx := testCtx()
+
+	applyTestSchema(ctx, t, srv.store)
+	txID := beginTestTx(t, srv, ctx)
+	// Only READ capabilities — the caller holds no write capability at all.
+	noWriteCtx := capabilityContext("READ:graph/entity/*", testSidecarPriv, "sidecar")
+	_, err := srv.CreateEntity(noWriteCtx, &flowv1.CreateEntityRequest{
+		EntityType:    "Component",
+		Properties:    map[string]string{"name": "x", "nonexistent": "value"},
+		TransactionId: txID,
+	})
+	if err == nil {
+		t.Fatal("expected error for unknown property, got nil")
+	}
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("expected structural InvalidArgument to win over capability check, got %v (%v)", status.Code(err), err)
+	}
+	if !strings.Contains(err.Error(), "unknown property") {
+		t.Fatalf("expected the unknown-property rejection, got %v", err)
+	}
+}
+
+// TestCreateEntity_MissingRequiredPropertyWinsOverMissingCapability pins the
+// same SPEC check-order guarantee (SPEC:1004, R7 §1: missing required
+// property → INVALID_ARGUMENT) for the missing-required-property branch: a
+// caller lacking WRITE capabilities but omitting a required property gets
+// INVALID_ARGUMENT (not PERMISSION_DENIED), mirroring the unknown-property
+// test above.
+func TestCreateEntity_MissingRequiredPropertyWinsOverMissingCapability(t *testing.T) {
+	srv, _ := newTestServer(t)
+	ctx := testCtx()
+
+	applyTestSchema(ctx, t, srv.store)
+	txID := beginTestTx(t, srv, ctx)
+	// Only READ capabilities — the caller holds no write capability at all.
+	noWriteCtx := capabilityContext("READ:graph/entity/*", testSidecarPriv, "sidecar")
+	_, err := srv.CreateEntity(noWriteCtx, &flowv1.CreateEntityRequest{
+		EntityType:    "Component",
+		Properties:    map[string]string{},
+		TransactionId: txID,
+	})
+	if err == nil {
+		t.Fatal("expected error for missing required property, got nil")
+	}
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("expected structural InvalidArgument to win over capability check, got %v (%v)", status.Code(err), err)
+	}
+	if !strings.Contains(err.Error(), "missing required property") {
+		t.Fatalf("expected the missing-required-property rejection, got %v", err)
 	}
 }
 
@@ -7189,6 +7358,50 @@ func TestCommitTransaction_Divergence(t *testing.T) {
 	}
 }
 
+// TestCommitTransaction_EmptyBaselineStaleMainFailsPrecondition pins the
+// commit divergence check's fail-closed behavior when no baseline is recorded
+// (state.MainHeadAtLastSync == ""): a stale-branch commit must surface step
+// 5's FAILED_PRECONDITION ("Commit not up-to-date with main", SPEC:980) — not
+// the step-10 INTERNAL merge failure — so the empty-baseline corner cannot
+// silently skip the serialisation guard.
+func TestCommitTransaction_EmptyBaselineStaleMainFailsPrecondition(t *testing.T) {
+	srv, _ := newTestServer(t)
+	ctx := testCtx()
+
+	applyTestSchema(ctx, t, srv.store)
+
+	// Begin a transaction.
+	beginResp, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
+	if err != nil {
+		t.Fatalf("BeginTransaction failed: %v", err)
+	}
+	txID := beginResp.TransactionId
+
+	// Add a change so we're not zero-mutation.
+	_, err = srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
+		EntityType:    "Component",
+		Properties:    map[string]string{"name": "test"},
+		TransactionId: txID,
+	})
+	if err != nil {
+		t.Fatalf("CreateEntity failed: %v", err)
+	}
+
+	// Drop the recorded baseline to exercise the no-baseline corner, then
+	// advance main so the commit is genuinely stale.
+	state, _ := srv.txManager.Lookup(txID)
+	state.MainHeadAtLastSync = ""
+	commitGitEntity(ctx, t, srv.gitstore, testMutationEntityID, "main")
+
+	_, err = srv.CommitTransaction(ctx, &flowv1.CommitTransactionRequest{TransactionId: txID})
+	if err == nil {
+		t.Fatal("expected error for stale-branch commit, got nil")
+	}
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("expected FailedPrecondition for empty-baseline stale commit, got %v (%v)", status.Code(err), err)
+	}
+}
+
 // TestCommitTransaction_AdditiveSchemaPushDoesNotBlockCommit pins the SPEC R9
 // commit flow step 1 semantics: a schema push that is additive (new types, new
 // properties, rule modifications — SPEC R2/R6 non-destructive) does not make the
@@ -9172,6 +9385,115 @@ func TestBeginTransaction_MissingTxCapability(t *testing.T) {
 	ctx := capabilityContext("READ:graph/entity/*,WRITE:graph/entity/*", scPriv, "sidecar")
 
 	_, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
+	if err == nil {
+		t.Fatal("expected PermissionDenied for missing WRITE:graph/tx capability, got nil")
+	}
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("expected PermissionDenied, got %v", status.Code(err))
+	}
+}
+
+// TestCommitTransaction_MissingTxCapability pins SPEC R3 (SPEC:244): a caller
+// without WRITE:graph/tx is denied CommitTransaction with PERMISSION_DENIED
+// before any transaction lookup or validation.
+func TestCommitTransaction_MissingTxCapability(t *testing.T) {
+	opPub, _ := generateTestKey()
+	scPub, scPriv := generateTestKey()
+	st, _ := ladybug.OpenInMemory()
+	t.Cleanup(func() { _ = st.Close() })
+	gs, _ := gitstore.New(t.TempDir())
+	srv := NewCartographerServer(st, gs, opPub, scPub, nil, "",
+		30*time.Second, "test-ns", 30*time.Minute, 100000)
+	srv.MarkDBReady()
+
+	// Only entity capabilities, no WRITE:graph/tx.
+	ctx := capabilityContext("READ:graph/entity/*,WRITE:graph/entity/*", scPriv, "sidecar")
+
+	_, err := srv.CommitTransaction(ctx, &flowv1.CommitTransactionRequest{
+		TransactionId: testMutationEntityID,
+	})
+	if err == nil {
+		t.Fatal("expected PermissionDenied for missing WRITE:graph/tx capability, got nil")
+	}
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("expected PermissionDenied, got %v", status.Code(err))
+	}
+}
+
+// TestRollbackTransaction_MissingTxCapability pins SPEC R3 (SPEC:244): a
+// caller without WRITE:graph/tx is denied RollbackTransaction with
+// PERMISSION_DENIED before any transaction lookup or validation.
+func TestRollbackTransaction_MissingTxCapability(t *testing.T) {
+	opPub, _ := generateTestKey()
+	scPub, scPriv := generateTestKey()
+	st, _ := ladybug.OpenInMemory()
+	t.Cleanup(func() { _ = st.Close() })
+	gs, _ := gitstore.New(t.TempDir())
+	srv := NewCartographerServer(st, gs, opPub, scPub, nil, "",
+		30*time.Second, "test-ns", 30*time.Minute, 100000)
+	srv.MarkDBReady()
+
+	// Only entity capabilities, no WRITE:graph/tx.
+	ctx := capabilityContext("READ:graph/entity/*,WRITE:graph/entity/*", scPriv, "sidecar")
+
+	_, err := srv.RollbackTransaction(ctx, &flowv1.RollbackTransactionRequest{
+		TransactionId: testMutationEntityID,
+	})
+	if err == nil {
+		t.Fatal("expected PermissionDenied for missing WRITE:graph/tx capability, got nil")
+	}
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("expected PermissionDenied, got %v", status.Code(err))
+	}
+}
+
+// TestRefreshTransaction_MissingTxCapability pins SPEC R3 (SPEC:244): a
+// caller without WRITE:graph/tx is denied RefreshTransaction with
+// PERMISSION_DENIED before any transaction lookup or validation.
+func TestRefreshTransaction_MissingTxCapability(t *testing.T) {
+	opPub, _ := generateTestKey()
+	scPub, scPriv := generateTestKey()
+	st, _ := ladybug.OpenInMemory()
+	t.Cleanup(func() { _ = st.Close() })
+	gs, _ := gitstore.New(t.TempDir())
+	srv := NewCartographerServer(st, gs, opPub, scPub, nil, "",
+		30*time.Second, "test-ns", 30*time.Minute, 100000)
+	srv.MarkDBReady()
+
+	// Only entity capabilities, no WRITE:graph/tx.
+	ctx := capabilityContext("READ:graph/entity/*,WRITE:graph/entity/*", scPriv, "sidecar")
+
+	_, err := srv.RefreshTransaction(ctx, &flowv1.RefreshTransactionRequest{
+		TransactionId: testMutationEntityID,
+	})
+	if err == nil {
+		t.Fatal("expected PermissionDenied for missing WRITE:graph/tx capability, got nil")
+	}
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("expected PermissionDenied, got %v", status.Code(err))
+	}
+}
+
+// TestExtendTimeout_MissingTxCapability pins SPEC R3 (SPEC:244): a caller
+// without WRITE:graph/tx is denied ExtendTimeout with PERMISSION_DENIED
+// before any transaction lookup or validation.
+func TestExtendTimeout_MissingTxCapability(t *testing.T) {
+	opPub, _ := generateTestKey()
+	scPub, scPriv := generateTestKey()
+	st, _ := ladybug.OpenInMemory()
+	t.Cleanup(func() { _ = st.Close() })
+	gs, _ := gitstore.New(t.TempDir())
+	srv := NewCartographerServer(st, gs, opPub, scPub, nil, "",
+		30*time.Second, "test-ns", 30*time.Minute, 100000)
+	srv.MarkDBReady()
+
+	// Only entity capabilities, no WRITE:graph/tx.
+	ctx := capabilityContext("READ:graph/entity/*,WRITE:graph/entity/*", scPriv, "sidecar")
+
+	_, err := srv.ExtendTimeout(ctx, &flowv1.ExtendTimeoutRequest{
+		TransactionId: testMutationEntityID,
+		Duration:      durationpb.New(time.Minute),
+	})
 	if err == nil {
 		t.Fatal("expected PermissionDenied for missing WRITE:graph/tx capability, got nil")
 	}

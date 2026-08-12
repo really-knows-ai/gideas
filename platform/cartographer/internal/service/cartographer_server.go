@@ -1010,7 +1010,7 @@ func (s *CartographerServer) FullTextSearch(
 	proto := make([]*flowv1.Entity, 0, len(results))
 	for _, e := range results {
 		proto = append(proto, &flowv1.Entity{
-			EntityId: e.Id, EntityType: e.Type, Properties: e.Properties,
+			EntityId: e.Id, EntityType: e.Type, Properties: e.Properties, Embedding: e.Embedding,
 		})
 	}
 	return &flowv1.FullTextSearchResponse{Results: proto}, nil
@@ -1050,7 +1050,7 @@ func (s *CartographerServer) ListEntities(
 	proto := make([]*flowv1.Entity, 0, len(entities))
 	for _, e := range entities {
 		proto = append(proto, &flowv1.Entity{
-			EntityId: e.Id, EntityType: e.Type, Properties: e.Properties,
+			EntityId: e.Id, EntityType: e.Type, Properties: e.Properties, Embedding: e.Embedding,
 		})
 	}
 	return &flowv1.ListEntitiesResponse{Entities: proto, NextPageToken: nextToken}, nil
@@ -1081,30 +1081,31 @@ func (s *CartographerServer) CreateEntity(
 	if !s.store.TableExists(req.EntityType) {
 		return nil, errUnknownEntityType(req.EntityType)
 	}
-	// SPEC order (SPEC:998): active transaction → structural validation →
+	// SPEC order (SPEC:1004): active transaction → structural validation →
 	// data-integrity. The structural checks that precede the capability gate
-	// are the unknown-type check above and this ID-format check: an
-	// explicitly-supplied ID that is not a valid UUID v4 is structurally
-	// invalid and must yield INVALID_ARGUMENT even when the caller lacks write
-	// capability (mirrors UpdateEntity/DeleteEntity/DeleteEdge). An empty ID is
-	// valid — the store auto-generates it.
-	// ponytail: the remaining CreateEntity structural validation (unknown /
-	// missing-required property, non-string value — error-table rows 946/948/949)
-	// runs inside the store, AFTER this capability gate, so a request combining
-	// an unknown property with a missing WRITE capability surfaces
-	// PERMISSION_DENIED — while CreateEdge runs validateEdgePropsForCreate at
-	// the service boundary BEFORE its capability gate and surfaces
-	// INVALID_ARGUMENT for the same combination. SPEC:998 places capability
-	// explicitly for CreateEdge ("structural → entity existence → type-specific
-	// capability → edge-rule auth") but not for CreateEntity ("active
-	// transaction → structural validation → data-integrity"), so the asymmetry
-	// is not a SPEC divergence — it is a per-RPC check-order difference a
-	// caller can observe across the two write paths. Upgrade path: hoist
-	// CreateEntity's property validation to the service boundary (mirroring
-	// validateEdgePropsForCreate) so both write paths validate structurally
-	// before the capability gate.
+	// are the unknown-type check above, this ID-format check, and the
+	// property-validation check below: an explicitly-supplied ID that is not a
+	// valid UUID v4, an unknown property, or a missing-required property is
+	// structurally invalid and must yield INVALID_ARGUMENT even when the caller
+	// lacks write capability (mirrors CreateEdge's validateEdgePropsForCreate,
+	// SPEC:1005). An empty ID is valid — the store auto-generates it.
 	if req.Id != "" && !isValidUUID(req.Id) {
 		return nil, status.Error(codes.InvalidArgument, "invalid entity ID format")
+	}
+	// Structural entity-property validation runs before the capability gate
+	// (SPEC RPC check-order SPEC:1004: structural validation → data-integrity;
+	// R7 §1: unknown property / missing required property → INVALID_ARGUMENT),
+	// so a request combining an unknown property with a missing WRITE
+	// capability surfaces INVALID_ARGUMENT — not PERMISSION_DENIED — matching
+	// the CreateEdge path (SPEC:1005). The store re-validates on its own
+	// boundary because reapplyTransactionChanges calls it directly, bypassing
+	// this service-side check.
+	edef, ok := s.store.EntityType(req.EntityType)
+	if !ok {
+		return nil, errUnknownEntityType(req.EntityType)
+	}
+	if err := validateEntityPropsForCreate(edef, req.Properties); err != nil {
+		return nil, err
 	}
 	if err := s.checkEntityCap(ctx, "WRITE", req.EntityType); err != nil {
 		return nil, err
@@ -1270,7 +1271,7 @@ func (s *CartographerServer) DeleteEntity(
 		return nil, err
 	}
 	return &flowv1.DeleteEntityResponse{
-		EntityId: ent.Id, EntityType: ent.Type, Properties: ent.Properties,
+		EntityId: ent.Id, EntityType: ent.Type, Properties: ent.Properties, Embedding: ent.Embedding,
 	}, nil
 }
 
@@ -1374,6 +1375,35 @@ func validateEdgePropsForCreate(edef *store.EdgeTypeDef, properties map[string]s
 	for key := range properties {
 		if !declared[key] {
 			return status.Errorf(codes.InvalidArgument, "unknown property: %q for edge type %q", key, edef.Name)
+		}
+	}
+	return nil
+}
+
+// validateEntityPropsForCreate mirrors the store's structural entity-property
+// validation (SPEC R7 §1 / error table: unknown entity property / missing
+// required entity property → INVALID_ARGUMENT). It is surfaced at the service
+// boundary before the capability gate so a structurally invalid property set
+// yields INVALID_ARGUMENT rather than PERMISSION_DENIED (SPEC RPC check-order:
+// CreateEntity: structural validation → data-integrity). The checks run in the
+// store's order (unknown property before missing-required, mirroring
+// CreateEntity's store-side validation) so a request invalid on both axes
+// surfaces the same error it would through the store.
+func validateEntityPropsForCreate(def *store.EntityTypeDef, properties map[string]string) error {
+	declared := make(map[string]bool, len(def.Properties))
+	for _, p := range def.Properties {
+		declared[p.Name] = true
+	}
+	for key := range properties {
+		if !declared[key] {
+			return status.Errorf(codes.InvalidArgument, "unknown property: %q for entity type %q", key, def.Name)
+		}
+	}
+	for _, p := range def.Properties {
+		if p.Required {
+			if _, ok := properties[p.Name]; !ok {
+				return status.Errorf(codes.InvalidArgument, "missing required property: %q for entity type %q", p.Name, def.Name)
+			}
 		}
 	}
 	return nil
@@ -1729,22 +1759,22 @@ func (s *CartographerServer) CommitTransaction(
 		}
 		// Divergence check: verify main has not advanced since last sync
 		// (SPEC serialisation flow step 5 — must precede step 6 git add+commit).
-		// The mainHeadAtLastSync != "" clause skips the check when no baseline
-		// is recorded (a state created without one) rather than failing closed.
-		// This is a defensive fallback: BeginTransaction always snapshots main's
-		// HEAD as the baseline and persisted branch states are validated to
-		// carry one (transaction_state.go), so the empty value is normally
-		// unreachable. Consequence of the skip: a stale-branch commit is caught
-		// later by step 10's fast-forward merge, surfacing INTERNAL
-		// (ErrMergeDiverged) instead of step 5's FAILED_PRECONDITION
-		// (errCommitNotUpToDate) — an accepted error-code difference for the
-		// no-baseline corner.
+		// The check fails closed: when no baseline is recorded the commit is
+		// rejected with FAILED_PRECONDITION whenever main's HEAD is non-empty,
+		// so a stale-branch commit can never slip past step 5 and surface the
+		// step-10 merge failure (INTERNAL, ErrMergeDiverged) instead of the
+		// SPEC-prescribed "Commit not up-to-date with main" FAILED_PRECONDITION
+		// (error table, SPEC:980). BeginTransaction always snapshots main's
+		// HEAD as the baseline, so an empty value is only reachable through a
+		// recovered or test-constructed state whose persisted baseline is
+		// absent — which must fail closed rather than silently skip the
+		// serialisation guard.
 		curHead, err := s.gitstore.BranchHEAD(ctx, "main")
 		if err != nil {
 			commitErr = fmt.Errorf("branch head: %w", err)
 			return nil
 		}
-		if curHead != mainHeadAtLastSync && mainHeadAtLastSync != "" {
+		if curHead != mainHeadAtLastSync {
 			commitErr = errCommitNotUpToDate()
 			return nil
 		}
@@ -1880,12 +1910,22 @@ func (s *CartographerServer) reconcileFailedCommitGitLocked(
 	state.CommitCreated = false
 	state.CommitHydrated = false
 	state.MainRehydrated = false
-	if err := s.persistTransactionState(ctx, state); err != nil {
-		state.CommitStarted = previous.CommitStarted
-		state.CommitCreated = previous.CommitCreated
-		state.CommitHydrated = previous.CommitHydrated
-		state.MainRehydrated = previous.MainRehydrated
-		return fmt.Errorf("persist cleared commit state: %w", err)
+	// The persist below makes the flag-clearing durable. When no commit
+	// milestone was ever reached (all four flags were already false — e.g. a
+	// step-5 divergence failure, which the SPEC leaves with the transaction
+	// open and unmodified), the cleared state is byte-identical to the durable
+	// record and the persist would be a no-op. Skipping it keeps a
+	// broken-state corner (an unpersistable empty MainHeadAtLastSync baseline,
+	// rejected by the store's own branch-state validation) from turning the
+	// step-5 FAILED_PRECONDITION into an INTERNAL reconcile error.
+	if previous.CommitStarted || previous.CommitCreated || previous.CommitHydrated || previous.MainRehydrated {
+		if err := s.persistTransactionState(ctx, state); err != nil {
+			state.CommitStarted = previous.CommitStarted
+			state.CommitCreated = previous.CommitCreated
+			state.CommitHydrated = previous.CommitHydrated
+			state.MainRehydrated = previous.MainRehydrated
+			return fmt.Errorf("persist cleared commit state: %w", err)
+		}
 	}
 	return nil
 }
