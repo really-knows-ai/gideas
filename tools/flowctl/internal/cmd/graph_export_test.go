@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
 	"github.com/foundry/flow/tools/flowctl/manifestfs"
@@ -604,6 +605,46 @@ func TestRunGraphExport_RealStreamStatusErrorSurfaces(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "stream error (Internal)") {
 		t.Errorf("expected annotated stream error, got: %v", err)
+	}
+}
+
+// stalledExportServer accepts the ExportGraph stream but never sends a chunk,
+// simulating a blackholed upstream (a proxy that accepts the stream but never
+// sends data).
+type stalledExportServer struct {
+	flowv1.UnimplementedCartographerServiceServer
+}
+
+func (s *stalledExportServer) ExportGraph(_ *flowv1.ExportGraphRequest, stream flowv1.CartographerService_ExportGraphServer) error {
+	// Block until the client's deadline fires and cancels the RPC; never send.
+	<-stream.Context().Done()
+	return stream.Context().Err()
+}
+
+// TestRunGraphExport_StalledStreamFailsFast pins the CLI's export deadline
+// bound (Item: Recv loop idle/deadline bound): a server that accepts the
+// stream but never sends data must fail with a DeadlineExceeded error within
+// the exportStreamTimeout window instead of hanging flowctl graph export
+// indefinitely. It runs through the real dialer so the bound is exercised on
+// the real gRPC stream, not a fake.
+func TestRunGraphExport_StalledStreamFailsFast(t *testing.T) {
+	orig := exportStreamTimeout
+	exportStreamTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { exportStreamTimeout = orig })
+
+	port := startCartographerServer(t, &stalledExportServer{})
+
+	e := &realDialExporter{fakeGraphExporter: *successExporter(), port: port}
+	start := time.Now()
+	err := runGraphExportWith(context.Background(), e, testParams(), &bytes.Buffer{})
+	if elapsed := time.Since(start); elapsed > 10*time.Second {
+		t.Fatalf("export hung for %v; the stream deadline was not applied", elapsed)
+	}
+	if err == nil {
+		t.Fatal("expected the stalled stream to fail, got nil")
+	}
+	if !strings.Contains(err.Error(), "DeadlineExceeded") {
+		t.Errorf("expected DeadlineExceeded stream error, got: %v", err)
 	}
 }
 

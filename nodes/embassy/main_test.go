@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"io"
+	"net"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -26,6 +28,17 @@ func TestWatchInbound_StartsEmbassyServer(t *testing.T) {
 	ebSpy := &spyEventBus{}
 	ec := setupEntryTestClient(t, opSpy, ebSpy)
 
+	// watchInbound binds the defaultInboundPort (50059) unless overridden.
+	// Pin an ephemeral port so parallel test binaries (and concurrent
+	// worktree runs) cannot collide on the fixed default.
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("reserve ephemeral port: %v", err)
+	}
+	port := lis.Addr().(*net.TCPAddr).Port
+	_ = lis.Close()
+	t.Setenv(envInboundPort, strconv.Itoa(port))
+
 	ctx, cancel := context.WithCancel(context.Background())
 
 	errCh := make(chan error, 1)
@@ -36,7 +49,7 @@ func TestWatchInbound_StartsEmbassyServer(t *testing.T) {
 	// Give the server time to start, then cancel.
 	cancel()
 
-	err := <-errCh
+	err = <-errCh
 	if err != nil && err != context.Canceled {
 		t.Fatalf("watchInbound() returned unexpected error: %v", err)
 	}

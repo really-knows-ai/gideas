@@ -67,6 +67,26 @@ const (
 	formatGraphML = "graphml"
 )
 
+// exportStreamTimeout bounds the whole ExportGraph stream lifetime (lazy
+// dial + establishment + every Recv), mirroring how the SDK's session.timeout
+// bounds its ExportGraph sibling path (sdk/go/graph.go ExportGraph): grpc-go
+// pins the context passed to a streaming RPC to the stream for its whole
+// lifetime, so a per-operation deadline applied at the ExportGraph call covers
+// both the initial dial and the Recv loop, making a stalled port-forward or a
+// proxy that accepts the stream but never sends data fail with
+// DEADLINE_EXCEEDED instead of hanging flowctl graph export indefinitely.
+// It is a var rather than a const so tests can shorten it.
+//
+// ponytail: the bound is a single total-stream deadline, not an idle timeout
+// that resets per chunk, so an export that legitimately streams longer than
+// the bound is cut even while chunks keep arriving. This mirrors the SDK
+// sibling path's semantics (session.timeout is a total per-call deadline
+// pinned to the stream). 5m follows the repo's long-running-operation default
+// (the cartographer's git-operation and operator-readiness deadlines are both
+// 5m). Upgrade path: a --timeout flag, or an idle-reset bound if very large
+// slow exports need an unbounded total duration.
+var exportStreamTimeout = 5 * time.Minute
+
 // operatorLabelSelector identifies the deployed operator pod for namespace
 // resolution and pod lookup. It is sourced from the embedded operator
 // deployment manifest (manifestfs.OperatorPodLabelSelector) rather than a
@@ -403,12 +423,20 @@ func (g *prodGraphExporter) dialOperatorStream(ctx context.Context, localPort in
 		"x-flow-graph-name", name,
 	)
 
-	stream, err := client.ExportGraph(callCtx, &flowv1.ExportGraphRequest{Format: format})
+	// Bound the stream with exportStreamTimeout (see its comment): the
+	// deadline context is pinned to the stream by grpc-go for its whole
+	// lifetime, so it covers the lazy dial/establishment and every Recv.
+	streamCtx, cancel := context.WithTimeout(callCtx, exportStreamTimeout)
+	stream, err := client.ExportGraph(streamCtx, &flowv1.ExportGraphRequest{Format: format})
 	if err != nil {
+		cancel()
 		_ = conn.Close()
 		return nil, nil, err
 	}
-	return stream, func() { _ = conn.Close() }, nil
+	return stream, func() {
+		cancel()
+		_ = conn.Close()
+	}, nil
 }
 
 // removeStreamOutput closes and removes the partial output file written before
