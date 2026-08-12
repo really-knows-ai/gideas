@@ -26,7 +26,9 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -371,5 +373,159 @@ func TestInitializeSidecarSigningKeyGetError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "get sidecar signing key Secret") {
 		t.Errorf("expected the wrapped Get error, got: %v", err)
+	}
+}
+
+// TestInitializeSidecarSigningKeyEmptyDataError covers the corrupted-source-Secret
+// branch (mirroring the operator variant's empty-private-key check): a pre-existing
+// sidecar signing key Secret whose "key" or "private-key" data is empty is a
+// corrupted state and must fail loudly — a nil return would fail open, silently
+// propagating empty key material into the per-namespace Secrets (SPEC R6 persists
+// both data keys at one-time initialization).
+func TestInitializeSidecarSigningKeyEmptyDataError(t *testing.T) {
+	s := scheme.Scheme
+	_ = corev1.AddToScheme(s)
+	for _, tc := range []struct {
+		name string
+		data map[string][]byte
+	}{
+		{"empty key", map[string][]byte{"key": nil, "private-key": []byte("priv")}},
+		{"empty private-key", map[string][]byte{"key": []byte("pub"), "private-key": nil}},
+		{"both empty", map[string][]byte{"key": nil, "private-key": nil}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			secret := &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{Name: sidecarSigningKeySecretName, Namespace: "operator-ns"},
+				Data:       tc.data,
+			}
+			fakeCli := fake.NewClientBuilder().WithScheme(s).WithObjects(secret).Build()
+
+			err := InitializeSidecarSigningKey(context.Background(), fakeCli, "operator-ns")
+			if err == nil {
+				t.Fatal("expected an error for a Secret with empty key material")
+			}
+			if !strings.Contains(err.Error(), sidecarSigningKeySecretName) {
+				t.Errorf("expected the error to name the Secret, got: %v", err)
+			}
+		})
+	}
+}
+
+// TestInitializeOperatorSigningKeyAlreadyExistsDuringCreate covers the AlreadyExists
+// branch of the operator create path: when a concurrent starter (e.g. a second
+// operator replica during a leader handover) persists the Secret between our Get and
+// our Create, the Create fails with AlreadyExists and must not be treated as a fatal
+// startup error — the concurrent starter's persisted private key is re-read and
+// returned. A re-read that also fails must surface the wrapped error.
+func TestInitializeOperatorSigningKeyAlreadyExistsDuringCreate(t *testing.T) {
+	s := scheme.Scheme
+	_ = corev1.AddToScheme(s)
+	// The concurrent starter's Secret is already present in the tracker, so the
+	// fake client's Create fails with a real apierrors.AlreadyExists.
+	existing := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: operatorSigningKeySecretName, Namespace: "operator-ns"},
+		Data: map[string][]byte{
+			"key":         []byte("concurrent-pub"),
+			"private-key": []byte("concurrent-priv"),
+		},
+	}
+	for _, tc := range []struct {
+		name      string
+		reReadErr error
+	}{
+		{"reuses concurrent starter's key", nil},
+		{"re-read error surfaces", errors.New("apiserver unavailable")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			getCalls := 0
+			interceptorFuncs := interceptor.Funcs{
+				Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+					getCalls++
+					if getCalls == 1 {
+						// The initial Get races ahead of the concurrent starter's Create.
+						return apierrors.NewNotFound(schema.GroupResource{Resource: "secrets"}, key.Name)
+					}
+					if tc.reReadErr != nil {
+						return tc.reReadErr
+					}
+					// The re-read after the raced Create delegates to the fake tracker,
+					// which holds the concurrent starter's Secret.
+					return c.Get(ctx, key, obj, opts...)
+				},
+			}
+			fakeCli := fake.NewClientBuilder().WithScheme(s).WithObjects(existing).WithInterceptorFuncs(interceptorFuncs).Build()
+
+			key, err := InitializeOperatorSigningKey(context.Background(), fakeCli, "operator-ns")
+			if tc.reReadErr != nil {
+				if err == nil {
+					t.Fatal("expected the re-read error to surface")
+				}
+				if !strings.Contains(err.Error(), "re-read operator signing key Secret") {
+					t.Errorf("expected the wrapped re-read error, got: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("InitializeOperatorSigningKey with concurrent AlreadyExists: %v", err)
+			}
+			if !bytes.Equal(key, []byte("concurrent-priv")) {
+				t.Errorf("expected the concurrent starter's private key to be reused, got %q", key)
+			}
+		})
+	}
+}
+
+// TestInitializeSidecarSigningKeyAlreadyExistsDuringCreate covers the AlreadyExists
+// branch of the sidecar create path: a concurrent starter winning the race is not a
+// fatal startup error — the persisted Secret is re-read and validated like the
+// Get-success path, and the call succeeds. A re-read that also fails must surface
+// the wrapped error.
+func TestInitializeSidecarSigningKeyAlreadyExistsDuringCreate(t *testing.T) {
+	s := scheme.Scheme
+	_ = corev1.AddToScheme(s)
+	existing := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: sidecarSigningKeySecretName, Namespace: "operator-ns"},
+		Data: map[string][]byte{
+			"key":         []byte("concurrent-pub"),
+			"private-key": []byte("concurrent-priv"),
+		},
+	}
+	for _, tc := range []struct {
+		name      string
+		reReadErr error
+	}{
+		{"accepts concurrent starter's key", nil},
+		{"re-read error surfaces", errors.New("apiserver unavailable")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			getCalls := 0
+			interceptorFuncs := interceptor.Funcs{
+				Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+					getCalls++
+					if getCalls == 1 {
+						return apierrors.NewNotFound(schema.GroupResource{Resource: "secrets"}, key.Name)
+					}
+					if tc.reReadErr != nil {
+						return tc.reReadErr
+					}
+					return c.Get(ctx, key, obj, opts...)
+				},
+			}
+			fakeCli := fake.NewClientBuilder().WithScheme(s).WithObjects(existing).WithInterceptorFuncs(interceptorFuncs).Build()
+
+			err := InitializeSidecarSigningKey(context.Background(), fakeCli, "operator-ns")
+			if tc.reReadErr != nil {
+				if err == nil {
+					t.Fatal("expected the re-read error to surface")
+				}
+				if !strings.Contains(err.Error(), "re-read sidecar signing key Secret") {
+					t.Errorf("expected the wrapped re-read error, got: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("InitializeSidecarSigningKey with concurrent AlreadyExists: %v", err)
+			}
+		})
 	}
 }

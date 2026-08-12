@@ -90,6 +90,21 @@ func InitializeOperatorSigningKey(ctx context.Context, c client.Client, operator
 		},
 	}
 	if err := c.Create(ctx, secret); err != nil {
+		if apierrors.IsAlreadyExists(err) {
+			// A concurrent starter (e.g. a second operator replica during a
+			// leader handover) won the create race. Its persisted Secret is
+			// the authoritative one — re-read and reuse it rather than
+			// treating the race as a fatal startup error.
+			if err := c.Get(ctx, client.ObjectKeyFromObject(secret), secret); err != nil {
+				return nil, fmt.Errorf("re-read operator signing key Secret after concurrent create: %w", err)
+			}
+			privKey := secret.Data["private-key"]
+			if len(privKey) == 0 {
+				return nil, fmt.Errorf("operator signing key Secret %q has empty private-key", operatorSigningKeySecretName)
+			}
+			log.Info("Operator signing key already exists", "namespace", operatorNamespace)
+			return privKey, nil
+		}
 		return nil, fmt.Errorf("create operator signing key Secret: %w", err)
 	}
 
@@ -108,6 +123,13 @@ func InitializeSidecarSigningKey(ctx context.Context, c client.Client, operatorN
 	}
 
 	if err := c.Get(ctx, client.ObjectKeyFromObject(secret), secret); err == nil {
+		// A pre-existing Secret with empty key material is a corrupted state:
+		// reconcileSecrets would propagate empty bytes into the per-namespace
+		// Secrets and the proxy/cartographer would fail closed at runtime, so
+		// fail loudly here instead (mirrors the operator variant's check).
+		if len(secret.Data["key"]) == 0 || len(secret.Data["private-key"]) == 0 {
+			return fmt.Errorf("sidecar signing key Secret %q has empty key or private-key data", sidecarSigningKeySecretName)
+		}
 		log.Info("Sidecar signing key already exists", "namespace", operatorNamespace)
 		return nil
 	} else if !apierrors.IsNotFound(err) {
@@ -131,6 +153,19 @@ func InitializeSidecarSigningKey(ctx context.Context, c client.Client, operatorN
 		},
 	}
 	if err := c.Create(ctx, secret); err != nil {
+		if apierrors.IsAlreadyExists(err) {
+			// A concurrent starter won the create race — re-read the persisted
+			// Secret and validate it like the Get-success path (data checks
+			// mirror InitializeSidecarSigningKey's Get branch).
+			if err := c.Get(ctx, client.ObjectKeyFromObject(secret), secret); err != nil {
+				return fmt.Errorf("re-read sidecar signing key Secret after concurrent create: %w", err)
+			}
+			if len(secret.Data["key"]) == 0 || len(secret.Data["private-key"]) == 0 {
+				return fmt.Errorf("sidecar signing key Secret %q has empty key or private-key data", sidecarSigningKeySecretName)
+			}
+			log.Info("Sidecar signing key already exists", "namespace", operatorNamespace)
+			return nil
+		}
 		return fmt.Errorf("create sidecar signing key Secret: %w", err)
 	}
 
