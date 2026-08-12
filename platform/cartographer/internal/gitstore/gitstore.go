@@ -84,9 +84,6 @@ type GitStore interface {
 
 	// Lock
 	WithGitLock(fn func() error) error
-
-	// Lifecycle
-	Close() error
 }
 
 // gitStore is the concrete implementation of GitStore.
@@ -207,12 +204,6 @@ func New(basePath string) (GitStore, error) {
 	}
 
 	return gs, nil
-}
-
-// Close is a no-op that returns nil. It exists for interface conformance
-// with lifecycle-aware consumers.
-func (g *gitStore) Close() error {
-	return nil
 }
 
 // HydrationDirs returns the working-tree directories under graph-repo/ from

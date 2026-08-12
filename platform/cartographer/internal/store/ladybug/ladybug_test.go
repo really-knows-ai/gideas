@@ -8488,7 +8488,6 @@ func TestRehydrateMainFromFiles_PersistedTimestampsSurvive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("gitstore.New: %v", err)
 	}
-	defer func() { _ = gs.Close() }()
 
 	created := time.Date(2024, 1, 2, 3, 4, 5, 0, time.UTC)
 	updated := time.Date(2024, 6, 7, 8, 9, 10, 0, time.UTC)

@@ -6457,9 +6457,6 @@ func TestRecoverOpenTransactionsAfterStoreRestart(t *testing.T) {
 	if err := st.Close(); err != nil {
 		t.Fatalf("close store: %v", err)
 	}
-	if err := gs.Close(); err != nil {
-		t.Fatalf("close git store: %v", err)
-	}
 
 	reopened, err := ladybug.Open(dataPath)
 	if err != nil {
@@ -6470,7 +6467,6 @@ func TestRecoverOpenTransactionsAfterStoreRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen git store: %v", err)
 	}
-	t.Cleanup(func() { _ = reopenedGit.Close() })
 	restarted := NewCartographerServer(
 		reopened, reopenedGit, opPub, initTestKey(), nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000,
 		WithLadybugPath(dataPath),
@@ -6590,9 +6586,6 @@ func TestRecoverOpenTransactionsPersistsAppliedTimeout(t *testing.T) {
 	if err := st.Close(); err != nil {
 		t.Fatalf("close store: %v", err)
 	}
-	if err := gs.Close(); err != nil {
-		t.Fatalf("close git store: %v", err)
-	}
 
 	reopened, err := ladybug.Open(dataPath)
 	if err != nil {
@@ -6603,7 +6596,6 @@ func TestRecoverOpenTransactionsPersistsAppliedTimeout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen git store: %v", err)
 	}
-	t.Cleanup(func() { _ = reopenedGit.Close() })
 	restarted := NewCartographerServer(
 		reopened, reopenedGit, opPub, initTestKey(), nil, "", 30*time.Second, "test", 30*time.Minute, 100000,
 		WithLadybugPath(dataPath),
@@ -6676,9 +6668,6 @@ func TestRecoverRollbackOnlyTransactionWhenRejectedUpdateDoesNotIncreaseNetDiff(
 	if err := st.Close(); err != nil {
 		t.Fatalf("close store: %v", err)
 	}
-	if err := gs.Close(); err != nil {
-		t.Fatalf("close git store: %v", err)
-	}
 
 	reopened, err := ladybug.Open(dataPath)
 	if err != nil {
@@ -6689,7 +6678,6 @@ func TestRecoverRollbackOnlyTransactionWhenRejectedUpdateDoesNotIncreaseNetDiff(
 	if err != nil {
 		t.Fatalf("reopen git store: %v", err)
 	}
-	t.Cleanup(func() { _ = reopenedGit.Close() })
 	restarted := NewCartographerServer(
 		reopened, reopenedGit, opPub, initTestKey(), nil, "", 30*time.Second,
 		"test-ns", 30*time.Minute, 1, WithLadybugPath(dataPath),
@@ -6810,9 +6798,6 @@ func TestChangeLogMarkerAndCleanupFailureCannotRecoverAsActive(t *testing.T) {
 	if err := st.Close(); err != nil {
 		t.Fatalf("close store: %v", err)
 	}
-	if err := gs.Close(); err != nil {
-		t.Fatalf("close git store: %v", err)
-	}
 	reopened, err := ladybug.Open(dataPath)
 	if err != nil {
 		t.Fatalf("reopen store: %v", err)
@@ -6822,7 +6807,6 @@ func TestChangeLogMarkerAndCleanupFailureCannotRecoverAsActive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen git store: %v", err)
 	}
-	t.Cleanup(func() { _ = reopenedGit.Close() })
 	restarted := NewCartographerServer(
 		reopened, reopenedGit, opPub, initTestKey(), nil, "", 30*time.Second,
 		"test-ns", 30*time.Minute, 1, WithLadybugPath(dataPath),
@@ -6872,9 +6856,6 @@ func TestRecoverOpenTransactionsSchemaPushDoesNotBlockCommit(t *testing.T) {
 	if err := st.Close(); err != nil {
 		t.Fatalf("close store: %v", err)
 	}
-	if err := gs.Close(); err != nil {
-		t.Fatalf("close git store: %v", err)
-	}
 
 	reopened, err := ladybug.Open(dataPath)
 	if err != nil {
@@ -6885,7 +6866,6 @@ func TestRecoverOpenTransactionsSchemaPushDoesNotBlockCommit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen git store: %v", err)
 	}
-	t.Cleanup(func() { _ = reopenedGit.Close() })
 	restarted := NewCartographerServer(
 		reopened, reopenedGit, opPub, initTestKey(), nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000,
 		WithLadybugPath(dataPath),
@@ -6936,7 +6916,6 @@ func TestRecoverOpenTransactionsRetainsCorruptBranch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open git store: %v", err)
 	}
-	t.Cleanup(func() { _ = gs.Close() })
 	txID := "33333333-3333-4333-8333-333333333333"
 	if err := gs.WithGitLock(func() error { return gs.CreateBranch(ctx, txID) }); err != nil {
 		t.Fatalf("create git branch: %v", err)
@@ -6994,9 +6973,6 @@ func TestRecoverOpenTransactionsMissingBranchRestoresMain(t *testing.T) {
 	if err := st.Close(); err != nil {
 		t.Fatalf("close store: %v", err)
 	}
-	if err := gs.Close(); err != nil {
-		t.Fatalf("close git store: %v", err)
-	}
 	if err := os.RemoveAll(filepath.Join(dataPath, "branches", begin.TransactionId+".lbug")); err != nil {
 		t.Fatalf("remove branch DB: %v", err)
 	}
@@ -7010,7 +6986,6 @@ func TestRecoverOpenTransactionsMissingBranchRestoresMain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen git store: %v", err)
 	}
-	t.Cleanup(func() { _ = reopenedGit.Close() })
 	restarted := NewCartographerServer(
 		reopened, reopenedGit, opPub, initTestKey(), nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000,
 		WithLadybugPath(dataPath),
@@ -7038,7 +7013,6 @@ func TestRecoverOpenTransactionsMainLookupFailuresAbort(t *testing.T) {
 			if err != nil {
 				t.Fatalf("open git store: %v", err)
 			}
-			t.Cleanup(func() { _ = gs.Close() })
 			opPub, _ := generateTestKey()
 			setup := NewCartographerServer(
 				st, gs, opPub, initTestKey(), nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000,
@@ -7096,7 +7070,6 @@ func TestRecoverOpenTransactionsIdenticalCleanupIsRetryable(t *testing.T) {
 			if err != nil {
 				t.Fatalf("open git store: %v", err)
 			}
-			t.Cleanup(func() { _ = gs.Close() })
 			opPub, _ := generateTestKey()
 			setup := NewCartographerServer(
 				st, gs, opPub, initTestKey(), nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000,
