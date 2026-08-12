@@ -237,11 +237,13 @@ func main() {
 			// so a rejected URL degrades to that same logged, non-blocking class
 			// instead of crash-looping. In both cases the worker is still created
 			// (keyed on REMOTE_URL); with a rejected remote its first cycle
-			// surfaces ErrNoRemote — a benign, logged no-op (sync_worker.go
-			// fetchAndRehydrate) — and WithAck/Commit fail with
-			// FAILED_PRECONDITION "no remote configured" via mapGitError, the
-			// same runtime surface a pullOnInit=false misconfiguration produces
-			// today.
+			// surfaces ErrNoRemote, which classifySyncError classes
+			// non-recoverable (sync_worker.go): fetchAndRehydrate logs the
+			// failure loudly and emits a cartographer.push_failed Event Bus
+			// telemetry event on every woken or timer cycle before returning the
+			// error — and WithAck/Commit fail with FAILED_PRECONDITION "no
+			// remote configured" via mapGitError, the same runtime surface a
+			// pullOnInit=false misconfiguration produces today.
 			if remotePullOnInit {
 				slog.Error("Failed to configure remote; aborting startup", "url", remoteURL, "error", err)
 				os.Exit(1)

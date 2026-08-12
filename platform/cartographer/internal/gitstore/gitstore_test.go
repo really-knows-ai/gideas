@@ -3228,9 +3228,10 @@ func TestPushRemoteNoRemote(t *testing.T) {
 // TestFetchAndMergeNoRemote pins FetchAndMerge's no-remote guard: with an
 // empty remoteURL, FetchAndMerge must fail with ErrNoRemote (and a zero hash)
 // before touching the network. This branch is a live production path — the
-// sync worker's fetchAndRehydrate special-cases the sentinel as a benign no-op
-// (sync_worker.go:325), feeding the SPEC error-table row "Remote not
-// configured" (SPEC:979). PushRemote's sibling guard is pinned by
+// sync worker's fetchAndRehydrate classifies the sentinel non-recoverable
+// (classifySyncError) and logs loudly + emits cartographer.push_failed
+// telemetry on every cycle (sync_worker.go), feeding the SPEC error-table row
+// "Remote not configured" (SPEC:992). PushRemote's sibling guard is pinned by
 // TestPushRemoteNoRemote.
 func TestFetchAndMergeNoRemote(t *testing.T) {
 	gs := setupTestStore(t)
