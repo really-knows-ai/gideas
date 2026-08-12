@@ -47,6 +47,11 @@ type SyncWorker struct {
 	wakeCh     chan struct{}
 	stopCh     chan struct{}
 	doneCh     chan struct{} // closed when the worker loop exits
+	// stopOnce guards the stopCh close: Stop() may be called from multiple
+	// goroutines (shutdown path plus t.Cleanup), so the signal must be closed
+	// exactly once — the select/default close-once idiom is a data race (two
+	// concurrent Stop() calls can both close and panic).
+	stopOnce sync.Once
 
 	remoteURL string
 	gitstore  gitstore.GitStore
@@ -237,14 +242,12 @@ func (w *SyncWorker) Run() {
 	w.run()
 }
 
-// Stop signals the worker to shut down. Blocks until the loop exits.
+// Stop signals the worker to shut down. Blocks until the loop exits. Safe to
+// call from multiple goroutines: the stop signal is closed exactly once
+// (sync.Once), so concurrent Stop() calls cannot double-close stopCh, and each
+// caller still blocks until the loop has exited.
 func (w *SyncWorker) Stop() {
-	select {
-	case <-w.stopCh:
-		// Already stopped.
-	default:
-		close(w.stopCh)
-	}
+	w.stopOnce.Do(func() { close(w.stopCh) })
 	<-w.doneCh
 }
 
