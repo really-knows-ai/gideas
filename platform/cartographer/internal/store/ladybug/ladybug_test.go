@@ -1995,6 +1995,52 @@ func TestExecuteCypher_StringLiteralKeywordNotMutation(t *testing.T) {
 	}
 }
 
+// TestExecuteCypher_BareMutationKeywordTrailingReturnNotMutation pins the
+// clause-position boundary of the mutation-keyword fallback (query.go
+// isMutationCypher): a syntactically-invalid read-only statement whose text
+// uses a bare mutation keyword AFTER a RETURN clause (e.g.
+// `MATCH (n:Component) RETURN n DELETE`) must surface ErrInvalidCypher
+// (INVALID_ARGUMENT), never ErrMutationCypher (PERMISSION_DENIED). RETURN
+// terminates a query, so a keyword trailing it cannot be a real clause — the
+// statement is a syntax error, and the SPEC check order "empty query → Cypher
+// syntax → read-only enforcement → capability" (SPEC:1011) plus the
+// grammar-unparseable read-only note (SPEC:489-493, "never as
+// PERMISSION_DENIED") require INVALID_ARGUMENT. The same boundary must hold on
+// the ExtractEntityTypes seam, whose error classification is identical to
+// ExecuteCypher's (SPEC check order).
+func TestExecuteCypher_BareMutationKeywordTrailingReturnNotMutation(t *testing.T) {
+	s, err := OpenInMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeStore(t, s)
+	applyTestSchema(t, s)
+
+	cyphers := []string{
+		"MATCH (n:Component) RETURN n DELETE",
+		"MATCH (n) RETURN n DELETE",
+	}
+	for _, cypher := range cyphers {
+		_, err := s.ExecuteCypher(context.Background(), cypher, nil, "")
+		if errors.Is(err, store.ErrMutationCypher) {
+			t.Fatalf("a bare mutation keyword trailing RETURN is syntax, not a clause: "+
+				"expected ErrInvalidCypher for %q, got %v", cypher, err)
+		}
+		if !errors.Is(err, store.ErrInvalidCypher) {
+			t.Fatalf("expected ErrInvalidCypher for %q, got %v", cypher, err)
+		}
+
+		_, err = s.ExtractEntityTypes(context.Background(), cypher)
+		if errors.Is(err, store.ErrMutationCypher) {
+			t.Fatalf("ExtractEntityTypes: a bare mutation keyword trailing RETURN must not "+
+				"be classified as mutation for %q, got %v", cypher, err)
+		}
+		if !errors.Is(err, store.ErrInvalidCypher) {
+			t.Fatalf("ExtractEntityTypes: expected ErrInvalidCypher for %q, got %v", cypher, err)
+		}
+	}
+}
+
 func TestExecuteCypher_WithParams(t *testing.T) {
 	s, err := OpenInMemory()
 	if err != nil {
