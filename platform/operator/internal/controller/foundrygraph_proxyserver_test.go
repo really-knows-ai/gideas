@@ -345,11 +345,11 @@ func (m *mockExportStreamSendErr) Context() context.Context     { return m.ctx }
 func (m *mockExportStreamSendErr) SendMsg(any) error            { return nil }
 func (m *mockExportStreamSendErr) RecvMsg(any) error            { return nil }
 
-// TestExportGraphSendErrorIsCanceled asserts the proxy's stream.Send error branch: when the
-// client's stream write fails (e.g. the client has disconnected), the proxy must return a
-// codes.Canceled error to the caller rather than silently succeeding or forking a different
-// code.
-func TestExportGraphSendErrorIsCanceled(t *testing.T) {
+// TestExportGraphSendErrorIsInternal asserts the proxy's stream.Send error branch: when the
+// client's stream write fails mid-export (e.g. the client has disconnected), the proxy must
+// return the SPEC's mid-stream-failure code (error table: "ExportGraph mid-stream failure →
+// INTERNAL") rather than silently succeeding or surfacing a different code.
+func TestExportGraphSendErrorIsInternal(t *testing.T) {
 	rt := NewProxyRoutingTable()
 	rt.Register("ns", "graph", "cartographer-graph.ns.svc.cluster.local:50051")
 
@@ -384,8 +384,8 @@ func TestExportGraphSendErrorIsCanceled(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected an error when Send fails")
 	}
-	if status.Code(err) != codes.Canceled {
-		t.Errorf("expected codes.Canceled when client stream Send fails, got %v", status.Code(err))
+	if status.Code(err) != codes.Internal {
+		t.Errorf("expected codes.Internal when client stream Send fails (SPEC: ExportGraph mid-stream failure → INTERNAL), got %v", status.Code(err))
 	}
 	if stream.sendCalls == 0 {
 		t.Fatal("expected Send to have been exercised")
@@ -404,9 +404,9 @@ func (mockExportClientErr) CloseSend() error                                 { r
 func (mockExportClientErr) SendMsg(any) error                                { return nil }
 func (mockExportClientErr) RecvMsg(any) error                                { return nil }
 
-// TestExportGraphPropagatesUpstreamStatus asserts the proxy propagates the upstream gRPC
-// status on a mid-stream Recv error (SPEC R11: ExportGraph mid-stream failure → INTERNAL)
-// rather than recasting every upstream error as Unavailable.
+// TestExportGraphPropagatesUpstreamStatus asserts an upstream INTERNAL status on a mid-stream
+// Recv error surfaces as INTERNAL to the caller (SPEC error table: "ExportGraph mid-stream
+// failure → INTERNAL") — the upstream error must not be recast as a dial-style Unavailable.
 func TestExportGraphPropagatesUpstreamStatus(t *testing.T) {
 	rt := NewProxyRoutingTable()
 	rt.Register("ns", "graph", "cartographer-graph.ns.svc.cluster.local:50051")
@@ -680,6 +680,52 @@ func TestExportGraphMidStreamUnavailableIsInternal(t *testing.T) {
 	// SPEC R11: mid-stream export failure is INTERNAL, not the Unavailable used for dial.
 	if status.Code(err) != codes.Internal {
 		t.Errorf("expected INTERNAL for mid-stream break, got %v", status.Code(err))
+	}
+}
+
+// TestExportGraphNonConformingUpstreamStatusIsInternal asserts that a mid-stream Recv error
+// carrying a non-Unavailable, non-Internal gRPC status (a misbehaving upstream) is surfaced
+// as INTERNAL per the SPEC error table ("ExportGraph mid-stream failure → INTERNAL"), not
+// propagated verbatim to the caller.
+func TestExportGraphNonConformingUpstreamStatusIsInternal(t *testing.T) {
+	rt := NewProxyRoutingTable()
+	rt.Register("ns", "graph", "cartographer-graph.ns.svc.cluster.local:50051")
+
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate signing key: %v", err)
+	}
+
+	s := &ProxyServer{
+		routingTable: rt,
+		k8sClient:    authProxyClient(t, true, true),
+		authCache:    newAuthCache(30 * time.Second),
+		dialer: func(ctx context.Context, endpoint string) (CartographerClient, error) {
+			return &mockCartographerClient{
+				exportGraphFn: func(ctx context.Context, in *flowv1gen.ExportGraphRequest) (flowv1gen.CartographerService_ExportGraphClient, error) {
+					return &mockExportClientErr{err: status.Error(codes.DataLoss, "upstream serialisation broke mid-stream")}, nil
+				},
+			}, nil
+		},
+		operatorSigningKey: priv,
+	}
+
+	stream := &mockExportStream{}
+	md := metadata.Pairs(
+		"x-flow-namespace", "ns",
+		"x-flow-graph-name", "graph",
+		"authorization", "Bearer valid",
+	)
+	stream.ctx = metadata.NewIncomingContext(context.Background(), md)
+
+	err = s.ExportGraph(&flowv1gen.ExportGraphRequest{Format: "json"}, stream)
+	if err == nil {
+		t.Fatal("expected an error on mid-stream upstream failure")
+	}
+	// SPEC error table: any mid-stream export failure is INTERNAL — a non-Unavailable
+	// upstream status must not be propagated verbatim.
+	if status.Code(err) != codes.Internal {
+		t.Errorf("expected INTERNAL for a non-conforming upstream status, got %v", status.Code(err))
 	}
 }
 
