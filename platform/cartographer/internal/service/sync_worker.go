@@ -295,27 +295,28 @@ func (w *SyncWorker) runSyncCycle() {
 
 // doSyncCycle performs the actual sync work.
 func (w *SyncWorker) doSyncCycle() cycleResult {
-	// ponytail: w.remoteURL is an independent copy of the server's remote
-	// gate — Sync() keys on s.remoteURL, BeginTransaction on
-	// s.syncWorker != nil && s.remoteURL != "", CommitTransaction on
-	// s.syncWorker != nil (cartographer_server.go) — with no cross-reference
-	// keeping the two in sync, so a wiring divergence is silently masked here:
-	// the cycle returns success without fetching or pushing. Consequences:
-	// Sync() reports success without fetching (SPEC R10's "one full cycle"
-	// promise), and commit(WithAck()) returns success while pushNeeded stays
-	// set forever — the flag is only cleared by a successful push, and a cycle
-	// that never attempts one never clears it, so the divergence is invisible
-	// to the operator. This empty-remoteURL worker is a test-only construction
-	// today (cmd/main.go derives both fields from the single REMOTE_URL env
-	// var and creates the worker only when it is non-empty, with SetRemote
-	// failing startup on an invalid URL), and tests rely on the no-op cycle
-	// (TestSyncWorkerInterval's startup cycle); the gitstore's ErrNoRemote
-	// fetch path (fetchAndRehydrate) is the sibling silent-success seam when a
-	// non-empty w.remoteURL worker has no gitstore remote. Upgrade path:
-	// assert at wiring time that NewSyncWorker's remoteURL matches the
-	// server's, derive both from one source, or fail loudly — return a
-	// classified error — when a woken cycle has no remote instead of silently
-	// succeeding.
+	// ponytail: the empty-remoteURL early return covers a test-only
+	// construction — TestSyncWorkerInterval builds a worker over a nil
+	// gitstore and relies on the no-op startup cycle (there is no store to
+	// fetch into, so the cycle must not run). In production this worker shape
+	// cannot arise: cmd/main.go creates the worker only when REMOTE_URL is
+	// non-empty and hands it the same value the server's remote gates read
+	// (cartographer_server.go — Sync() returns FAILED_PRECONDITION when
+	// s.remoteURL == "", BeginTransaction skips the implicit sync), so the
+	// server-side gates own the remoteURL == "" cases and this no-op never
+	// runs with a mismatched URL. The sibling production misconfiguration — a
+	// non-empty REMOTE_URL whose SetRemote was rejected non-fatally at startup
+	// (pullOnInit=false is the default, cmd/main.go) leaves the gitstore with
+	// no remote — is handled loudly, not here: the gitstore's ErrNoRemote is
+	// classified non-recoverable (classifySyncError), so every woken or timer
+	// cycle logs + emits telemetry in fetchAndRehydrate and Sync() surfaces
+	// FAILED_PRECONDITION "no remote configured" (mapGitError) instead of
+	// silently reporting a full cycle (SPEC R10's "one full cycle" promise).
+	// Residual divergence: w.remoteURL and the server's s.remoteURL are
+	// independent copies with no cross-reference, so a wiring bug that built
+	// the worker with "" while the server holds a URL would still mask Sync as
+	// success. Upgrade path: assert at wiring time that NewSyncWorker's
+	// remoteURL matches the server's, or derive both from one source.
 	if w.remoteURL == "" {
 		return cycleResult{}
 	}
@@ -406,9 +407,6 @@ func (w *SyncWorker) fetchAndRehydrate() cycleResult {
 	for {
 		res := w.fetchAttempt()
 		if res.err == nil {
-			return cycleResult{}
-		}
-		if errors.Is(res.err, gitstore.ErrNoRemote) {
 			return cycleResult{}
 		}
 		var he *hydrateError
@@ -520,10 +518,13 @@ func (w *SyncWorker) gitOp(fn func(ctx context.Context) error) error {
 	return err
 }
 
+// syncFailureEventType is the Event Bus event type for permanent sync-cycle
+// failures (SPEC.md:122, GIT_PLAN:31-32,132 "log loudly + telemetry"),
+// matching the convention pinned by the service tests.
+const syncFailureEventType = "cartographer.push_failed"
+
 // publishFailure emits an operator-visible Event Bus telemetry event for a
-// permanent sync-cycle failure (SPEC.md:122, GIT_PLAN:31-32,132 "log loudly +
-// telemetry"). Event type "cartographer.push_failed" matches the convention
-// pinned by the service tests.
+// permanent sync-cycle failure. Event type syncFailureEventType.
 func (w *SyncWorker) publishFailure(operation string, err error) {
 	if w.auditor == nil {
 		return
@@ -532,7 +533,7 @@ func (w *SyncWorker) publishFailure(operation string, err error) {
 		Channel: "telemetry",
 		Event: &flowv1.FlowEvent{
 			EventId:       uuid.NewString(),
-			EventType:     "cartographer.push_failed",
+			EventType:     syncFailureEventType,
 			FlowNamespace: w.podNamespace,
 			NodeId:        "cartographer",
 			Timestamp:     timestamppb.Now(),
@@ -561,21 +562,30 @@ func classifySyncError(err error) syncClassification {
 	if err == nil {
 		return syncRecoverable // shouldn't happen, but safe
 	}
-	// Non-recoverable: auth failures, divergence, push rejection, and the
-	// pre-flight config errors where "the git operation cannot be attempted at
-	// all" (SPEC:123) — missing auth config and an unsupported remote URL
-	// scheme (SPEC error-table row "Unsupported remote URL scheme" →
-	// INVALID_ARGUMENT, pinned by TestSync_WakesWorkerAndBlocks). A scheme
-	// that is not https:// or ssh:// is permanent, so retrying it within the
-	// cycle can never succeed; it must fail the cycle immediately so Sync()
-	// surfaces the mapped status. In production the unsupported-scheme error
-	// is unreachable in this cycle — SetRemote validates the scheme once at
-	// startup (main fails startup on a rejected URL, cmd/main.go) and
-	// resolveAuth folds any resolver error (including buildResolveAuthFn's
-	// unsupported-scheme default branch) into ErrAuthConfigMissing — so a
-	// broken remote URL never reaches this cycle; the branch is kept as the
-	// test-injectable mapping for the SPEC row.
-	if errors.Is(err, gitstore.ErrAuthFailed) ||
+	// Non-recoverable: no-remote configuration, auth failures, divergence,
+	// push rejection, and the pre-flight config errors where "the git
+	// operation cannot be attempted at all" (SPEC:123). ErrNoRemote is the
+	// production misconfiguration of a REMOTE_URL whose SetRemote was rejected
+	// non-fatally at startup (pullOnInit=false, cmd/main.go): the gitstore has
+	// no remote, so retrying within the cycle can never succeed — it must fail
+	// the cycle immediately so Sync() surfaces the mapped status (SPEC
+	// error-table row "Remote not configured" → FAILED_PRECONDITION, pinned by
+	// TestSync_WakesWorkerAndBlocks). The same "cannot be attempted" logic
+	// classes an unsupported URL scheme as non-recoverable (SPEC error-table
+	// row "Unsupported remote URL scheme" → INVALID_ARGUMENT): a scheme that
+	// is not https:// or ssh:// is permanent, so retrying it can never
+	// succeed; it must fail the cycle immediately so Sync() surfaces the
+	// mapped status. In production the unsupported-scheme error is unreachable
+	// in this cycle — SetRemote validates the scheme once at startup (main
+	// fails startup on a rejected URL when pullOnInit=true; with
+	// pullOnInit=false a rejected remote is a logged non-fatal warning that
+	// leaves the gitstore with no remote, surfacing ErrNoRemote instead,
+	// cmd/main.go) and resolveAuth folds any resolver error (including
+	// buildResolveAuthFn's unsupported-scheme default branch) into
+	// ErrAuthConfigMissing — so a broken remote URL never reaches this cycle;
+	// the branch is kept as the test-injectable mapping for the SPEC row.
+	if errors.Is(err, gitstore.ErrNoRemote) ||
+		errors.Is(err, gitstore.ErrAuthFailed) ||
 		errors.Is(err, gitstore.ErrAuthConfigMissing) ||
 		errors.Is(err, gitstore.ErrUnsupportedURLScheme) ||
 		errors.Is(err, gitstore.ErrPullDiverged) ||
