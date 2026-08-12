@@ -188,6 +188,18 @@ func runGraphExport(cmd *cobra.Command, args []string) error {
 
 	// Output to a file: any stream or write failure removes the partial file so
 	// the caller doesn't mistake truncated data for a full graph.
+	//
+	// ponytail: the output file is created with os.Create, which truncates any
+	// pre-existing file at the path before the export has connected, and
+	// removeStreamOutput deletes the file on every failure branch — so a
+	// failed export destroys pre-existing content even when it never reached
+	// the operator (a connectivity/token failure included). Failure modes:
+	// (1) a typo'd --output pointing at an existing file is data loss, not an
+	// error; (2) an overwrite whose export fails silently leaves no trace of
+	// the previous graph for comparison. Consequence: --output is only safe
+	// for paths the caller intends to fully replace. Upgrade path: stream to
+	// a temporary file in the same directory and rename it over the target
+	// only on success, leaving pre-existing content untouched on any failure.
 	f, err := newExportFileFn(outputPath)
 	if err != nil {
 		return fmt.Errorf("create output file %q: %w", outputPath, err)
@@ -312,7 +324,7 @@ func runGraphExportWith(ctx context.Context, exporter graphExporter, params grap
 	token, err := exporter.bearerToken()
 	if err != nil {
 		return fmt.Errorf("cannot resolve bearer token from kubeconfig — " +
-			"use a token-based kubeconfig or ensure the exec plugin populates BearerToken")
+			"export requires a kubeconfig authenticated with a static bearer token")
 	}
 
 	stream, stopStream, err := exporter.dialOperatorStream(ctx, localPort, token, params.namespace, params.graphName, params.format)
@@ -398,6 +410,24 @@ func (g *prodGraphExporter) forwardOperatorPod(ctx context.Context, namespace, p
 	return localPort, func() { _ = g.pfm.Close(forwardID) }, nil
 }
 
+// bearerToken returns the kubeconfig's bearer token for the operator proxy's
+// TokenReview (SPEC Graph Export Flow step 3).
+//
+// ponytail: only RESTConfig.BearerToken is read, so kubeconfigs whose AuthInfo
+// authenticates via an exec credential plugin (GKE, EKS, ...) or a client
+// certificate resolve to an empty token and graph export fails — client-go
+// never copies exec-plugin or certificate credentials into
+// RESTConfig.BearerToken (exec tokens are fetched lazily by the transport's
+// credential plugin; certificates live in CertData/KeyData). Failure modes:
+// (1) a perfectly valid cluster identity using exec/cert auth is rejected
+// with "no bearer token"; (2) the error cannot fall back to a certificate
+// because the proxy's TokenReview only accepts a token through the
+// authorization metadata. Consequence: flowctl graph export requires a
+// kubeconfig carrying a static bearer token, matching the SPEC's "attaches
+// its kubeconfig bearer token" flow (SPEC Graph Export Flow step 1). Upgrade
+// path: resolve the exec plugin's credential via client-go's ExecProvider
+// credential cache and render it into the authorization header before dialing
+// the proxy, or have the proxy accept the CLI's TLS client certificate.
 func (g *prodGraphExporter) bearerToken() (string, error) {
 	if g.k8s.RESTConfig == nil || g.k8s.RESTConfig.BearerToken == "" {
 		return "", fmt.Errorf("kubeconfig has no bearer token")
