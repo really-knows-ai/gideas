@@ -53,8 +53,9 @@ type SyncWorker struct {
 	store     store.Store
 
 	// auditor receives operator-visible telemetry events for permanent sync
-	// failures (SPEC R10 / GIT_PLAN "log loudly + telemetry": "An
-	// operator-visible telemetry event fires on each permanent failure").
+	// failures (SPEC R10 error-classification contract "log loudly +
+	// telemetry": the non-recoverable and retries-exhausted branches both emit
+	// an operator-visible telemetry event).
 	auditor TelemetryPublisher
 
 	// podNamespace is the Kubernetes namespace owning this flow, stamped onto
@@ -69,9 +70,9 @@ type SyncWorker struct {
 	// main.lbug failed. The git files are already merged (the fetch succeeded),
 	// so the next cycle re-runs the re-hydration even though HEAD no longer
 	// moves — without this, main.lbug stays inconsistent until the remote
-	// advances again or the pod restarts (GIT_PLAN.md:139: "The next sync cycle
-	// retries the re-hydration — the git files are already merged,
-	// re-hydration is a read from the working tree"). Touched only by the
+	// advances again or the pod restarts (the next sync cycle retries the
+	// re-hydration — the git files are already merged, so re-hydration is a
+	// read from the working tree). Touched only by the
 	// worker goroutine, which owns every sync cycle.
 	hydrateFailed bool
 
@@ -104,9 +105,10 @@ type SyncWorker struct {
 type SyncWorkerOption func(*SyncWorker)
 
 // SyncWorkerWithAuditPublisher wires a telemetry publisher into a SyncWorker so
-// permanent sync failures emit an operator-visible Event Bus event (SPEC R10 /
-// GIT_PLAN "log loudly + telemetry"). Named distinctly from the server's
-// WithAuditPublisher (a CartographerOption) because both live in this package.
+// permanent sync failures emit an operator-visible Event Bus event (SPEC R10
+// error-classification contract "log loudly + telemetry"). Named distinctly
+// from the server's WithAuditPublisher (a CartographerOption) because both live
+// in this package.
 func SyncWorkerWithAuditPublisher(pub TelemetryPublisher) SyncWorkerOption {
 	return func(w *SyncWorker) { w.auditor = pub }
 }
@@ -209,7 +211,7 @@ func (w *SyncWorker) WakeAndWaitClassified(ctx context.Context) (completed bool,
 // blocks until the cycle that snapshotted this waiter completes. A waiter
 // registered while a cycle is already in flight is satisfied by the follow-up
 // cycle the buffered wakeCh triggers — never by the in-flight cycle, whose
-// waiter snapshot predates the registration (GIT_PLAN WithAck/timer-race edge
+// waiter snapshot predates the registration (the WithAck/timer-race edge
 // case). Returns completed=false when ctx expires first; the abandoned waiter
 // channel is harmlessly fed by the next cycle's snapshot drain.
 func (w *SyncWorker) wakeAndWait(ctx context.Context) (cycleResult, bool) {
@@ -325,8 +327,9 @@ func (w *SyncWorker) doSyncCycle() cycleResult {
 	// pulled. The whole fetch → (restore main) → re-hydrate sequence holds the
 	// git lock so a concurrent commit's working-tree writes cannot interleave,
 	// and the tree is restored to main before files are read so a transaction
-	// branch can never leak uncommitted data into main.lbug (SPEC R10 / GIT_PLAN
-	// Phase 2 step 3).
+	// branch can never leak uncommitted data into main.lbug (SPEC R10: the
+	// re-hydration after a pull runs under the git lock on the restored
+	// working tree).
 	res := w.fetchAndRehydrate()
 	if res.err != nil {
 		return res
@@ -386,9 +389,10 @@ func (w *SyncWorker) doSyncCycle() cycleResult {
 }
 
 // hydrateError marks a re-hydration failure, distinguishing it from a fetch
-// error: a failed RehydrateMainFromFiles is non-recoverable (GIT_PLAN edge
-// case: surfaced as "Sync re-hydration failed" (INTERNAL) to waiting callers;
-// not retried within the cycle).
+// error: a failed RehydrateMainFromFiles is non-recoverable (SPEC error-table
+// row "Sync re-hydration failed" → INTERNAL: surfaced to waiting callers; not
+// retried within the cycle — the retry happens on a later cycle or the next
+// startup's R8 recovery).
 type hydrateError struct{ err error }
 
 func (e *hydrateError) Error() string { return e.err.Error() }
@@ -432,7 +436,7 @@ func (w *SyncWorker) fetchAndRehydrate() cycleResult {
 
 // fetchAttempt performs one git-locked fetch attempt followed by the
 // re-hydration of main.lbug when the fetch advanced main or the previous
-// cycle's re-hydration failed (GIT_PLAN.md:139 retry contract). The whole
+// cycle's re-hydration failed (the next-cycle re-hydration retry contract). The whole
 // locked sequence runs under the configurable per-operation deadline (gitOp,
 // SPEC R10 / SPEC:978), so a hung FetchAndMerge aborts with DEADLINE_EXCEEDED
 // instead of wedging the worker.
@@ -450,11 +454,11 @@ func (w *SyncWorker) fetchAttempt() cycleResult {
 			}
 			// Re-hydrate when the remote had new data, or when the previous
 			// cycle's re-hydration failed and main.lbug is still inconsistent
-			// (SPEC R10: "if new data was pulled re-hydrates"; GIT_PLAN.md:30,84).
+			// (SPEC R10: "if new data was pulled re-hydrates").
 			// FetchAndMerge returns the unchanged local hash when the remote is
 			// up-to-date or strictly behind, so the HEAD comparison is the
 			// new-data signal. A failed re-hydration is retried by the next cycle
-			// (GIT_PLAN.md:139) — the git files are already merged, so re-hydration
+			// — the git files are already merged, so re-hydration
 			// is a pure read from the working tree.
 			if newHead.IsZero() || (newHead.String() == preHead && !w.hydrateFailed) {
 				return nil
@@ -519,7 +523,8 @@ func (w *SyncWorker) gitOp(fn func(ctx context.Context) error) error {
 }
 
 // syncFailureEventType is the Event Bus event type for permanent sync-cycle
-// failures (SPEC.md:122, GIT_PLAN:31-32,132 "log loudly + telemetry"),
+// failures (SPEC R10 "log loudly + telemetry": the R10 error-classification
+// table's non-recoverable and retries-exhausted branches),
 // matching the convention pinned by the service tests.
 const syncFailureEventType = "cartographer.push_failed"
 
