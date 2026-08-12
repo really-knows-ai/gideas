@@ -814,7 +814,7 @@ func createNodeTableOnConn(conn *lbug.Connection, name string,
 	for _, p := range properties {
 		propertyType := ladybugType(p.Type)
 		cols = append(cols, quoteID(p.Name)+" "+propertyType)
-		if propertyType == colTypeString || propertyType == "STRING[]" {
+		if propertyType == colTypeString {
 			stringProps = append(stringProps, p.Name)
 		}
 	}
