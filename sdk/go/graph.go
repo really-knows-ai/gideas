@@ -152,8 +152,13 @@ func newIDTypeMap() *idTypeMap {
 	}
 }
 
+// store records the ID→type mapping, stamping the entry with the current
+// time for TTL tracking. An empty id or entityType is rejected: an entry
+// with an empty type would resolve as ("", true) and annotate
+// entity_type="" capability metadata instead of the wildcard (see
+// resolveOrWildcard), which fails resolution.
 func (m *idTypeMap) store(id, entityType string) {
-	if id == "" {
+	if id == "" || entityType == "" {
 		return
 	}
 	m.mu.Lock()
