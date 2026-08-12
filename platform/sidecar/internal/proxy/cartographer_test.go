@@ -5,6 +5,8 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
+	"errors"
+	"io"
 	"net"
 	"sync"
 	"testing"
@@ -622,6 +624,113 @@ func TestCartographerProxy_E2E_ExportGraph_StreamsWithSignedCapabilities(t *test
 		t.Fatal("expected the Cartographer to receive the ExportGraph request")
 	}
 	assertSignedCapabilitiesOnMD(t, pub, capture.metadata(), caps)
+}
+
+// mockExportClientStream is a flowv1.CartographerService_ExportGraphClient that
+// yields a single chunk and then io.EOF when failErr is nil, or returns failErr
+// from the first Recv — pinning the sidecar relay's mid-stream upstream branch.
+type mockExportClientStream struct {
+	failErr error
+	calls   int
+}
+
+func (m *mockExportClientStream) Recv() (*flowv1.ExportGraphResponse, error) {
+	m.calls++
+	if m.failErr != nil {
+		return nil, m.failErr
+	}
+	if m.calls == 1 {
+		return &flowv1.ExportGraphResponse{Chunk: []byte("chunk")}, nil
+	}
+	return nil, io.EOF
+}
+
+func (mockExportClientStream) Context() context.Context { return context.Background() }
+func (mockExportClientStream) Header() (metadata.MD, error) {
+	return nil, nil
+}
+func (mockExportClientStream) Trailer() metadata.MD { return nil }
+func (mockExportClientStream) CloseSend() error     { return nil }
+func (mockExportClientStream) SendMsg(any) error    { return nil }
+func (mockExportClientStream) RecvMsg(any) error    { return nil }
+
+// mockCartographerClientExport is a flowv1.CartographerServiceClient that
+// answers ExportGraph with a fake client stream (failErr propagated from the
+// first Recv when set). The embedded interface satisfies the remaining client
+// methods, which the relay never calls.
+type mockCartographerClientExport struct {
+	flowv1.CartographerServiceClient
+	err error
+}
+
+func (m *mockCartographerClientExport) ExportGraph(
+	ctx context.Context, in *flowv1.ExportGraphRequest, opts ...grpc.CallOption,
+) (flowv1.CartographerService_ExportGraphClient, error) {
+	return &mockExportClientStream{failErr: m.err}, nil
+}
+
+// mockExportServerStream is a grpc.ServerStreamingServer[flowv1.ExportGraphResponse]
+// whose Send records the number of chunks and returns err (nil → success),
+// pinning the relay's downstream failure branch.
+type mockExportServerStream struct {
+	ctx  context.Context
+	err  error
+	sent int
+}
+
+func (m *mockExportServerStream) Send(*flowv1.ExportGraphResponse) error {
+	m.sent++
+	return m.err
+}
+
+func (m *mockExportServerStream) SetHeader(metadata.MD) error  { return nil }
+func (m *mockExportServerStream) SendHeader(metadata.MD) error { return nil }
+func (m *mockExportServerStream) SetTrailer(metadata.MD)       {}
+func (m *mockExportServerStream) Context() context.Context {
+	if m.ctx == nil {
+		return context.Background()
+	}
+	return m.ctx
+}
+func (m *mockExportServerStream) SendMsg(any) error { return nil }
+func (m *mockExportServerStream) RecvMsg(any) error { return nil }
+
+// TestCartographerProxy_ExportGraph_MidStreamFailureIsInternal pins the SPEC
+// error-table row "ExportGraph mid-stream failure → INTERNAL" (SPEC R11) at the
+// Sidecar relay, matching the operator proxy (foundrygraph_proxyserver.go) and
+// the Cartographer service handler (errExportGraphMidStream): an upstream Recv
+// break after the stream has started — a transport-level Unavailable or a raw
+// error — and a downstream Send failure must each surface as INTERNAL, never the
+// raw (non-INTERNAL) status.
+func TestCartographerProxy_ExportGraph_MidStreamFailureIsInternal(t *testing.T) {
+	upstreamBreaks := []struct {
+		name string
+		err  error
+	}{
+		{"unavailable", status.Error(codes.Unavailable, "connection reset mid-stream")},
+		{"raw", errors.New("malformed stream chunk")},
+	}
+	for _, tc := range upstreamBreaks {
+		t.Run("recv_"+tc.name, func(t *testing.T) {
+			p := &CartographerProxy{client: &mockCartographerClientExport{err: tc.err}}
+			err := p.ExportGraph(&flowv1.ExportGraphRequest{Format: "json"}, &mockExportServerStream{})
+			if st := status.Code(err); st != codes.Internal {
+				t.Fatalf("expected INTERNAL for mid-stream Recv failure, got %v", err)
+			}
+		})
+	}
+
+	t.Run("send", func(t *testing.T) {
+		p := &CartographerProxy{client: &mockCartographerClientExport{}}
+		stream := &mockExportServerStream{err: errors.New("client stream write failed")}
+		err := p.ExportGraph(&flowv1.ExportGraphRequest{Format: "json"}, stream)
+		if st := status.Code(err); st != codes.Internal {
+			t.Fatalf("expected INTERNAL for downstream Send failure, got %v", err)
+		}
+		if stream.sent == 0 {
+			t.Fatal("expected Send to have been exercised before failing")
+		}
+	})
 }
 
 // TestCartographerProxy_E2E_MetadataType_PassesToCartographer pins the

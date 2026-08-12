@@ -410,10 +410,18 @@ func (p *CartographerProxy) ExportGraph(
 			return nil
 		}
 		if err != nil {
-			return err
+			// SPEC error table: "ExportGraph mid-stream failure → INTERNAL". Any failure
+			// after the stream has started — a transport-level break (Unavailable), a
+			// non-conforming upstream status, or a raw error — is a mid-stream failure
+			// (partial data may already have been sent), so surface it as INTERNAL rather
+			// than the raw upstream status, matching the operator proxy.
+			return status.Errorf(codes.Internal, "export stream failed: %v", err)
 		}
 		if err := stream.Send(resp); err != nil {
-			return err
+			// SPEC error table: a downstream stream break during export is the same
+			// mid-stream failure (partial data may already have been sent) → INTERNAL,
+			// matching the operator proxy and the Cartographer service handler.
+			return status.Errorf(codes.Internal, "export stream failed: %v", err)
 		}
 	}
 }
