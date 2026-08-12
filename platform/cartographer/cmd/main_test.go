@@ -149,8 +149,12 @@ func TestParseBoolEnv(t *testing.T) {
 }
 
 // TestGetEnv verifies the SPEC R5 env-var default fallbacks implemented by
-// getEnv (main.go:48-55): each variable's default is returned when the env
-// var is unset/empty, and the env value wins when present.
+// getEnv for the string-valued env vars main reads through it (LADYBUG_DB_PATH,
+// CARTOGRAPHER_PORT, POD_NAMESPACE; main.go:50-51,59): each variable's default
+// is returned when the env var is unset/empty, and the env value wins when
+// present. The duration-typed vars (TRANSACTION_TIMEOUT,
+// CAPABILITY_STALENESS_WINDOW) are read via parseDurationEnv with fail-fast
+// semantics and are covered by TestParseDurationEnv, not here.
 func TestGetEnv(t *testing.T) {
 	cases := []struct {
 		key     string
@@ -159,9 +163,7 @@ func TestGetEnv(t *testing.T) {
 	}{
 		{"LADYBUG_DB_PATH", "/data", "/data"},
 		{"CARTOGRAPHER_PORT", "50051", "50051"},
-		{"TRANSACTION_TIMEOUT", "30m", "30m"},
 		{"POD_NAMESPACE", "default", "default"},
-		{"CAPABILITY_STALENESS_WINDOW", "30s", "30s"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.key+"/unset", func(t *testing.T) {
