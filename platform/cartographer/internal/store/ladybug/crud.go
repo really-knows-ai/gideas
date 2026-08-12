@@ -242,20 +242,33 @@ func (db *ladybugDB) UpdateEntity(
 	// Validate and bootstrap embedding. Mirrors CreateEntity's embedding handling
 	// (SPEC R7 parity): if the embedding column has not been bootstrapped yet
 	// (dim == 0), the first update supplying an embedding bootstraps it; a
-	// subsequent update must match the established dimension.
+	// subsequent update must match the established dimension. Unlike a create,
+	// an update rewrites an existing row's embedding, which LadybugDB refuses
+	// while the vector index exists ("Cannot set property ... because it is
+	// used in one or more indexes"), so a matching-dimension update drops the
+	// index before the write and recreates it after; the bootstrap path defers
+	// index creation until after the write for the same reason. The FLOAT[n]
+	// column (and its locked dimension) is untouched by either operation, so
+	// the SPEC-visible rejection surface for an UpdateEntity embedding stays
+	// exactly the two error-table rows: dimension mismatch (R7 §1(b)) and
+	// NaN/Inf (R7 §1(c)) — a matching, NaN-free embedding update succeeds.
 	hasNewEmb := len(embedding) > 0
 	for _, v := range embedding {
 		if math.IsNaN(float64(v)) || math.IsInf(float64(v), 0) {
 			return nil, store.ErrNaNOrInfEmbedding
 		}
 	}
-	if def.EnableVectorIndex && hasNewEmb {
+	embeddingWritable := def.EnableVectorIndex && hasNewEmb
+	recreateIndex := false
+	bootstrappedColumn := false
+	if embeddingWritable {
 		dim, derr := getEmbeddingDimension(conn, entity.Type, def.EnableVectorIndex)
 		if derr != nil {
 			return nil, fmt.Errorf("read embedding dimension for %q: %w", entity.Type, derr)
 		}
 		if dim == 0 {
 			// No embedding column yet — bootstrap it (same as CreateEntity).
+			// The vector index is created after the write below.
 			dim = len(embedding)
 			altDDL := fmt.Sprintf("ALTER TABLE %s ADD embedding FLOAT[%d];", quoteID(entity.Type), dim)
 			r, err := conn.Query(altDDL)
@@ -263,54 +276,37 @@ func (db *ladybugDB) UpdateEntity(
 				return nil, fmt.Errorf("bootstrap embedding column: %w", err)
 			}
 			r.Close()
-			if err := db.createVectorIndex(conn, entity.Type); err != nil {
-				typeDefs.markFailed()
-				return nil, fmt.Errorf("bootstrap vector index: %w", err)
-			}
-			if db.path != "" {
-				pairs, perr := connectionEdgePairs(conn, typeDefs.edgeTypeDefs)
-				if perr != nil {
-					typeDefs.markFailed()
-					return nil, fmt.Errorf("capture relationship endpoints: %w", perr)
-				}
-				metadata := metadataFromDefinitions(typeDefs.entityTypeDefs, typeDefs.edgeTypeDefs, pairs)
-				metadata, err = captureVectorState(conn, metadata)
-				if err != nil {
-					typeDefs.markFailed()
-					return nil, fmt.Errorf("capture vector schema metadata: %w", err)
-				}
-				path := db.mainMetadataPath()
-				if branch != "" && branch != mainBranch {
-					path = db.branchMetadataPath(branch)
-				}
-				if err := db.writeMetadata(path, metadata); err != nil {
-					typeDefs.markFailed()
-					return nil, fmt.Errorf("persist vector schema metadata: %w", err)
-				}
-			}
+			bootstrappedColumn = true
+			recreateIndex = true
 		} else if len(embedding) != dim {
 			return nil, fmt.Errorf("%w: expected dimension %d, got %d", store.ErrEmbeddingDimension, dim, len(embedding))
+		} else {
+			// Established dimension with a matching embedding — drop the vector
+			// index so the row's embedding can be rewritten in place.
+			recreateIndex = true
+			if ok, ierr := vectorIndexExists(conn, entity.Type); ierr != nil {
+				return nil, fmt.Errorf("check vector index for %q: %w", entity.Type, ierr)
+			} else if ok {
+				r, derr := conn.Query(fmt.Sprintf("CALL DROP_VECTOR_INDEX('%s', '%s_vec');", entity.Type, entity.Type))
+				if derr != nil {
+					return nil, fmt.Errorf("drop vector index for embedding update: %w", derr)
+				}
+				r.Close()
+			}
 		}
-
-		// LadybugDB refuses to rewrite the embedding of an existing row once the
-		// vector index exists ("Cannot set property ... because it is used in one
-		// or more indexes"), so UpdateEntity cannot change an embedding either
-		// after the column was bootstrapped (dim > 0) or immediately after this
-		// update bootstraps it above. Surface a defined store sentinel here — at
-		// the store boundary, rather than leaking the raw engine error — so the
-		// service layer can respond; the bootstrap DDL above has already locked
-		// the vector dimension as its side effect.
-		return nil, store.ErrEmbeddingUpdateUnsupported
 	}
 
-	// Build SET clause (embedding is never settable on an existing indexed row,
-	// so it is absent here — see the guard above).
+	// Build SET clause (the embedding is included when this update writes one).
 	var sets []string
 	params := map[string]any{"id": id}
 	for k, v := range properties {
 		pk := "p_" + k
 		sets = append(sets, "n."+quoteID(k)+" = $"+pk)
 		params[pk] = v
+	}
+	if embeddingWritable {
+		sets = append(sets, "n.embedding = $embedding")
+		params["embedding"] = embedding
 	}
 	if len(sets) == 0 {
 		// No-op update — return the entity as-is.
@@ -325,13 +321,58 @@ func (db *ladybugDB) UpdateEntity(
 	r, eErr := conn.Execute(stmt, params)
 	stmt.Close()
 	if eErr != nil {
+		// The established-dimension path dropped the index for the rewrite;
+		// restore it so the store stays consistent before surfacing the error.
+		if recreateIndex && !bootstrappedColumn {
+			if cerr := db.createVectorIndex(conn, entity.Type); cerr != nil {
+				typeDefs.markFailed()
+				return nil, fmt.Errorf("write embedding: %v; restore vector index: %w", eErr, cerr)
+			}
+		}
 		return nil, eErr
 	}
 	r.Close()
 
-	// Merge properties and return. An embedding is never set here: changing it
-	// is rejected above by ErrEmbeddingUpdateUnsupported.
+	// Recreate the vector index over the rewritten embedding (dropped before
+	// the write, or deferred past it on the bootstrap path). The bootstrap path
+	// also persists the schema metadata capturing the new vector state; the
+	// established-dimension path leaves the metadata unchanged.
+	if recreateIndex {
+		if err := db.createVectorIndex(conn, entity.Type); err != nil {
+			typeDefs.markFailed()
+			return nil, fmt.Errorf("recreate vector index: %w", err)
+		}
+		if bootstrappedColumn && db.path != "" {
+			pairs, perr := connectionEdgePairs(conn, typeDefs.edgeTypeDefs)
+			if perr != nil {
+				typeDefs.markFailed()
+				return nil, fmt.Errorf("capture relationship endpoints: %w", perr)
+			}
+			metadata := metadataFromDefinitions(typeDefs.entityTypeDefs, typeDefs.edgeTypeDefs, pairs)
+			metadata, err := captureVectorState(conn, metadata)
+			if err != nil {
+				typeDefs.markFailed()
+				return nil, fmt.Errorf("capture vector schema metadata: %w", err)
+			}
+			path := db.mainMetadataPath()
+			if branch != "" && branch != mainBranch {
+				path = db.branchMetadataPath(branch)
+			}
+			if err := db.writeMetadata(path, metadata); err != nil {
+				typeDefs.markFailed()
+				return nil, fmt.Errorf("persist vector schema metadata: %w", err)
+			}
+		}
+	}
+
+	// Merge properties and return. The embedding is only surfaced when this
+	// update actually persisted one (SPEC R7: a non-indexed type's embedding is
+	// accepted but discarded, and a no-embedding update leaves the stored value
+	// unchanged).
 	maps.Copy(entity.Properties, properties)
+	if embeddingWritable {
+		entity.Embedding = embedding
+	}
 	entity.UpdatedAt = time.Now().UTC()
 	return entity, nil
 }

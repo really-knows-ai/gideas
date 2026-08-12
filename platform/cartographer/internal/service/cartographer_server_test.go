@@ -2269,12 +2269,13 @@ func TestCreateEntity_MissingRequiredPropertyWinsOverMissingCapability(t *testin
 	}
 }
 
-// TestUpdateEntity_EmbeddingUpdateUnsupported drives UpdateEntity on an
-// established vector-indexed row and asserts the resulting gRPC code. The store
-// surfaces ErrEmbeddingUpdateUnsupported when the engine cannot rewrite an
-// embedding once the vector index exists; the service must map it to a defined
-// SPEC code (INVALID_ARGUMENT, not codes.Unimplemented which has no SPEC row).
-func TestUpdateEntity_EmbeddingUpdateUnsupported(t *testing.T) {
+// TestUpdateEntity_EmbeddingRewriteSuccess drives UpdateEntity on an
+// established vector-indexed row and asserts the embedding rewrite succeeds:
+// the store drops the vector index, writes the new embedding, and recreates the
+// index (SPEC R2/R7 — a dimension-matching, NaN-free embedding update is
+// accepted; only dimension mismatch and NaN/Inf are rejections). The response
+// carries the persisted embedding.
+func TestUpdateEntity_EmbeddingRewriteSuccess(t *testing.T) {
 	srv, _ := newTestServer(t)
 	ctx := testCtx()
 
@@ -2298,17 +2299,20 @@ func TestUpdateEntity_EmbeddingUpdateUnsupported(t *testing.T) {
 	if err != nil {
 		t.Fatalf("bootstrap CreateEntity: %v", err)
 	}
-	_, err = srv.UpdateEntity(ctx, &flowv1.UpdateEntityRequest{
+	resp, err := srv.UpdateEntity(ctx, &flowv1.UpdateEntityRequest{
 		Id:            ent.Id,
 		Embedding:     []float32{0.0, 1.0, 0.0},
 		Properties:    map[string]string{"name": "updated"},
 		TransactionId: txID,
 	})
-	if err == nil {
-		t.Fatal("expected embedding update on indexed row to be rejected, got nil")
+	if err != nil {
+		t.Fatalf("matching-dimension embedding update must succeed, got %v", err)
 	}
-	if status.Code(err) != codes.InvalidArgument {
-		t.Fatalf("expected InvalidArgument for unsupported embedding update, got %v (%v)", status.Code(err), err)
+	if !reflect.DeepEqual(resp.Embedding, []float32{0.0, 1.0, 0.0}) {
+		t.Fatalf("expected rewritten embedding [0 1 0], got %v", resp.Embedding)
+	}
+	if resp.Properties["name"] != "updated" {
+		t.Fatalf("expected name=updated, got %q", resp.Properties["name"])
 	}
 }
 

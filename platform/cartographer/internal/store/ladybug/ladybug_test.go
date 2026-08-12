@@ -3490,12 +3490,14 @@ func TestVectorBootstrapCrashWindow_UpdateEntityHealsOnReopen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read pre-bootstrap metadata: %v", err)
 	}
-	// The first embedding update runs the bootstrap DDL (locking dimension 3)
-	// and then rejects the embedding change with the defined sentinel.
-	if _, err := s.UpdateEntity(ctx, id, nil, []float32{1, 2, 3}, ""); !errors.Is(
-		err, store.ErrEmbeddingUpdateUnsupported,
-	) {
-		t.Fatalf("expected bootstrap-then-reject from UpdateEntity, got %v", err)
+	// The first embedding update runs the bootstrap DDL (locking dimension 3),
+	// creates the index after the write, and persists the embedding.
+	updated, err := s.UpdateEntity(ctx, id, nil, []float32{1, 2, 3}, "")
+	if err != nil {
+		t.Fatalf("bootstrap-then-persist from UpdateEntity: %v", err)
+	}
+	if !reflect.DeepEqual(updated.Embedding, []float32{1, 2, 3}) {
+		t.Fatalf("embedding after bootstrap update = %v, want [1 2 3]", updated.Embedding)
 	}
 	// Fabricate the crash residue: the catalog now carries the embedding
 	// column/index, but schema.json still describes the pre-bootstrap state.
@@ -3521,6 +3523,68 @@ func TestVectorBootstrapCrashWindow_UpdateEntityHealsOnReopen(t *testing.T) {
 		ctx, "Vector", "", map[string]string{"name": "after"}, []float32{4, 5, 6}, "",
 	); cerr != nil {
 		t.Fatalf("CreateEntity after recovery: %v", cerr)
+	}
+}
+
+// TestVectorBootstrapCrashWindow_EmbeddingRewriteHealsOnReopen pins the
+// recovery of the embedding-rewrite crash window introduced by
+// crud.go's UpdateEntity: a matching-dimension embedding rewrite drops the
+// vector index before the write and recreates it after, so a crash caught
+// between the DROP_VECTOR_INDEX and the CREATE_VECTOR_INDEX leaves the catalog
+// carrying the FLOAT[n] column (dimension still locked) without its index while
+// schema.json records it indexed. reconcileVectorStateFromCatalog must complete
+// the missing index on Open, or validation bricks startup.
+func TestVectorBootstrapCrashWindow_EmbeddingRewriteHealsOnReopen(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if err := s.ApplySchema(ctx, vectorBootstrapCrashSchema()); err != nil {
+		t.Fatalf("ApplySchema: %v", err)
+	}
+	// Bootstrap the dimension + vector index via a create with an embedding.
+	ent, err := s.CreateEntity(ctx, "Vector", "", map[string]string{"name": "v"}, []float32{1, 2, 3}, "")
+	if err != nil {
+		t.Fatalf("bootstrap CreateEntity: %v", err)
+	}
+	// A matching-dimension embedding rewrite succeeds (drop → SET → recreate).
+	if updated, uerr := s.UpdateEntity(ctx, ent.Id, nil, []float32{4, 5, 6}, ""); uerr != nil {
+		t.Fatalf("embedding rewrite: %v", uerr)
+	} else if !reflect.DeepEqual(updated.Embedding, []float32{4, 5, 6}) {
+		t.Fatalf("rewritten embedding = %v, want [4 5 6]", updated.Embedding)
+	}
+	// Fabricate the crash residue: the catalog now lacks the vector index
+	// (the DROP committed, the CREATE never ran) while schema.json still
+	// records the type as indexed with dimension 3.
+	db := s.(*ladybugDB)
+	res, err := db.conn.Query("CALL DROP_VECTOR_INDEX('Vector', 'Vector_vec');")
+	if err != nil {
+		t.Fatalf("drop vector index: %v", err)
+	}
+	res.Close()
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	reopened, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open after embedding-rewrite crash must recover, got %v", err)
+	}
+	defer closeStore(t, reopened)
+	if dim, derr := reopened.GetEstablishedDimension(ctx, "Vector", ""); derr != nil || dim != 3 {
+		t.Fatalf("vector dimension after recovery = %d, %v, want 3", dim, derr)
+	}
+	if ok, ierr := reopened.IsVectorIndexBootstrapped(ctx, "Vector", ""); ierr != nil || !ok {
+		t.Fatalf("vector index not recovered: %v", ierr)
+	}
+	// The rewritten embedding survived the crash (the SET committed before it).
+	got, gerr := reopened.GetEntity(ctx, ent.Id, "")
+	if gerr != nil {
+		t.Fatalf("GetEntity after recovery: %v", gerr)
+	}
+	if !reflect.DeepEqual(got.Embedding, []float32{4, 5, 6}) {
+		t.Fatalf("persisted embedding after recovery = %v, want [4 5 6]", got.Embedding)
 	}
 }
 
@@ -7591,18 +7655,17 @@ func TestUpdateEntity_EmbeddingDimensionMismatch(t *testing.T) {
 	}
 }
 
-// UpdateEntity embedding-bootstrap path (crud.go:206-231): a first embedding
+// UpdateEntity embedding-bootstrap path (crud.go): a first embedding
 // update on a vector-indexed type whose column is not yet bootstrapped attempts
-// (mirroring CreateEntity) to ALTER TABLE add the embedding column, create the
-// vector index, and persist the embedding. Only CreateEntity's bootstrap was
-// previously tested.
+// (mirroring CreateEntity) to ALTER TABLE add the embedding column, persist the
+// embedding, create the vector index, and publish the vector schema metadata.
+// Only CreateEntity's bootstrap was previously tested.
 //
-// Once the vector index is created, LadybugDB refuses `SET embedding` on an
-// existing row ("Cannot set property ... because it is used in one or more
-// indexes"), so UpdateEntity cannot persist an embedding value. The store
-// surfaces the defined ErrEmbeddingUpdateUnsupported sentinel at its boundary
-// (rather than leaking the raw engine error), while the bootstrap DDL still
-// runs first and locks the dimension.
+// LadybugDB refuses to rewrite the embedding of an existing row while the
+// vector index exists ("Cannot set property ... because it is used in one or
+// more indexes"), so UpdateEntity defers index creation until after the row
+// write on the bootstrap path and drops/recreates the index on the established
+// path. The bootstrap DDL still locks the dimension first.
 func TestUpdateEntity_EmbeddingBootstrap(t *testing.T) {
 	s, err := OpenInMemory()
 	if err != nil {
@@ -7640,11 +7703,15 @@ func TestUpdateEntity_EmbeddingBootstrap(t *testing.T) {
 	}
 
 	// First embedding update runs the bootstrap: ALTER TABLE add embedding
-	// column + CREATE_VECTOR_INDEX, locking the dimension to 3, then rejects
-	// the embedding change with the defined sentinel.
-	_, err = s.UpdateEntity(context.Background(), id, nil, []float32{1, 2, 3}, "")
-	if !errors.Is(err, store.ErrEmbeddingUpdateUnsupported) {
-		t.Fatalf("expected ErrEmbeddingUpdateUnsupported, got %v", err)
+	// column, persist the embedding, then CREATE_VECTOR_INDEX, locking the
+	// dimension to 3. The update succeeds — the deferred index creation lets the
+	// row's embedding be written.
+	updated, err := s.UpdateEntity(context.Background(), id, nil, []float32{1, 2, 3}, "")
+	if err != nil {
+		t.Fatalf("bootstrap-then-persist UpdateEntity: %v", err)
+	}
+	if !reflect.DeepEqual(updated.Embedding, []float32{1, 2, 3}) {
+		t.Fatalf("embedding after bootstrap update = %v, want [1 2 3]", updated.Embedding)
 	}
 	if ok, err := s.IsVectorIndexBootstrapped(context.Background(), "VectorType", ""); err != nil {
 		t.Fatalf("IsVectorIndexBootstrapped: %v", err)
@@ -7654,18 +7721,22 @@ func TestUpdateEntity_EmbeddingBootstrap(t *testing.T) {
 	if dim, derr := s.GetEstablishedDimension(context.Background(), "VectorType", ""); derr != nil || dim != 3 {
 		t.Fatalf("dimension = %d, error = %v (update err: %v)", dim, derr, err)
 	}
+	got, err := s.GetEntity(context.Background(), id, "")
+	if err != nil {
+		t.Fatalf("GetEntity after bootstrap update: %v", err)
+	}
+	if !reflect.DeepEqual(got.Embedding, []float32{1, 2, 3}) {
+		t.Fatalf("persisted embedding = %v, want [1 2 3]", got.Embedding)
+	}
 }
 
-// SPEC R7 parity (crud.go:271-283): a post-bootstrap UpdateEntity supplying an
+// SPEC R7 parity (crud.go): a post-bootstrap UpdateEntity supplying an
 // embedding whose dimension MATCHES the established dimension (dim > 0,
-// len(embedding) == dim) falls through both bootstrap (dim != 0) and the
-// dimension-mismatch guard, and surfaces the defined
-// ErrEmbeddingUpdateUnsupported sentinel — the vector index prevents rewriting
-// an existing row's embedding. This is the third distinct branch of the
-// sentinel, distinct from TestUpdateEntity_EmbeddingBootstrap (dim == 0
-// bootstrap-then-reject) and TestUpdateEntity_EmbeddingDimensionMismatch
-// (dim > 0, mismatched length).
-func TestUpdateEntity_EmbeddingMatchingDimensionUnsupported(t *testing.T) {
+// len(embedding) == dim) rewrites the row's embedding: the store drops the
+// vector index, writes the new embedding, and recreates the index. This is the
+// SPEC success branch the error-table rows (dimension mismatch, NaN/Inf) imply:
+// a matching, NaN-free embedding update is accepted, never rejected.
+func TestUpdateEntity_EmbeddingRewriteSuccess(t *testing.T) {
 	s, err := OpenInMemory()
 	if err != nil {
 		t.Fatal(err)
@@ -7687,22 +7758,41 @@ func TestUpdateEntity_EmbeddingMatchingDimensionUnsupported(t *testing.T) {
 	}
 
 	// Matching-dimension update: the dimension guard passes (3 == 3) and the
-	// sentinel surfaces without any bootstrap DDL.
-	_, err = s.UpdateEntity(ctx, e.Id, nil, []float32{4, 5, 6}, "")
-	if !errors.Is(err, store.ErrEmbeddingUpdateUnsupported) {
-		t.Fatalf("expected ErrEmbeddingUpdateUnsupported for matching-dimension embedding, got %v", err)
+	// embedding rewrite succeeds (drop index → SET → recreate index).
+	updated, err := s.UpdateEntity(ctx, e.Id, map[string]string{"name": "v2"}, []float32{4, 5, 6}, "")
+	if err != nil {
+		t.Fatalf("matching-dimension embedding update: %v", err)
 	}
-	// The dimension is unchanged (already locked by the create) and the entity
-	// survives the rejected update.
+	if !reflect.DeepEqual(updated.Embedding, []float32{4, 5, 6}) {
+		t.Fatalf("updated embedding = %v, want [4 5 6]", updated.Embedding)
+	}
+	if updated.Properties["name"] != "v2" {
+		t.Fatalf("updated properties = %+v, want name=v2", updated.Properties)
+	}
+	// The dimension is unchanged (locked by the original create) and the vector
+	// index is back in place.
 	if dim, derr := s.GetEstablishedDimension(context.Background(), "VectorType", ""); derr != nil || dim != 3 {
 		t.Fatalf("dimension = %d, error = %v, want 3", dim, derr)
 	}
+	if ok, err := s.IsVectorIndexBootstrapped(context.Background(), "VectorType", ""); err != nil {
+		t.Fatalf("IsVectorIndexBootstrapped: %v", err)
+	} else if !ok {
+		t.Fatal("expected vector index recreated after embedding rewrite")
+	}
 	got, err := s.GetEntity(ctx, e.Id, "")
 	if err != nil {
-		t.Fatalf("GetEntity after rejected embedding update: %v", err)
+		t.Fatalf("GetEntity after embedding rewrite: %v", err)
 	}
-	if got.Properties["name"] != "v" {
-		t.Fatalf("entity properties changed by rejected update: %+v", got.Properties)
+	if !reflect.DeepEqual(got.Embedding, []float32{4, 5, 6}) {
+		t.Fatalf("persisted embedding = %v, want [4 5 6]", got.Embedding)
+	}
+	// The rewritten embedding is searchable through the recreated index.
+	results, err := s.SearchNeighbors(ctx, []float32{4, 5, 6}, "VectorType", 10, "")
+	if err != nil {
+		t.Fatalf("SearchNeighbors after embedding rewrite: %v", err)
+	}
+	if len(results) != 1 || results[0].Entity.Id != e.Id {
+		t.Fatalf("expected 1 neighbor (the rewritten entity), got %+v", results)
 	}
 }
 

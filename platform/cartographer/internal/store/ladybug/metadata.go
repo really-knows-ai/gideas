@@ -486,7 +486,19 @@ func reconcileVectorStateFromCatalog(
 			continue
 		}
 		if metadata.VectorIndexes[name] && metadata.VectorDimensions[name] == catalogDim {
-			continue
+			// An embedding rewrite (UpdateEntity, crud.go) drops the vector
+			// index before writing the row and recreates it after; a crash
+			// caught between the two leaves the catalog carrying the FLOAT[n]
+			// column without its index while the metadata records it indexed.
+			// The metadata and catalog agree on the dimension, so the fast path
+			// cannot just trust the metadata — complete the missing index
+			// (below) instead of skipping, mirroring the interrupted-bootstrap
+			// completion.
+			if ok, ierr := vectorIndexExists(conn, name); ierr != nil {
+				return changed, ddlIssued, fmt.Errorf("check vector index for %q: %w", name, ierr)
+			} else if ok {
+				continue
+			}
 		}
 		metadata.VectorIndexes[name] = true
 		metadata.VectorDimensions[name] = catalogDim
