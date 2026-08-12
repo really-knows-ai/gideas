@@ -570,8 +570,8 @@ func TestCartographerProxy_E2E_Mode1_AllTypesSearch_BlocksPerTypeGrantOnly(t *te
 
 // TestCartographerProxy_E2E_Mode1_AllTypesSearch_PassesWithWildcardGrant pins
 // the all-types search success path (SPEC R3:262): a node holding
-// READ:graph/entity/* can perform a type-omitted SearchNeighbors and
-// ListEntities and the requests reach the Cartographer.
+// READ:graph/entity/* can perform a type-omitted SearchNeighbors,
+// FullTextSearch, and ListEntities and the requests reach the Cartographer.
 func TestCartographerProxy_E2E_Mode1_AllTypesSearch_PassesWithWildcardGrant(t *testing.T) {
 	const caps = "READ:graph/entity/*"
 	capture, client, _ := setupCartographerWire(t, caps)
@@ -581,6 +581,13 @@ func TestCartographerProxy_E2E_Mode1_AllTypesSearch_PassesWithWildcardGrant(t *t
 	}
 	if capture.lastMethod() != methodSearchNeighbors {
 		t.Fatalf("expected the Cartographer to receive SearchNeighbors, got %q", capture.lastMethod())
+	}
+
+	if _, err := client.GetGraph().FullTextSearch("auth service", ""); err != nil {
+		t.Fatalf("all-types FullTextSearch with READ:graph/entity/* should pass mode-1: %v", err)
+	}
+	if capture.lastMethod() != methodFullTextSearch {
+		t.Fatalf("expected the Cartographer to receive FullTextSearch, got %q", capture.lastMethod())
 	}
 
 	if _, err := client.GetGraph().ListEntities(""); err != nil {
