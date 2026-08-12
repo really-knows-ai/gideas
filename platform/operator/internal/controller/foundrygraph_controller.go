@@ -348,6 +348,24 @@ func (r *FoundryGraphReconciler) applySchemaOnExisting(ctx context.Context, fg *
 			}
 			return fmt.Errorf("wipe graph: %w", err)
 		}
+
+		// Persist the last-applied-spec annotation BEFORE ApplySchema so the new schema
+		// never becomes active while the annotation still records the old spec. Without
+		// this, a crash between the existing-pod WipeGraph+ApplySchema and the
+		// updateStatus annotation persist re-detects the destructive diff on the next
+		// reconcile and re-runs WipeGraph — silently deleting graph data written under
+		// the newly-applied schema in the interim. The persist sits AFTER WipeGraph (not
+		// before): persisting before the wipe would record the new spec as applied while
+		// the store still holds the old schema, and a crash in that window would suppress
+		// the destructive diff forever — step-10 ApplySchema of a subset schema without a
+		// prior wipe returns FAILED_PRECONDITION (SPEC R1/R2), wedging the change. With
+		// the persist between wipe and apply, a crash after the persist converges via the
+		// already-wiped store (no re-wipe), and a crash before it re-wipes only
+		// old-schema data — data written under the new schema is impossible because the
+		// apply never ran.
+		if err := r.persistLastAppliedSpec(ctx, fg, &fg.Spec); err != nil {
+			return fmt.Errorf("persist last-applied-spec annotation before destructive ApplySchema: %w", err)
+		}
 	}
 
 	// ApplySchema
@@ -356,6 +374,28 @@ func (r *FoundryGraphReconciler) applySchemaOnExisting(ctx context.Context, fg *
 		return fmt.Errorf("apply schema on existing pod: %w", err)
 	}
 
+	return nil
+}
+
+// persistLastAppliedSpec persists the given spec in the lastAppliedSpecAnnotation. The
+// annotation is metadata and must go through the main Update — the status subresource
+// does not carry annotations. It is the marker the next reconcile's schema diff is
+// computed against, so it must record the same spec the apply actually pushed. It is
+// persisted not only at updateStatus (reconcile end) but also mid-reconcile on the
+// destructive path (between WipeGraph and ApplySchema) so a crash can never leave the
+// new schema active while the annotation still records the old spec.
+func (r *FoundryGraphReconciler) persistLastAppliedSpec(ctx context.Context, fg *flowv1.FoundryGraph, spec *flowv1.FoundryGraphSpec) error {
+	specJSON, err := json.Marshal(spec)
+	if err != nil {
+		return fmt.Errorf("marshal spec: %w", err)
+	}
+	if fg.Annotations == nil {
+		fg.Annotations = make(map[string]string)
+	}
+	fg.Annotations[lastAppliedSpecAnnotation] = string(specJSON)
+	if err := r.Update(ctx, fg); err != nil {
+		return fmt.Errorf("update FoundryGraph: %w", err)
+	}
 	return nil
 }
 
@@ -480,17 +520,8 @@ func (r *FoundryGraphReconciler) updateStatus(ctx context.Context, fg *flowv1.Fo
 	// the status subresource does not carry annotations. The main Update replaces any
 	// status on the in-memory object with the stored status, so persist the annotation
 	// first and set the status on a subsequent pass.
-	specJSON, err := json.Marshal(currentSpec)
-	if err != nil {
-		return fmt.Errorf("marshal spec: %w", err)
-	}
-	if fg.Annotations == nil {
-		fg.Annotations = make(map[string]string)
-	}
-	fg.Annotations[lastAppliedSpecAnnotation] = string(specJSON)
-
-	if err := r.Update(ctx, fg); err != nil {
-		return fmt.Errorf("update FoundryGraph: %w", err)
+	if err := r.persistLastAppliedSpec(ctx, fg, currentSpec); err != nil {
+		return err
 	}
 
 	// Set endpoint.
