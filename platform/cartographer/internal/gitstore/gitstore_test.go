@@ -3043,6 +3043,47 @@ func TestSetRemoteNoHost(t *testing.T) {
 	}
 }
 
+// TestSetRemoteUppercaseScheme verifies that scheme matching is
+// case-insensitive per RFC 3986 §3.1: url.Parse lowercases parsed.Scheme, so
+// uppercase-scheme URLs (HTTPS://, SSH://, FILE://) are accepted by
+// validateRemoteURL instead of being falsely rejected as
+// ErrUnsupportedURLScheme (SPEC error-table row "Unsupported remote URL
+// scheme", SPEC:993). The no-location guard still applies to uppercase
+// spellings.
+func TestSetRemoteUppercaseScheme(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		url  string
+	}{
+		{"https uppercase", "HTTPS://example.com/repo.git"},
+		{"ssh uppercase", "SSH://git@example.com/repo.git"},
+		{"file uppercase", "FILE:///tmp/repo.git"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			gs := setupTestStore(t)
+			err := gs.WithGitLock(func() error {
+				return gs.SetRemote(ctx(), tt.url, nil)
+			})
+			if err != nil {
+				t.Fatalf("SetRemote(%q) = %v, want nil", tt.url, err)
+			}
+		})
+	}
+	t.Run("uppercase https no host still rejected", func(t *testing.T) {
+		gs := setupTestStore(t)
+		err := gs.WithGitLock(func() error {
+			err := gs.SetRemote(ctx(), "HTTPS://", nil)
+			if !errors.Is(err, ErrRemoteURLNoHost) {
+				return fmt.Errorf("expected ErrRemoteURLNoHost, got %v", err)
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("SetRemote uppercase no-host: %v", err)
+		}
+	})
+}
+
 // TestIsEmpty pins the SPEC R10 clone-vs-pull / empty-repo classification:
 // a fresh init-only repo (only New()'s "init" commit authored by cartographer)
 // is empty; any repo with a data commit, a wipe commit, or an "init"-message

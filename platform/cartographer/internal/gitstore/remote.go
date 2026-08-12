@@ -7,7 +7,6 @@ import (
 	"net"
 	"net/url"
 	"path/filepath"
-	"strings"
 
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/config"
@@ -35,19 +34,23 @@ func (g *gitStore) SetRemote(ctx context.Context, rawURL string, authFn func() (
 	return nil
 }
 
-// validateRemoteURL rejects URLs that are not https://, ssh://, or file:// and
+// validateRemoteURL rejects URLs whose scheme is not https, ssh, or file and
 // any clearly malformed URL with no location component (e.g. "https://" or
 // "file://"). file:// URLs carry the repository location in the path rather
 // than the host, so the no-location check is scheme-aware.
 func validateRemoteURL(rawURL string) error {
-	if !strings.HasPrefix(rawURL, "https://") &&
-		!strings.HasPrefix(rawURL, "ssh://") &&
-		!strings.HasPrefix(rawURL, "file://") {
-		return ErrUnsupportedURLScheme
-	}
 	parsed, err := url.Parse(rawURL)
 	if err != nil {
 		return fmt.Errorf("parse remote URL: %w", err)
+	}
+	// Scheme names are case-insensitive per RFC 3986 §3.1, and url.Parse
+	// lowercases parsed.Scheme, so comparing it against lowercase literals
+	// admits uppercase-scheme URLs (HTTPS://, SSH://, FILE://) without
+	// loosening the supported scheme set.
+	switch parsed.Scheme {
+	case "https", "ssh", "file":
+	default:
+		return ErrUnsupportedURLScheme
 	}
 	if parsed.Scheme == "file" {
 		if parsed.Path == "" {
