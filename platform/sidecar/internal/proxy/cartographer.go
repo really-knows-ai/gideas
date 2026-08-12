@@ -91,6 +91,22 @@ func nodeCapabilities(ctx context.Context) []string {
 	return caps
 }
 
+// entityTypeFromMetadata returns the first entity_type metadata value attached
+// by the SDK (SPEC R3: the SDK annotates the resolved entity type, or "*" when
+// the ID-to-type mapping is unknown or TTL-stale). Returns "" when no type is
+// resolvable.
+func entityTypeFromMetadata(ctx context.Context) string {
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return ""
+	}
+	vals := md.Get("entity_type")
+	if len(vals) == 0 {
+		return ""
+	}
+	return vals[0]
+}
+
 // checkCapability gates a Cartographer RPC on the caller's attested
 // capabilities (SPEC R3 / Capability Authorisation Chain).
 //
@@ -143,9 +159,12 @@ func (p *CartographerProxy) checkReadByType(ctx context.Context, entityType stri
 }
 
 // checkWriteByType enforces the WRITE gate for write RPCs whose entity type is
-// explicit in the request body (CreateEntity): a specific type is a mode-1
-// check against WRITE:graph/entity/<type>; an omitted or wildcard type is the
-// all-types mode-2 check against WRITE:graph/entity/*.
+// known from the request body (CreateEntity) or resolved by the SDK into
+// entity_type metadata (UpdateEntity, DeleteEntity, CreateEdge; SPEC R3:252):
+// a specific type is a mode-1 check against WRITE:graph/entity/<type>; an
+// omitted or wildcard type is the all-types mode-2 check against
+// WRITE:graph/entity/* — best-effort, never blocks, with the Cartographer
+// authoritative on ingress.
 func (p *CartographerProxy) checkWriteByType(ctx context.Context, entityType string) error {
 	if entityType == "" || entityType == "*" {
 		return p.checkCapability(ctx, "WRITE", "graph/entity/*", false)
@@ -155,15 +174,18 @@ func (p *CartographerProxy) checkWriteByType(ctx context.Context, entityType str
 
 // checkWriteMetadataType enforces the WRITE gate for write RPCs whose entity
 // type is derived from the SDK's local ID-to-type mapping and carried in
-// entity_type metadata (UpdateEntity, DeleteEntity, CreateEdge; SPEC R3:252).
-// The mapping is best-effort and may be stale or miss entities created by
-// other nodes, and the metadata carries no staleness marker, so the Sidecar
-// cannot distinguish a stale annotation from a current one: unknown and stale
-// IDs both fall back to the WRITE:graph/entity/* wildcard check (Sidecar
-// mode 2 — best-effort, never blocks), with the Cartographer performing the
-// authoritative type-specific check on ingress as the correctness net.
+// entity_type metadata (UpdateEntity, DeleteEntity, CreateEdge; SPEC R3:252 /
+// Capability Authorisation Chain). The SDK annotates the specific resolved
+// type only when its TTL-fresh mapping knows the ID (the entity was created or
+// fetched through the same SDK client); unknown or stale (TTL-expired) IDs are
+// annotated "*". A specific type is the chain's mode-1 case: the Sidecar
+// validates the caller against WRITE:graph/entity/<type> and blocks with
+// PERMISSION_DENIED when it is lacking. A "*" or absent annotation is the
+// mode-2 case: the WRITE:graph/entity/* wildcard check is best-effort — it
+// never blocks — and the Cartographer performs the authoritative type-specific
+// check on ingress as the correctness net.
 func (p *CartographerProxy) checkWriteMetadataType(ctx context.Context) error {
-	return p.checkCapability(ctx, "WRITE", "graph/entity/*", false)
+	return p.checkWriteByType(ctx, entityTypeFromMetadata(ctx))
 }
 
 // ---------------------------------------------------------------------------
@@ -235,10 +257,11 @@ func (p *CartographerProxy) CreateEntity(
 }
 
 // UpdateEntity validates the WRITE grant against the entity type the SDK
-// resolved from its local ID-to-type mapping (SPEC R3:252). The mapping is
-// best-effort and may be stale, so the check is the mode-2 wildcard
-// best-effort — it never blocks — and the Cartographer enforces the true
-// per-type grant authoritatively on ingress.
+// resolved from its local ID-to-type mapping (SPEC R3:252 / Capability
+// Authorisation Chain). A specific resolved type is a mode-1 check that blocks
+// with PERMISSION_DENIED when the caller lacks WRITE:graph/entity/<type>; an
+// unknown or stale ID is annotated "*" and falls back to the mode-2 wildcard
+// best-effort check, with the Cartographer authoritative on ingress.
 func (p *CartographerProxy) UpdateEntity(
 	ctx context.Context, req *flowv1.UpdateEntityRequest,
 ) (*flowv1.UpdateEntityResponse, error) {
@@ -249,10 +272,11 @@ func (p *CartographerProxy) UpdateEntity(
 }
 
 // DeleteEntity validates the WRITE grant against the entity type the SDK
-// resolved from its local ID-to-type mapping (SPEC R3:252). The mapping is
-// best-effort and may be stale, so the check is the mode-2 wildcard
-// best-effort — it never blocks — and the Cartographer enforces the true
-// per-type grant authoritatively on ingress.
+// resolved from its local ID-to-type mapping (SPEC R3:252 / Capability
+// Authorisation Chain). A specific resolved type is a mode-1 check that blocks
+// with PERMISSION_DENIED when the caller lacks WRITE:graph/entity/<type>; an
+// unknown or stale ID is annotated "*" and falls back to the mode-2 wildcard
+// best-effort check, with the Cartographer authoritative on ingress.
 func (p *CartographerProxy) DeleteEntity(
 	ctx context.Context, req *flowv1.DeleteEntityRequest,
 ) (*flowv1.DeleteEntityResponse, error) {
@@ -263,10 +287,12 @@ func (p *CartographerProxy) DeleteEntity(
 }
 
 // CreateEdge validates the WRITE grant against the source entity type the SDK
-// resolved from its local ID-to-type mapping (SPEC R3:252). The mapping is
-// best-effort and may be stale, so the check is the mode-2 wildcard
-// best-effort — it never blocks — and the Cartographer enforces the true
-// per-type grant authoritatively on ingress.
+// resolved from its local ID-to-type mapping (SPEC R3:249-250, R3:252 /
+// Capability Authorisation Chain). A specific resolved type is a mode-1 check
+// that blocks with PERMISSION_DENIED when the caller lacks
+// WRITE:graph/entity/<type>; an unknown or stale source ID is annotated "*"
+// and falls back to the mode-2 wildcard best-effort check, with the
+// Cartographer authoritative on ingress.
 func (p *CartographerProxy) CreateEdge(
 	ctx context.Context, req *flowv1.CreateEdgeRequest,
 ) (*flowv1.CreateEdgeResponse, error) {

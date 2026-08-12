@@ -577,11 +577,13 @@ func TestCartographerProxy_E2E_ExportGraph_StreamsWithSignedCapabilities(t *test
 
 // TestCartographerProxy_E2E_MetadataType_PassesToCartographer pins the
 // metadata-driven WRITE gate for UpdateEntity/DeleteEntity/CreateEdge (SPEC
-// R3:252): the SDK resolves the entity type from its local ID-to-type mapping
-// and annotates entity_type metadata. The mapping is best-effort, so the
-// Sidecar's check is the mode-2 wildcard best-effort — it never blocks — and
-// each request reaches the Cartographer (the authoritative per-type enforcer)
-// carrying the resolved type.
+// R3:252 / Capability Authorisation Chain): the SDK resolves the entity type
+// from its local ID-to-type mapping and annotates entity_type metadata. A
+// specific resolved type is the mode-1 check — the Sidecar validates the
+// caller against WRITE:graph/entity/<type> and forwards when the type is held.
+// Here the node holds WRITE:graph/entity/Component and the resolved type is
+// Component, so each request reaches the Cartographer carrying the resolved
+// type.
 func TestCartographerProxy_E2E_MetadataType_PassesToCartographer(t *testing.T) {
 	const caps = "WRITE:graph/entity/Component,WRITE:graph/tx"
 	const (
@@ -609,54 +611,56 @@ func TestCartographerProxy_E2E_MetadataType_PassesToCartographer(t *testing.T) {
 	}
 
 	if _, err := tx.UpdateEntity(entityID, map[string]string{"name": "x"}, nil); err != nil {
-		t.Fatalf("UpdateEntity with held type should pass the mode-2 metadata check: %v", err)
+		t.Fatalf("UpdateEntity with held type should pass the mode-1 metadata check: %v", err)
 	}
 	if capture.lastMethod() != methodUpdateEntity {
 		t.Fatalf("expected UpdateEntity to reach the Cartographer, got %q", capture.lastMethod())
 	}
 
 	if _, err := tx.CreateEdge("DEPENDS_ON", entityID, targetID, nil); err != nil {
-		t.Fatalf("CreateEdge with held source type should pass the mode-2 metadata check: %v", err)
+		t.Fatalf("CreateEdge with held source type should pass the mode-1 metadata check: %v", err)
 	}
 	if capture.lastMethod() != methodCreateEdge {
 		t.Fatalf("expected CreateEdge to reach the Cartographer, got %q", capture.lastMethod())
 	}
 
 	if _, err := tx.DeleteEntity(entityID); err != nil {
-		t.Fatalf("DeleteEntity with held type should pass the mode-2 metadata check: %v", err)
+		t.Fatalf("DeleteEntity with held type should pass the mode-1 metadata check: %v", err)
 	}
 	if capture.lastMethod() != methodDeleteEntity {
 		t.Fatalf("expected DeleteEntity to reach the Cartographer, got %q", capture.lastMethod())
 	}
 
 	// The forwarded request carries the entity_type metadata the Sidecar
-	// consumed for its mode-2 best-effort check.
+	// consumed for its mode-1 specific-type check.
 	if got := capture.metadata().Get("entity_type"); len(got) != 1 || got[0] != entityTypeComponent {
 		t.Fatalf("expected entity_type=Component forwarded to Cartographer, got %v", got)
 	}
 }
 
-// TestCartographerProxy_E2E_StaleMetadataType_FallsBackToMode2 pins the stale
-// ID-to-type mapping fallback (SPEC R3:252): the SDK's best-effort mapping
-// "may be stale or miss entities created by other nodes", and the metadata
-// carries no staleness marker, so the Sidecar cannot distinguish a stale
-// annotation from a current one. Unknown or stale IDs must fall back to the
-// WRITE:graph/entity/* wildcard check (Sidecar mode 2) — never a mode-1 block
-// on the possibly-stale type — with the Cartographer authoritative on ingress.
-// Here the cache records entityID → Service (seeded from the CreateEntity
-// response) while the node holds only WRITE:graph/entity/Component: the
-// UpdateEntity/DeleteEntity/CreateEdge requests must NOT be denied at the
-// Sidecar and must reach the Cartographer carrying entity_type=Service.
-func TestCartographerProxy_E2E_StaleMetadataType_FallsBackToMode2(t *testing.T) {
+// TestCartographerProxy_E2E_Mode1_MetadataType_BlocksUnheldResolvedType pins
+// the mode-1 block for a metadata-carried specific type (SPEC Capability
+// Authorisation Chain:728-733 / R3:252): when the SDK resolves the specific
+// entity type (the entity was created or fetched through the same SDK client)
+// and annotates entity_type metadata, the Sidecar validates the caller's
+// capability against WRITE:graph/entity/<type> and blocks with
+// PERMISSION_DENIED when it is lacking. Here the cache records entityID →
+// Service (seeded from the CreateEntity response) while the node holds only
+// WRITE:graph/entity/Component: the UpdateEntity/DeleteEntity/CreateEdge
+// requests must be denied at the Sidecar and never reach the Cartographer.
+// (The mode-2 fallback in SPEC R3:252 applies only to unknown or TTL-stale IDs,
+// which the SDK annotates "*" — pinned separately by
+// TestCartographerProxy_E2E_Mode2_UnresolvableType_PassesThrough.)
+func TestCartographerProxy_E2E_Mode1_MetadataType_BlocksUnheldResolvedType(t *testing.T) {
 	const caps = "WRITE:graph/entity/Component,WRITE:graph/tx"
 	const (
 		entityID = "550e8400-e29b-41d4-a716-446655440000"
 		targetID = "f47ac10b-58cc-4372-a567-0e02b2c3d479"
 	)
 	capture, client, _ := setupCartographerWire(t, caps)
-	// Plant a stale mapping: the fake Cartographer reports the created entity
-	// as type Service, seeding entityID → Service into the SDK's cache while
-	// the node only holds WRITE:graph/entity/Component.
+	// The fake Cartographer reports the created entity as type Service, seeding
+	// entityID → Service into the SDK's TTL-fresh mapping while the node only
+	// holds WRITE:graph/entity/Component.
 	capture.createEntityID = entityID
 	capture.createEntityType = "Service"
 
@@ -670,39 +674,35 @@ func TestCartographerProxy_E2E_StaleMetadataType_FallsBackToMode2(t *testing.T) 
 	if _, err := tx.CreateEntity(entityTypeComponent, nil, nil, nil); err != nil {
 		t.Fatalf("CreateEntity (request body type Component, held): %v", err)
 	}
+	before := capture.count()
 
-	assertPasses := func(name string, call func() error) {
+	assertBlocked := func(name string, call func() error) {
 		t.Helper()
-		if err := call(); err != nil {
-			t.Fatalf("%s: stale metadata type must fall back to mode-2 pass-through, got %v", name, err)
+		if err := call(); err == nil {
+			t.Fatalf("%s: expected PERMISSION_DENIED for a resolved type the node lacks, got nil error", name)
+		} else if st, ok := status.FromError(err); !ok || st.Code() != codes.PermissionDenied {
+			t.Fatalf("%s: expected PermissionDenied, got %v", name, err)
 		}
 	}
 
-	assertPasses(methodUpdateEntity, func() error {
+	assertBlocked(methodUpdateEntity, func() error {
 		_, err := tx.UpdateEntity(entityID, nil, nil)
 		return err
 	})
-	if capture.lastMethod() != methodUpdateEntity {
-		t.Fatalf("expected UpdateEntity to reach the Cartographer, got %q", capture.lastMethod())
-	}
-	if got := capture.metadata().Get("entity_type"); len(got) != 1 || got[0] != "Service" {
-		t.Fatalf("expected entity_type=Service forwarded to Cartographer, got %v", got)
-	}
-
-	assertPasses(methodDeleteEntity, func() error {
+	assertBlocked(methodDeleteEntity, func() error {
 		_, err := tx.DeleteEntity(entityID)
 		return err
 	})
-	if capture.lastMethod() != methodDeleteEntity {
-		t.Fatalf("expected DeleteEntity to reach the Cartographer, got %q", capture.lastMethod())
-	}
-
-	assertPasses(methodCreateEdge, func() error {
+	assertBlocked(methodCreateEdge, func() error {
 		_, err := tx.CreateEdge("DEPENDS_ON", entityID, targetID, nil)
 		return err
 	})
-	if capture.lastMethod() != methodCreateEdge {
-		t.Fatalf("expected CreateEdge to reach the Cartographer, got %q", capture.lastMethod())
+
+	// Every mode-1 block must prevent its request from reaching the
+	// Cartographer: the request count is unchanged since CreateEntity.
+	if capture.count() != before {
+		t.Fatalf("mode-1 metadata blocks must prevent the requests from reaching the Cartographer, got %d requests (want %d)",
+			capture.count(), before)
 	}
 }
 
@@ -751,6 +751,29 @@ func TestCartographerProxy_E2E_Mode2_UnresolvableType_PassesThrough(t *testing.T
 	}
 	if capture.lastMethod() != methodCreateEdge {
 		t.Fatalf("expected CreateEdge to reach the Cartographer, got %q", capture.lastMethod())
+	}
+}
+
+// TestCartographerProxy_E2E_MetadataType_AbsentMetadata_FallsBackToMode2 pins
+// the absent-metadata branch of the metadata WRITE gate (SPEC R3:252 /
+// Capability Authorisation Chain:734-738): when the SDK attaches no
+// entity_type metadata the Sidecar cannot resolve a type, so the check falls
+// back to the mode-2 wildcard best-effort — it never blocks — and the request
+// reaches the Cartographer even when the node holds no WRITE:graph/entity
+// grant. The raw client issues UpdateEntity without any entity_type metadata,
+// exercising the "" resolution path directly at the proxy layer.
+func TestCartographerProxy_E2E_MetadataType_AbsentMetadata_FallsBackToMode2(t *testing.T) {
+	const caps = "WRITE:graph/tx"
+	w := setupCartographerWireFull(t, caps)
+	ctx := context.Background()
+
+	if _, err := w.rawClient.UpdateEntity(ctx, &flowv1.UpdateEntityRequest{
+		Id: "550e8400-e29b-41d4-a716-446655440000",
+	}); err != nil {
+		t.Fatalf("UpdateEntity with no entity_type metadata should fall back to mode-2 pass-through: %v", err)
+	}
+	if w.capture.lastMethod() != methodUpdateEntity {
+		t.Fatalf("expected UpdateEntity to reach the Cartographer, got %q", w.capture.lastMethod())
 	}
 }
 
