@@ -15,6 +15,10 @@ import (
 // transaction that has already been rolled back.
 var ErrTransactionRolledBack = fmt.Errorf("flow sdk: transaction has been rolled back")
 
+// ErrTransactionCommitted is returned when a method is called on a
+// transaction that has already been committed.
+var ErrTransactionCommitted = fmt.Errorf("flow sdk: transaction has been committed")
+
 // Transaction wraps a Cartographer transaction with an isolated graph context.
 type Transaction struct {
 	session    *session
@@ -22,12 +26,22 @@ type Transaction struct {
 	timeout    time.Duration
 	idTypeMap  *idTypeMap
 	rolledBack bool
+	committed  bool
 }
 
-// checkRolled returns an error if the transaction has been rolled back.
-func (tx *Transaction) checkRolled() error {
+// checkTerminal returns an error if the transaction has been rolled back or
+// committed. Once terminal, the handle rejects every further operation
+// locally: a committed transaction ID sent to the wire would otherwise fail
+// server-side with NOT_FOUND (SPEC error-table row "Transaction not found":
+// "already committed/rolled back"), and the R4 example's deferred
+// `tx.Rollback()` after a successful `tx.Commit()` would surface a spurious
+// discarded error.
+func (tx *Transaction) checkTerminal() error {
 	if tx.rolledBack {
 		return ErrTransactionRolledBack
+	}
+	if tx.committed {
+		return ErrTransactionCommitted
 	}
 	return nil
 }
@@ -46,7 +60,7 @@ func (tx *Transaction) Timeout() time.Duration { return tx.timeout }
 
 // ExecuteCypher executes a read-only Cypher query within the transaction.
 func (tx *Transaction) ExecuteCypher(cypher string, params map[string]any) ([]map[string]any, error) {
-	if err := tx.checkRolled(); err != nil {
+	if err := tx.checkTerminal(); err != nil {
 		return nil, err
 	}
 
@@ -95,7 +109,7 @@ func (tx *Transaction) ExecuteCypher(cypher string, params map[string]any) ([]ma
 
 // SearchNeighbors performs a vector similarity search within the transaction.
 func (tx *Transaction) SearchNeighbors(embedding []float32, entityType string, topK int) ([]SearchResult, error) {
-	if err := tx.checkRolled(); err != nil {
+	if err := tx.checkTerminal(); err != nil {
 		return nil, err
 	}
 	if err := validateEmbedding(embedding); err != nil {
@@ -134,7 +148,7 @@ func (tx *Transaction) SearchNeighbors(embedding []float32, entityType string, t
 
 // FullTextSearch performs a full-text search within the transaction.
 func (tx *Transaction) FullTextSearch(query, entityType string) ([]Entity, error) {
-	if err := tx.checkRolled(); err != nil {
+	if err := tx.checkTerminal(); err != nil {
 		return nil, err
 	}
 
@@ -169,7 +183,7 @@ func (tx *Transaction) FullTextSearch(query, entityType string) ([]Entity, error
 
 // ListEntities lists entities within the transaction.
 func (tx *Transaction) ListEntities(entityType string, opts ...ListEntitiesOption) (*EntityPage, error) {
-	if err := tx.checkRolled(); err != nil {
+	if err := tx.checkTerminal(); err != nil {
 		return nil, err
 	}
 
@@ -220,7 +234,7 @@ func (tx *Transaction) ListEntities(entityType string, opts ...ListEntitiesOptio
 func (tx *Transaction) CreateEntity(
 	entityType string, id *string, properties map[string]string, embedding []float32,
 ) (*Entity, error) {
-	if err := tx.checkRolled(); err != nil {
+	if err := tx.checkTerminal(); err != nil {
 		return nil, err
 	}
 	if err := validateEmbedding(embedding); err != nil {
@@ -262,7 +276,7 @@ func (tx *Transaction) CreateEntity(
 
 // UpdateEntity partially updates an entity within the transaction.
 func (tx *Transaction) UpdateEntity(id string, properties map[string]string, embedding []float32) (*Entity, error) {
-	if err := tx.checkRolled(); err != nil {
+	if err := tx.checkTerminal(); err != nil {
 		return nil, err
 	}
 	if err := validateUUIDOrEmpty(id); err != nil {
@@ -305,7 +319,7 @@ func (tx *Transaction) UpdateEntity(id string, properties map[string]string, emb
 
 // DeleteEntity deletes an entity within the transaction.
 func (tx *Transaction) DeleteEntity(id string) (*Entity, error) {
-	if err := tx.checkRolled(); err != nil {
+	if err := tx.checkTerminal(); err != nil {
 		return nil, err
 	}
 	if err := validateUUIDOrEmpty(id); err != nil {
@@ -342,7 +356,7 @@ func (tx *Transaction) DeleteEntity(id string) (*Entity, error) {
 func (tx *Transaction) CreateEdge(
 	edgeType, fromEntityID, toEntityID string, properties map[string]string,
 ) (*Edge, error) {
-	if err := tx.checkRolled(); err != nil {
+	if err := tx.checkTerminal(); err != nil {
 		return nil, err
 	}
 	if err := validateUUIDOrEmpty(fromEntityID); err != nil {
@@ -383,7 +397,7 @@ func (tx *Transaction) CreateEdge(
 
 // DeleteEdge deletes an edge within the transaction.
 func (tx *Transaction) DeleteEdge(id string) (*Edge, error) {
-	if err := tx.checkRolled(); err != nil {
+	if err := tx.checkTerminal(); err != nil {
 		return nil, err
 	}
 	if err := validateUUIDOrEmpty(id); err != nil {
@@ -420,7 +434,7 @@ func (tx *Transaction) DeleteEdge(id string) (*Edge, error) {
 
 // Diff returns the transaction's structured diff.
 func (tx *Transaction) Diff() (*TransactionDiff, error) {
-	if err := tx.checkRolled(); err != nil {
+	if err := tx.checkTerminal(); err != nil {
 		return nil, err
 	}
 
@@ -462,7 +476,7 @@ func (tx *Transaction) Diff() (*TransactionDiff, error) {
 
 // Refresh re-hydrates the transaction from latest main.
 func (tx *Transaction) Refresh() error {
-	if err := tx.checkRolled(); err != nil {
+	if err := tx.checkTerminal(); err != nil {
 		return err
 	}
 	err := tx.session.call(tx.session.ctx, func(ctx context.Context) error {
@@ -492,9 +506,14 @@ func WithAck() CommitOption {
 	}
 }
 
-// Commit commits the transaction back to main.
+// Commit commits the transaction back to main. A successful Commit marks the
+// handle terminal: every further operation (including a second Commit) is
+// rejected locally with ErrTransactionCommitted, and Rollback returns nil
+// idempotently without a wire call — the R4 example's deferred
+// `tx.Rollback()` after a successful `tx.Commit()` is a no-op. A Commit that
+// fails on the wire leaves the transaction open and retryable.
 func (tx *Transaction) Commit(opts ...CommitOption) error {
-	if err := tx.checkRolled(); err != nil {
+	if err := tx.checkTerminal(); err != nil {
 		return err
 	}
 
@@ -510,13 +529,17 @@ func (tx *Transaction) Commit(opts ...CommitOption) error {
 		})
 		return callErr
 	}, "")
-	return err
+	if err != nil {
+		return err
+	}
+	tx.committed = true
+	return nil
 }
 
 // Rollback discards the transaction branch.
 func (tx *Transaction) Rollback() error {
-	if tx.rolledBack {
-		return nil // idempotent
+	if tx.rolledBack || tx.committed {
+		return nil // idempotent — nothing to discard once terminal
 	}
 	err := tx.session.call(tx.session.ctx, func(ctx context.Context) error {
 		_, callErr := tx.session.Cartographer.RollbackTransaction(ctx, &flowv1.RollbackTransactionRequest{
@@ -537,7 +560,7 @@ func (tx *Transaction) Rollback() error {
 // otherwise applies the requested duration verbatim; this returns the applied
 // timeout the server granted (the requested duration, as no silent caps exist).
 func (tx *Transaction) ExtendTimeout(d time.Duration) (time.Duration, error) {
-	if err := tx.checkRolled(); err != nil {
+	if err := tx.checkTerminal(); err != nil {
 		return 0, err
 	}
 	if d <= 0 {
