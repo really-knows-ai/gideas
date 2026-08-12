@@ -688,6 +688,140 @@ func TestApplySchemaOnExistingDestructiveOrdering(t *testing.T) {
 	}
 }
 
+// TestApplySchemaDialFailure covers the step-10 dial-failure branch of applySchema
+// (foundrygraph_controller.go:386-389): the CartographerDialer returning an error before
+// any RPC (HealthCheck, ApplySchema) must short-circuit with a wrapped error. Unlike the
+// schema-diff branch (applySchemaOnExisting), the step-10 dial failure is NOT wrapped with
+// errExistingPodUnreachable — the new pod passed readiness, so there is no
+// missing-Deployment fall-through; it is an ordinary failure that funnels into the SPEC R6
+// transient-error requeue-with-backoff path.
+func TestApplySchemaDialFailure(t *testing.T) {
+	s := scheme.Scheme
+	_ = flowv1.AddToScheme(s)
+
+	fg := &flowv1.FoundryGraph{ObjectMeta: metav1.ObjectMeta{Name: defaultGraphName, Namespace: testNS}}
+	// applySchema re-fetches the CR (concurrent-deletion guard) before dialing, so the
+	// reconciler needs a client that can satisfy that Get.
+	fakeCli := fake.NewClientBuilder().WithScheme(s).WithObjects(fg).Build()
+
+	dialErr := errors.New("dial failed: connect refused")
+	r := &FoundryGraphReconciler{
+		Client: fakeCli,
+		Scheme: s,
+		CartographerDialer: func(ctx context.Context, endpoint string) (CartographerClient, error) {
+			// Dialing fails before any client exists.
+			return nil, dialErr
+		},
+	}
+
+	err := r.applySchema(context.Background(), fg, &flowv1.FoundryGraphSpec{})
+	if err == nil {
+		t.Fatal("expected an error when the dialer fails before any RPC")
+	}
+	if !strings.Contains(err.Error(), "dial cartographer") || !strings.Contains(err.Error(), "connect refused") {
+		t.Errorf("expected the dial error to be wrapped with context, got %v", err)
+	}
+}
+
+// TestApplySchemaHealthCheckFailure covers the step-10 HealthCheck-failure branch of
+// applySchema (foundrygraph_controller.go:396-399): a HealthCheck failure after a
+// successful dial must short-circuit before ApplySchema and surface a wrapped error (SPEC
+// R6 step 6 transient-error requeue path — the error funnels through setFailedCondition to
+// the requeue-with-backoff result).
+func TestApplySchemaHealthCheckFailure(t *testing.T) {
+	s := scheme.Scheme
+	_ = flowv1.AddToScheme(s)
+
+	fg := &flowv1.FoundryGraph{ObjectMeta: metav1.ObjectMeta{Name: defaultGraphName, Namespace: testNS}}
+	fakeCli := fake.NewClientBuilder().WithScheme(s).WithObjects(fg).Build()
+
+	applyCalled := false
+	r := &FoundryGraphReconciler{
+		Client: fakeCli,
+		Scheme: s,
+		CartographerDialer: func(ctx context.Context, endpoint string) (CartographerClient, error) {
+			return &mockCartographerClient{
+				healthCheckFn: func(context.Context, *flowv1gen.HealthCheckRequest) (*flowv1gen.HealthCheckResponse, error) {
+					return nil, status.Error(codes.Unavailable, "cartographer down")
+				},
+				applySchemaFn: func(context.Context, *flowv1gen.ApplySchemaRequest) (*flowv1gen.ApplySchemaResponse, error) {
+					applyCalled = true
+					return &flowv1gen.ApplySchemaResponse{}, nil
+				},
+			}, nil
+		},
+	}
+
+	err := r.applySchema(context.Background(), fg, &flowv1.FoundryGraphSpec{})
+	if err == nil {
+		t.Fatal("expected error from HealthCheck failure")
+	}
+	if !strings.Contains(err.Error(), "health check") || !strings.Contains(err.Error(), "cartographer down") {
+		t.Errorf("expected the HealthCheck error to be wrapped with context, got %v", err)
+	}
+	if applyCalled {
+		t.Error("expected ApplySchema NOT to be called when HealthCheck fails")
+	}
+}
+
+// TestReconcileStep10DialFailureRequeues pins the SPEC R6 step-6 transient-error requeue
+// classification for the step-10 applySchema dial failure: once the new pod has passed
+// readiness, an unreachable Cartographer is an ordinary failure — unlike the schema-diff
+// branch (applySchemaOnExisting), there is no missing-Deployment fall-through — so
+// Reconcile must surface the error (setFailedCondition → Ready=False/ReconcileFailed) and
+// controller-runtime re-queues with the step-5 exponential backoff.
+func TestReconcileStep10DialFailureRequeues(t *testing.T) {
+	s := scheme.Scheme
+	_ = flowv1.AddToScheme(s)
+	_ = appsv1.AddToScheme(s)
+	_ = corev1.AddToScheme(s)
+	_ = rbacv1.AddToScheme(s)
+
+	ns := testNS
+	fg := &flowv1.FoundryGraph{ObjectMeta: metav1.ObjectMeta{Name: defaultGraphName, Namespace: ns}}
+
+	// Operator-namespace signing secrets so reconcileSecrets succeeds; no schema diff so the
+	// reconcile skips applySchemaOnExisting and proceeds to the infra steps.
+	replicas := int32(1)
+	osign := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: operatorSigningKeySecretName, Namespace: "operator-ns"}, Data: map[string][]byte{"key": []byte("op"), "private-key": []byte("op-p")}}
+	ssign := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: sidecarSigningKeySecretName, Namespace: "operator-ns"}, Data: map[string][]byte{"key": []byte("sd"), "private-key": []byte("sd-p")}}
+	readyDeploy := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: cartographerSvcName, Namespace: ns},
+		Spec:       appsv1.DeploymentSpec{Replicas: &replicas},
+		Status:     appsv1.DeploymentStatus{AvailableReplicas: 1, ReadyReplicas: 1, UpdatedReplicas: 1},
+	}
+
+	fakeClient := fake.NewClientBuilder().WithScheme(s).WithObjects(fg, osign, ssign, readyDeploy).WithStatusSubresource(fg).Build()
+	ctx := context.Background()
+	nn := types.NamespacedName{Name: defaultGraphName, Namespace: ns}
+
+	// The step-10 dial fails (the newly-ready pod cannot be reached).
+	r := &FoundryGraphReconciler{
+		Client:            fakeClient,
+		Scheme:            s,
+		OperatorNamespace: "operator-ns",
+		CartographerPort:  50051,
+		CartographerImage: "cartographer:latest",
+		ReadinessTimeout:  time.Second,
+		ProxyRoutingTable: NewProxyRoutingTable(),
+		CartographerDialer: func(ctx context.Context, endpoint string) (CartographerClient, error) {
+			return nil, errors.New("dial failed: new pod unreachable")
+		},
+	}
+	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: nn}); err == nil {
+		t.Fatal("expected Reconcile to return an error when the step-10 dial fails (requeue with backoff)")
+	}
+
+	var got flowv1.FoundryGraph
+	if err := fakeClient.Get(ctx, nn, &got); err != nil {
+		t.Fatalf("get FoundryGraph: %v", err)
+	}
+	ready := meta.FindStatusCondition(got.Status.Conditions, "Ready")
+	if ready == nil || ready.Status != metav1.ConditionFalse || ready.Reason != reasonReconcileFailed {
+		t.Errorf("expected Ready=False/ReconcileFailed after step-10 dial failure, got %v", ready)
+	}
+}
+
 func TestReconcileBlockedPathSetsDestructiveChangeBlocked(t *testing.T) {
 	s := scheme.Scheme
 	_ = flowv1.AddToScheme(s)
