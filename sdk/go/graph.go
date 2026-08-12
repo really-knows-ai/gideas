@@ -284,7 +284,7 @@ type beginTxConfig struct {
 // local cap.
 //
 // This is the SDK-surface BeginTxOption prescribed by SPEC R4/R9 as
-// `graph.BeginTransaction(graph.WithTimeout(48 * time.Hour))`. It is distinct
+// `graph.BeginTransaction(flow.WithTimeout(48 * time.Hour))`. It is distinct
 // from the Client-level per-request timeout option WithRequestTimeout.
 func WithTimeout(d time.Duration) BeginTxOption {
 	return func(c *beginTxConfig) {
