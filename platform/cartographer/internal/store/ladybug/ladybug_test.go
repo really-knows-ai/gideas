@@ -2899,6 +2899,114 @@ func TestBranch_EmptyBranchNoMetadataRollsBackOnReopen(t *testing.T) {
 	}
 }
 
+// SPEC R9 recovery point 4 rolls back a transaction whose branch .lbug is
+// absent (e.g. PVC corruption); a present-but-corrupt branch .lbug is the same
+// loss mechanism and must be classified identically — ErrBranchNotFound, which
+// RecoverOpenTransactions turns into a rollback via cleanupTransaction/
+// DropBranchDB — instead of surfacing a hard error that wedges startup until a
+// human deletes the file (the pre-fix behavior). The classification mirrors
+// main's R8 corruption heuristic (corruptionCandidates): only a present,
+// OS-readable file the engine cannot open is treated as corruption; an
+// unreadable file is an operational failure and must stay a hard error so the
+// rollback path never deletes a branch DB that was never corrupt.
+func TestBranch_CorruptBranchLbugRollsBackOnReopen(t *testing.T) {
+	t.Run("readable corrupt .lbug rolls back", func(t *testing.T) {
+		dir := t.TempDir()
+		s, err := Open(dir)
+		if err != nil {
+			t.Fatalf("Open: %v", err)
+		}
+		ctx := context.Background()
+		applyTestSchema(t, s)
+
+		const branch = "tx-corrupt-lbug"
+		if err := s.CreateBranchDB(ctx, branch); err != nil {
+			t.Fatalf("CreateBranchDB: %v", err)
+		}
+		if err := s.ReplicateSchemaToBranch(ctx, branch); err != nil {
+			t.Fatalf("ReplicateSchemaToBranch: %v", err)
+		}
+		if err := s.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+		// Corrupt the persisted branch .lbug in place (PVC corruption).
+		path := filepath.Join(dir, "branches", branch+".lbug")
+		if err := os.WriteFile(path, []byte("not a ladybug database"), 0600); err != nil {
+			t.Fatalf("corrupt branch .lbug: %v", err)
+		}
+		if !corruptionCandidates(path) {
+			t.Fatal("expected corrupt branch .lbug to be classified as a corruption candidate")
+		}
+
+		reopened, err := Open(dir)
+		if err != nil {
+			t.Fatalf("reopen main: %v", err)
+		}
+		defer closeStore(t, reopened)
+
+		// A corrupt branch .lbug must be classified as ErrBranchNotFound — the
+		// recovery path (RecoverOpenTransactions) rolls the transaction back.
+		if _, err := reopened.DumpAllEntities(ctx, branch); !errors.Is(err, store.ErrBranchNotFound) {
+			t.Fatalf("DumpAllEntities = %v, want ErrBranchNotFound (rollback classification)", err)
+		}
+		// The rollback path drops the branch via DropBranchDB; it must succeed
+		// and remove the corrupt persisted .lbug.
+		if err := reopened.DropBranchDB(ctx, branch); err != nil {
+			t.Fatalf("DropBranchDB: %v", err)
+		}
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("corrupt branch .lbug was not removed by rollback: %v", err)
+		}
+		// After the rollback the branch is fully absent: classification stays
+		// ErrBranchNotFound, never a resurrected corrupt branch.
+		if _, err := reopened.DumpAllEntities(ctx, branch); !errors.Is(err, store.ErrBranchNotFound) {
+			t.Fatalf("DumpAllEntities after rollback = %v, want ErrBranchNotFound", err)
+		}
+	})
+
+	t.Run("unreadable .lbug stays a hard error", func(t *testing.T) {
+		dir := t.TempDir()
+		s, err := Open(dir)
+		if err != nil {
+			t.Fatalf("Open: %v", err)
+		}
+		ctx := context.Background()
+		applyTestSchema(t, s)
+
+		const branch = "tx-unreadable-lbug"
+		if err := s.CreateBranchDB(ctx, branch); err != nil {
+			t.Fatalf("CreateBranchDB: %v", err)
+		}
+		if err := s.ReplicateSchemaToBranch(ctx, branch); err != nil {
+			t.Fatalf("ReplicateSchemaToBranch: %v", err)
+		}
+		if err := s.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+		path := filepath.Join(dir, "branches", branch+".lbug")
+		if err := os.Chmod(path, 0000); err != nil {
+			t.Fatalf("chmod 000: %v", err)
+		}
+		// Not a corruption candidate: the open must fail loudly and the file
+		// must be preserved, mirroring main's R8 operational-failure handling.
+		if corruptionCandidates(path) {
+			t.Fatal("unreadable file must not be a corruption candidate")
+		}
+
+		reopened, err := Open(dir)
+		if err != nil {
+			t.Fatalf("reopen main: %v", err)
+		}
+		defer closeStore(t, reopened)
+		if _, err := reopened.DumpAllEntities(ctx, branch); errors.Is(err, store.ErrBranchNotFound) {
+			t.Fatalf("DumpAllEntities = %v, want a hard open failure (not ErrBranchNotFound)", err)
+		}
+		if _, statErr := os.Stat(path); statErr != nil {
+			t.Fatalf("unreadable branch .lbug was removed: %v", statErr)
+		}
+	})
+}
+
 func TestPersistence_CatalogMetadataMismatchFailsClosed(t *testing.T) {
 	for _, test := range []struct {
 		name   string
@@ -5127,21 +5235,16 @@ func TestLoadEntitiesFromDir_ReadDirError(t *testing.T) {
 		return os.ReadDir(path)
 	}
 
-	tests := map[string]func() error{
-		"main":          func() error { return db.loadEntitiesFromDir(entitiesDir, db.entityTypeDefs) },
-		"on connection": func() error { return db.loadEntitiesFromDirOnConn(db.conn, entitiesDir, db.entityTypeDefs) },
+	// The former "main" / "on connection" loader pair was merged into
+	// loadEntitiesFromDirOnConn (branch.go item 2 dedup); pin the merged
+	// function's error propagation once.
+	loadErr := db.loadEntitiesFromDirOnConn(db.conn, entitiesDir, db.entityTypeDefs)
+	if !errors.Is(loadErr, wantErr) {
+		t.Fatalf("expected injected ReadDir error, got %v", loadErr)
 	}
-	for name, load := range tests {
-		t.Run(name, func(t *testing.T) {
-			err := load()
-			if !errors.Is(err, wantErr) {
-				t.Fatalf("expected injected ReadDir error, got %v", err)
-			}
-			want := fmt.Sprintf("read entities dir %q", compDir)
-			if !strings.Contains(err.Error(), want) {
-				t.Fatalf("error %q does not identify wrapped operation and path %q", err, want)
-			}
-		})
+	want := fmt.Sprintf("read entities dir %q", compDir)
+	if !strings.Contains(loadErr.Error(), want) {
+		t.Fatalf("error %q does not identify wrapped operation and path %q", loadErr, want)
 	}
 }
 
@@ -7181,21 +7284,16 @@ func TestLoadEntitiesFromDir_ReadFileError(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	tests := map[string]func() error{
-		"main":          func() error { return db.loadEntitiesFromDir(entitiesDir, db.entityTypeDefs) },
-		"on connection": func() error { return db.loadEntitiesFromDirOnConn(db.conn, entitiesDir, db.entityTypeDefs) },
+	// The former "main" / "on connection" loader pair was merged into
+	// loadEntitiesFromDirOnConn (branch.go item 2 dedup); pin the merged
+	// function's error propagation once.
+	loadErr := db.loadEntitiesFromDirOnConn(db.conn, entitiesDir, db.entityTypeDefs)
+	if !errors.Is(loadErr, os.ErrNotExist) {
+		t.Fatalf("expected dangling-symlink ReadFile error, got %v", loadErr)
 	}
-	for name, load := range tests {
-		t.Run(name, func(t *testing.T) {
-			err := load()
-			if !errors.Is(err, os.ErrNotExist) {
-				t.Fatalf("expected dangling-symlink ReadFile error, got %v", err)
-			}
-			want := fmt.Sprintf("read entity file %q", fpath)
-			if !strings.Contains(err.Error(), want) {
-				t.Fatalf("error %q does not identify wrapped operation and path %q", err, want)
-			}
-		})
+	want := fmt.Sprintf("read entity file %q", fpath)
+	if !strings.Contains(loadErr.Error(), want) {
+		t.Fatalf("error %q does not identify wrapped operation and path %q", loadErr, want)
 	}
 }
 
@@ -7910,7 +8008,8 @@ func TestRehydrateMainFromFiles_RejectsTypeDirectoryMismatch(t *testing.T) {
 	edgesDir := filepath.Join(root, "edges")
 	// File is under the VectorType directory but declares type "Document". It
 	// also carries an embedding, pinning the ordering of the directory-mismatch
-	// guard against the embedding-bootstrap DDL (branch.go loadEntitiesFromDir):
+	// guard against the embedding-bootstrap DDL (branch.go
+	// loadEntitiesFromDirOnConn):
 	// the guard must reject the file BEFORE ensureEmbeddingLoadSchema ALTERs the
 	// directory-named table and locks a vector dimension on it (a file about to
 	// be rejected must never mutate schema state — SPEC R8 fail-loudly).

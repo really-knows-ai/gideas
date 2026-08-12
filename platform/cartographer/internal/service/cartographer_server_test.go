@@ -6924,7 +6924,13 @@ func TestRecoverOpenTransactionsSchemaPushDoesNotBlockCommit(t *testing.T) {
 	}
 }
 
-func TestRecoverOpenTransactionsRetainsCorruptBranch(t *testing.T) {
+// A corrupt branch .lbug is rolled back during recovery, mirroring the
+// absent-.lbug case (SPEC R9 recovery point 4): the R8-corruption
+// classification (branchLocked → ErrBranchNotFound) turns the transaction into
+// a rollback (DropBranchDB removes the corrupt file, the git branch is
+// deleted) so startup proceeds instead of wedging on a hard open error until a
+// human deletes the file (the pre-fix behavior).
+func TestRecoverOpenTransactionsRollsBackCorruptBranch(t *testing.T) {
 	ctx := testCtx()
 	dataPath := t.TempDir()
 	st, err := ladybug.Open(dataPath)
@@ -6950,19 +6956,23 @@ func TestRecoverOpenTransactionsRetainsCorruptBranch(t *testing.T) {
 		st, gs, opPub, initTestKey(), nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000,
 		WithLadybugPath(dataPath),
 	)
-	if err := srv.RecoverOpenTransactions(ctx); err == nil {
-		t.Fatal("expected corrupt branch recovery to fail")
+	// Startup must not wedge: recovery classifies the corrupt .lbug as a lost
+	// branch and rolls it back instead of returning a hard error.
+	if err := srv.RecoverOpenTransactions(ctx); err != nil {
+		t.Fatalf("recover transactions with corrupt branch should roll back, got %v", err)
 	}
-	if _, err := os.Stat(branchPath); err != nil {
-		t.Fatalf("corrupt branch was removed: %v", err)
+	// The rollback removed the corrupt branch .lbug.
+	if _, err := os.Stat(branchPath); !os.IsNotExist(err) {
+		t.Fatalf("corrupt branch .lbug was not removed by rollback: %v", err)
 	}
+	// The rollback deleted the git branch.
 	if err := gs.WithGitLock(func() error {
 		exists, err := gs.BranchExists(ctx, txID)
 		if err != nil {
 			return err
 		}
-		if !exists {
-			return errors.New("git branch was removed")
+		if exists {
+			return errors.New("git branch was not removed by rollback")
 		}
 		return nil
 	}); err != nil {

@@ -158,6 +158,25 @@ func (db *ladybugDB) branchLocked(txID string) (*branchDB, error) {
 	}
 	database, err := lbug.OpenDatabase(path, lbug.DefaultSystemConfig())
 	if err != nil {
+		// SPEC R9 recovery point 4 ("If the branch .lbug file itself is absent
+		// (e.g., PVC corruption), that transaction is rolled back") covers branch
+		// loss; a present-but-corrupt branch .lbug is the same loss mechanism and
+		// must not wedge startup either — without this, RecoverOpenTransactions
+		// propagates the open failure and main.go exits (a crash loop) until a
+		// human deletes the file. Mirror main's R8 corruption classification
+		// (corruptionCandidates, ladybug.go): a present, OS-readable file the
+		// engine cannot open is corruption → classify as ErrBranchNotFound so
+		// recovery rolls the transaction back (cleanupTransaction → DropBranchDB
+		// removes the corrupt file). An unreadable file (permission/IO) is an
+		// operational failure, not corruption — propagate the hard error instead
+		// of touching the file. The readability probe is the same heuristic as
+		// main's (see corruptionCandidates' ponytail), with a narrower blast
+		// radius: a false positive rolls back one transaction whose uncommitted
+		// changes were already unreachable through the unopenable branch DB,
+		// never main.
+		if corruptionCandidates(path) {
+			return nil, fmt.Errorf("%w: branch for tx %q", store.ErrBranchNotFound, txID)
+		}
 		return nil, fmt.Errorf("open persisted branch %q: %w", txID, err)
 	}
 	conn, err := lbug.OpenConnection(database)
@@ -554,7 +573,7 @@ func (db *ladybugDB) RehydrateMainFromFiles(ctx context.Context, entitiesDir, ed
 	result.Close()
 
 	// Read entities from JSON files.
-	if err := db.loadEntitiesFromDir(entitiesDir, entDefs); err != nil {
+	if err := db.loadEntitiesFromDirOnConn(db.conn, entitiesDir, entDefs); err != nil {
 		return err
 	}
 	// Fail if entities dir exists but edges dir does not (partial wipe).
@@ -564,7 +583,7 @@ func (db *ladybugDB) RehydrateMainFromFiles(ctx context.Context, entitiesDir, ed
 		}
 	}
 	// Read edges from JSON files.
-	if err := db.loadEdgesFromDir(edgesDir, edgeDefs); err != nil {
+	if err := db.loadEdgesFromDirOnConn(db.conn, edgesDir, edgeDefs); err != nil {
 		return err
 	}
 	// Promote the schema cache so any types inferred from the directory
@@ -1082,6 +1101,16 @@ func (db *ladybugDB) ensureEntityLoadSchema(
 		// If a future representation carries non-string values, the column
 		// type inference here would need corresponding handling.
 		names := make(map[string]bool)
+		// ponytail: this inference scan deliberately discards readDir /
+		// os.ReadFile / json.Unmarshal errors. Propagating them would defeat
+		// SPEC R8 inference from a partially-corrupt tree — one unparseable
+		// file in a type directory would abort that type's schema inference
+		// and take down re-hydration. The tolerance is self-correcting: the
+		// strict load path (loadEntitiesFromDirOnConn) re-reads the same files
+		// and fails loudly on any corrupt row, so a skipped file never results
+		// in a silently dropped entity. Ceiling: a skipped file's properties
+		// are absent from the inferred table, so a later row that references
+		// them fails loudly at insert time — never silently.
 		if files, err := db.readDir(typeDir); err == nil {
 			for _, f := range files {
 				if f.IsDir() || !strings.HasSuffix(f.Name(), ".json") {
@@ -1154,6 +1183,14 @@ func (db *ladybugDB) ensureEdgeLoadSchema(
 	}
 	names := make(map[string]bool)
 	pairs := make(map[string]fromToPair) // "from|to" -> pair
+	// ponytail: same deliberate error-tolerance as ensureEntityLoadSchema's
+	// inference scan — readDir / os.ReadFile / json.Unmarshal errors are
+	// skipped so SPEC R8 inference survives a partially-corrupt tree, while
+	// the strict load path (loadEdgesFromDirOnConn) re-reads the same files
+	// and fails loudly, so no row is silently dropped. Ceiling: a skipped
+	// file's properties/pairs are absent from the inferred rel table, so a
+	// later row that targets them fails loudly (or drops the CREATE) at
+	// strict-load time rather than being silently inferred.
 	if files, err := db.readDir(typeDir); err == nil {
 		for _, f := range files {
 			if f.IsDir() || !strings.HasSuffix(f.Name(), ".json") {
@@ -1295,239 +1332,11 @@ func (db *ladybugDB) ensureEmbeddingLoadSchema(
 	return nil
 }
 
-func (db *ladybugDB) loadEntitiesFromDir(dir string, entDefs map[string]*store.EntityTypeDef) error {
-	info, err := os.Stat(dir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
-	}
-	if !info.IsDir() {
-		return fmt.Errorf("%w: %q is not a directory", store.ErrInvalidEntityDir, dir)
-	}
-	entries, err := db.readDir(dir)
-	if err != nil {
-		return err
-	}
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		typeName := entry.Name()
-		// No schema-absent skip: a type directory present in the git
-		// file-per-element representation but absent from the applied schema is
-		// inferred from the directory structure by ensureEntityLoadSchema so
-		// re-hydration recovers the full graph state (SPEC R8). Silently
-		// skipping committed files would drop rows on the read path.
-		typeDir := filepath.Join(dir, typeName)
-		if err := db.ensureEntityLoadSchema(db.conn, typeName, typeDir, entDefs); err != nil {
-			return err
-		}
-		files, err := db.readDir(typeDir)
-		if err != nil {
-			return fmt.Errorf("read entities dir %q: %w", typeDir, err)
-		}
-		for _, f := range files {
-			if f.IsDir() || !strings.HasSuffix(f.Name(), ".json") {
-				continue
-			}
-			data, err := os.ReadFile(filepath.Join(typeDir, f.Name()))
-			if err != nil {
-				return fmt.Errorf("read entity file %q: %w", filepath.Join(typeDir, f.Name()), err)
-			}
-			var je struct {
-				ID         string            `json:"id"`
-				Type       string            `json:"type"`
-				Properties map[string]string `json:"properties"`
-				Embedding  []float32         `json:"embedding"`
-				CreatedAt  time.Time         `json:"created_at"`
-				UpdatedAt  time.Time         `json:"updated_at"`
-			}
-			if err := json.Unmarshal(data, &je); err != nil {
-				return fmt.Errorf("%w: unparseable entity file %q: %v",
-					store.ErrInvalidEntityDir, filepath.Join(typeDir, f.Name()), err)
-			}
-			if je.Type == "" {
-				return fmt.Errorf("%w: entity file %q is missing required key 'type'",
-					store.ErrInvalidEntityDir, filepath.Join(typeDir, f.Name()))
-			}
-			if je.ID == "" {
-				return fmt.Errorf("%w: entity file %q is missing required key 'id'",
-					store.ErrInvalidEntityDir, filepath.Join(typeDir, f.Name()))
-			}
-			// The raw filename base must equal the embedded id — the sibling
-			// gitstore read path's invariant (ReadAllEntityFiles rejects a file
-			// whose embedded id conflicts with its filename). A well-formed
-			// file is <id>.json whose embedded id equals the filename base
-			// (writeEntityFile); a corrupt/hand-edited file such as
-			// wrongname.json containing a canonical id would otherwise load
-			// silently under an id never written to that path — resurrecting a
-			// previously deleted element on re-hydration. Fail loudly instead.
-			if base := strings.TrimSuffix(f.Name(), ".json"); base != je.ID {
-				return fmt.Errorf("%w: entity file %s embedded id %s conflicts with filename",
-					store.ErrInvalidEntityDir, f.Name(), je.ID)
-			}
-			// The embedded id must be a canonical RFC4122 §3 UUID v4 string —
-			// the same gate the write path applies (validateUUID →
-			// store.ErrInvalidIDFormat, crud.go) and the sibling gitstore read
-			// path enforces (ReadAllEntityFiles rejects a non-canonical embedded
-			// id with ErrInvalidUUID). A corrupt/hand-edited file whose id is a
-			// non-canonical spelling of a valid UUID (uppercase hex, no-hyphen,
-			// braced, urn:uuid:) would otherwise load silently under that
-			// spelling during re-hydration (SPEC R8) — a second row for one
-			// UUID the write path would never produce. Fail loudly instead.
-			if err := validateUUID(je.ID); err != nil {
-				return fmt.Errorf("%w: entity file %s embedded id %s is not a valid UUID v4",
-					err, filepath.Join(typeDir, f.Name()), je.ID)
-			}
-			// The directory-mismatch guard runs BEFORE the embedding-bootstrap
-			// DDL: a corrupt/hand-edited file declaring a type that differs from
-			// its directory must be rejected before ensureEmbeddingLoadSchema
-			// locks a vector dimension on the directory-named table (SPEC R8
-			// fail-loudly — never mutate schema state for a file that is about
-			// to be rejected).
-			if je.Type != typeName {
-				return fmt.Errorf("%w: entity file %q declares type %q but is stored under directory %q",
-					store.ErrInvalidEntityDir, filepath.Join(typeDir, f.Name()), je.Type, typeName)
-			}
-			if len(je.Embedding) > 0 {
-				if err := db.ensureEmbeddingLoadSchema(db.conn, typeName, je.Embedding, entDefs); err != nil {
-					return err
-				}
-			}
-			props := je.Properties
-			if props == nil {
-				props = make(map[string]string)
-			}
-			entity := &store.Entity{
-				Id: je.ID, Type: je.Type, Properties: props,
-				Embedding: je.Embedding,
-				CreatedAt: je.CreatedAt, UpdatedAt: je.UpdatedAt,
-			}
-			if err := insertEntityOnConn(db.conn, typeName, entity, entDefs); err != nil {
-				return fmt.Errorf("insert entity %q: %w", je.ID, err)
-			}
-		}
-	}
-	return nil
-}
-
-func (db *ladybugDB) loadEdgesFromDir(dir string, edgeDefs map[string]*store.EdgeTypeDef) error {
-	info, err := os.Stat(dir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
-	}
-	if !info.IsDir() {
-		return fmt.Errorf("%w: %q is not a directory", store.ErrInvalidEdgeDir, dir)
-	}
-	entries, err := db.readDir(dir)
-	if err != nil {
-		return err
-	}
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		typeName := entry.Name()
-		// No schema-absent skip: a type directory present in the git
-		// file-per-element representation but absent from the applied schema is
-		// inferred from the directory structure by ensureEdgeLoadSchema so
-		// re-hydration recovers the full graph state (SPEC R8). Silently
-		// skipping committed files would drop rows on the read path.
-		typeDir := filepath.Join(dir, typeName)
-		if err := db.ensureEdgeLoadSchema(db.conn, typeName, typeDir, edgeDefs); err != nil {
-			return err
-		}
-		// The rel table's endpoint clauses (fixed at CREATE time, SPEC R2) are
-		// the labels insertEdgeOnConn's endpoint probe must accept.
-		pairs, err := connectionPairsOnConn(db.conn, typeName)
-		if err != nil {
-			return fmt.Errorf("read relationship endpoints for %q: %w", typeName, err)
-		}
-		files, err := db.readDir(typeDir)
-		if err != nil {
-			return fmt.Errorf("read edges dir %q: %w", typeDir, err)
-		}
-		for _, f := range files {
-			if f.IsDir() || !strings.HasSuffix(f.Name(), ".json") {
-				continue
-			}
-			data, err := os.ReadFile(filepath.Join(typeDir, f.Name()))
-			if err != nil {
-				return fmt.Errorf("read edge file %q: %w", filepath.Join(typeDir, f.Name()), err)
-			}
-			var je struct {
-				ID         string            `json:"id"`
-				Type       string            `json:"type"`
-				From       string            `json:"from"`
-				To         string            `json:"to"`
-				Properties map[string]string `json:"properties"`
-				CreatedAt  time.Time         `json:"created_at"`
-				UpdatedAt  time.Time         `json:"updated_at"`
-			}
-			if err := json.Unmarshal(data, &je); err != nil {
-				return fmt.Errorf("%w: unparseable edge file %q: %v",
-					store.ErrInvalidEdgeDir, filepath.Join(typeDir, f.Name()), err)
-			}
-			if je.Type == "" || je.From == "" || je.To == "" {
-				return fmt.Errorf("%w: edge file %q is missing required keys (type, from, to)",
-					store.ErrInvalidEdgeDir, filepath.Join(typeDir, f.Name()))
-			}
-			if je.ID == "" {
-				return fmt.Errorf("%w: edge file %q is missing required key 'id'",
-					store.ErrInvalidEdgeDir, filepath.Join(typeDir, f.Name()))
-			}
-			// The raw filename base must equal the embedded id — the sibling
-			// gitstore read path's invariant (ReadAllEdgeFiles rejects a file
-			// whose embedded id conflicts with its filename). A well-formed
-			// file is <id>.json whose embedded id equals the filename base
-			// (writeEdgeFile); a corrupt/hand-edited file such as wrongname.json
-			// containing a canonical id would otherwise load silently under an
-			// id never written to that path — resurrecting a previously deleted
-			// element on re-hydration. Fail loudly instead.
-			if base := strings.TrimSuffix(f.Name(), ".json"); base != je.ID {
-				return fmt.Errorf("%w: edge file %s embedded id %s conflicts with filename",
-					store.ErrInvalidEdgeDir, f.Name(), je.ID)
-			}
-			// The embedded id must be a canonical RFC4122 §3 UUID v4 string —
-			// the same gate the write path applies (validateUUID →
-			// store.ErrInvalidIDFormat, crud.go) and the sibling gitstore read
-			// path enforces (ReadAllEdgeFiles rejects a non-canonical embedded
-			// id with ErrInvalidUUID). A corrupt/hand-edited file whose id is a
-			// non-canonical spelling of a valid UUID (uppercase hex, no-hyphen,
-			// braced, urn:uuid:) would otherwise load silently under that
-			// spelling during re-hydration (SPEC R8) — a second row for one
-			// UUID the write path would never produce. Fail loudly instead.
-			if err := validateUUID(je.ID); err != nil {
-				return fmt.Errorf("%w: edge file %s embedded id %s is not a valid UUID v4",
-					err, filepath.Join(typeDir, f.Name()), je.ID)
-			}
-			if je.Type != typeName {
-				return fmt.Errorf("%w: edge file %q declares type %q but is stored under directory %q",
-					store.ErrInvalidEdgeDir, filepath.Join(typeDir, f.Name()), je.Type, typeName)
-			}
-			props := je.Properties
-			if props == nil {
-				props = make(map[string]string)
-			}
-			edge := &store.Edge{
-				Id: je.ID, Type: je.Type,
-				FromEntityID: je.From, ToEntityID: je.To,
-				Properties: props,
-				CreatedAt:  je.CreatedAt, UpdatedAt: je.UpdatedAt,
-			}
-			if err := insertEdgeOnConn(db.conn, typeName, pairs, edge); err != nil {
-				return fmt.Errorf("insert edge %q: %w", je.ID, err)
-			}
-		}
-	}
-	return nil
-}
-
+// loadEntitiesFromDirOnConn loads entities from JSON files onto an arbitrary
+// connection. It is the shared loader for both main re-hydration
+// (RehydrateMainFromFiles passes db.conn) and branch hydration
+// (HydrateBranchFromFiles passes br.conn); the former per-connection
+// duplicates of this function were deleted.
 func (db *ladybugDB) loadEntitiesFromDirOnConn(conn *lbug.Connection, dir string,
 	entDefs map[string]*store.EntityTypeDef) error {
 	info, err := os.Stat(dir)
@@ -1640,13 +1449,18 @@ func (db *ladybugDB) loadEntitiesFromDirOnConn(conn *lbug.Connection, dir string
 				CreatedAt: je.CreatedAt, UpdatedAt: je.UpdatedAt,
 			}
 			if err := insertEntityOnConn(conn, typeName, entity, entDefs); err != nil {
-				return fmt.Errorf("insert entity %q on branch: %w", je.ID, err)
+				return fmt.Errorf("insert entity %q: %w", je.ID, err)
 			}
 		}
 	}
 	return nil
 }
 
+// loadEdgesFromDirOnConn loads edges from JSON files onto an arbitrary
+// connection. It is the shared loader for both main re-hydration
+// (RehydrateMainFromFiles passes db.conn) and branch hydration
+// (HydrateBranchFromFiles passes br.conn); the former per-connection
+// duplicates of this function were deleted.
 func (db *ladybugDB) loadEdgesFromDirOnConn(conn *lbug.Connection, dir string,
 	edgeDefs map[string]*store.EdgeTypeDef) error {
 	info, err := os.Stat(dir)
@@ -1709,7 +1523,7 @@ func (db *ladybugDB) loadEdgesFromDirOnConn(conn *lbug.Connection, dir string,
 					store.ErrInvalidEdgeDir, filepath.Join(typeDir, f.Name()), err)
 			}
 			if je.Type == "" || je.From == "" || je.To == "" {
-				return fmt.Errorf("%w: edge file %q is missing required keys",
+				return fmt.Errorf("%w: edge file %q is missing required keys (type, from, to)",
 					store.ErrInvalidEdgeDir, filepath.Join(typeDir, f.Name()))
 			}
 			if je.ID == "" {
@@ -1756,7 +1570,7 @@ func (db *ladybugDB) loadEdgesFromDirOnConn(conn *lbug.Connection, dir string,
 				CreatedAt:  je.CreatedAt, UpdatedAt: je.UpdatedAt,
 			}
 			if err := insertEdgeOnConn(conn, typeName, pairs, edge); err != nil {
-				return fmt.Errorf("insert edge %q on branch: %w", je.ID, err)
+				return fmt.Errorf("insert edge %q: %w", je.ID, err)
 			}
 		}
 	}
