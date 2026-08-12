@@ -2676,7 +2676,7 @@ func TestSyncWorkerFetchAndPushCycle(t *testing.T) {
 		t.Fatalf("expected 1 PushRemote call, got %d", pushCalls)
 	}
 	for _, e := range mockPub.Events() {
-		if e.Event != nil && e.Event.EventType == "cartographer.push_failed" {
+		if e.Event != nil && e.Event.EventType == syncFailureEventType {
 			t.Fatal("push_failed telemetry emitted on successful push")
 		}
 	}
@@ -2997,8 +2997,8 @@ func TestSyncWorker_FailureEmitsTelemetry(t *testing.T) {
 			if len(events) != 1 {
 				t.Fatalf("expected exactly 1 telemetry event, got %d", len(events))
 			}
-			if events[0].Event == nil || events[0].Event.EventType != "cartographer.push_failed" {
-				t.Fatalf("expected a cartographer.push_failed event, got %+v", events[0])
+			if events[0].Event == nil || events[0].Event.EventType != syncFailureEventType {
+				t.Fatalf("expected a %s event, got %+v", syncFailureEventType, events[0])
 			}
 			if events[0].Event.FlowNamespace != "test-ns" {
 				t.Fatalf("expected FlowNamespace %q, got %q", "test-ns", events[0].Event.FlowNamespace)
@@ -3010,6 +3010,54 @@ func TestSyncWorker_FailureEmitsTelemetry(t *testing.T) {
 				t.Fatal("expected the failure error in the telemetry attributes")
 			}
 		})
+	}
+}
+
+// TestSyncWorker_NoRemote_ClassifiedNonRecoverable pins the SPEC error-table
+// row "Remote not configured" (FAILED_PRECONDITION) at the worker layer: when
+// the gitstore has no remote — FetchAndMerge returns ErrNoRemote, the
+// production misconfiguration of a non-empty REMOTE_URL whose SetRemote was
+// rejected non-fatally at startup with pullOnInit=false (cmd/main.go) — a
+// woken or timer cycle must not silently succeed. It returns ErrNoRemote
+// classified non-recoverable and emits a telemetry event, so Sync() surfaces
+// FAILED_PRECONDITION instead of reporting success without ever running a
+// fetch (SPEC R10 "one full cycle" promise, SPEC:992).
+func TestSyncWorker_NoRemote_ClassifiedNonRecoverable(t *testing.T) {
+	gs, err := gitstore.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("gitstore.New: %v", err)
+	}
+	base, err := ladybug.OpenInMemory()
+	if err != nil {
+		t.Fatalf("OpenInMemory: %v", err)
+	}
+	t.Cleanup(func() { _ = base.Close() })
+	syncGit := &syncMockGitStore{GitStore: gs, fetchErr: gitstore.ErrNoRemote}
+	mockPub := &mockTelemetryPublisher{}
+	sw := NewSyncWorker("https://example.com/repo.git", syncGit, base, RealClock{},
+		SyncWorkerWithAuditPublisher(mockPub), SyncWorkerWithPodNamespace("test-ns"))
+	sw.backoffFn = func(int) time.Duration { return 0 }
+	sw.SetPushNeeded()
+
+	res := sw.doSyncCycle()
+	if res.err == nil {
+		t.Fatal("expected the no-remote cycle to fail, not silently succeed")
+	}
+	if !errors.Is(res.err, gitstore.ErrNoRemote) {
+		t.Fatalf("expected ErrNoRemote as the cycle error, got %v", res.err)
+	}
+	if res.classification != syncNonRecoverable {
+		t.Fatalf("expected the no-remote cycle classified non-recoverable, got %v", res.classification)
+	}
+	events := mockPub.Events()
+	if len(events) != 1 {
+		t.Fatalf("expected exactly 1 telemetry event, got %d", len(events))
+	}
+	if events[0].Event == nil || events[0].Event.EventType != syncFailureEventType {
+		t.Fatalf("expected a %s event, got %+v", syncFailureEventType, events[0])
+	}
+	if got := events[0].Event.Attributes["operation"]; got != "fetch" {
+		t.Fatalf("expected operation %q, got %q", "fetch", got)
 	}
 }
 
@@ -3520,6 +3568,42 @@ func TestBeginTransaction_ImplicitSyncFailsProceeds(t *testing.T) {
 	}
 }
 
+// TestBeginTransaction_NoRemote_StillCreatesTransaction pins the SPEC R10
+// BeginTransaction implicit-sync contract for the "Remote not configured"
+// case: when the gitstore has no remote (a REMOTE_URL whose SetRemote was
+// rejected non-fatally at startup with pullOnInit=false, cmd/main.go), the
+// implicit-sync cycle fails with ErrNoRemote but the transaction is still
+// created from the current local state — sync errors are non-blocking
+// (SPEC:624-626 "If the cycle fails, the transaction is still created with the
+// current local state").
+func TestBeginTransaction_NoRemote_StillCreatesTransaction(t *testing.T) {
+	gs, err := gitstore.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("gitstore.New: %v", err)
+	}
+	syncGit := &syncMockGitStore{GitStore: gs, fetchErr: gitstore.ErrNoRemote}
+	srv, fc := newSyncServer(t, syncGit)
+
+	waitFor(t, func() bool { return fc.tickers() >= 1 }, "startup cycle")
+
+	begin, err := srv.BeginTransaction(testCtx(), &flowv1.BeginTransactionRequest{})
+	if err != nil {
+		t.Fatalf("BeginTransaction must succeed despite the no-remote implicit-sync failure: %v", err)
+	}
+	if begin.TransactionId == "" {
+		t.Fatal("expected a transaction ID")
+	}
+	if err := srv.txManager.ValidateActive(begin.TransactionId); err != nil {
+		t.Fatalf("transaction not registered: %v", err)
+	}
+	syncGit.mu.Lock()
+	fetchCalls := syncGit.fetchCalls
+	syncGit.mu.Unlock()
+	if fetchCalls < 2 {
+		t.Fatalf("expected the implicit-sync cycle to attempt a fetch, got %d", fetchCalls)
+	}
+}
+
 // TestSync_WakesWorkerAndBlocks verifies the Sync RPC contract: it wakes the
 // worker and blocks until the cycle completes, and propagates the cycle's
 // non-recoverable errors to the caller.
@@ -3624,6 +3708,32 @@ func TestSync_WakesWorkerAndBlocks(t *testing.T) {
 		}
 		if status.Code(err) != codes.FailedPrecondition {
 			t.Fatalf("expected FailedPrecondition for missing remote auth config, got %v (%v)", status.Code(err), err)
+		}
+	})
+
+	t.Run("propagates no-remote as FailedPrecondition", func(t *testing.T) {
+		// SPEC error-table row "Remote not configured" (SPEC:972) beyond the
+		// server gate: a server with remoteURL set but a gitstore with no
+		// remote — the production misconfiguration of a REMOTE_URL whose
+		// SetRemote was rejected non-fatally at startup (pullOnInit=false,
+		// cmd/main.go) — must surface FAILED_PRECONDITION through Sync(), not
+		// a silent success. ErrNoRemote is classified non-recoverable by the
+		// worker (classifySyncError → mapGitError, errors.go:164), so Sync
+		// reports the row instead of claiming a full cycle ran (SPEC R10).
+		gs, err := gitstore.New(t.TempDir())
+		if err != nil {
+			t.Fatalf("gitstore.New: %v", err)
+		}
+		syncGit := &syncMockGitStore{GitStore: gs, fetchErr: gitstore.ErrNoRemote}
+		srv, fc := newSyncServer(t, syncGit)
+		waitFor(t, func() bool { return fc.tickers() >= 1 }, "startup cycle")
+
+		_, err = srv.Sync(testCtx(), &flowv1.SyncRequest{})
+		if err == nil {
+			t.Fatal("expected Sync to propagate the no-remote error")
+		}
+		if status.Code(err) != codes.FailedPrecondition {
+			t.Fatalf("expected FailedPrecondition for a missing gitstore remote, got %v (%v)", status.Code(err), err)
 		}
 	})
 
