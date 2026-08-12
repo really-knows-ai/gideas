@@ -160,19 +160,23 @@ func main() {
 	// main.lbug was never corrupted. The ordering is deliberately
 	// trust-git-over-main.lbug: the transaction-only write model (SPEC R2)
 	// commits every mutation to git before main is re-hydrated (the git commit
-	// precedes RehydrateMainFromFiles in CommitTransaction), so main.lbug never
-	// holds data git lacks and the rebuild is always complete and lossless. The
-	// unconditional scope also covers the crash-mid-commit staleness case — a
-	// pod killed between the git commit and main's re-hydration leaves main.lbug
-	// behind main's HEAD, and only this startup rebuild recovers the committed
-	// data (no remote configured is required) — which a corruption-only gate
-	// would miss. Failure mode: if the R2 invariant ever broke (a future
-	// non-transactional write path), the rebuild would silently drop healthy
-	// main.lbug data; mitigated today by the RestoreMain + CleanUntracked that
-	// reset the working tree to main's HEAD before any files are read
-	// (rehydrateMainAfterRecovery). Upgrade path: surface a
-	// recovered-from-corruption signal from ladybug.Open (or gate on a
-	// main-is-empty probe) so a healthy main.lbug is left untouched.
+	// precedes RehydrateMainFromFiles in CommitTransaction), so the rebuild
+	// reads only data git already holds. The unconditional scope also covers
+	// the crash-mid-re-hydration staleness case — a pod killed during
+	// CommitTransaction's main re-hydration (after the transaction branch
+	// commit, before the fast-forward merge) leaves main.lbug partially wiped
+	// or stale, and this rebuild restores a complete, consistent main. Scope
+	// note: the rebuild reads main's tree, which does not contain an un-merged
+	// transaction commit — a crash after re-hydration but before the merge is
+	// recovered by the retried CommitTransaction, whose recovered state has
+	// CommitHydrated cleared (RecoverOpenTransactions) so it re-hydrates main
+	// from the transaction branch before merging. Failure mode: if the R2
+	// invariant ever broke (a future non-transactional write path), the
+	// rebuild would silently drop healthy main.lbug data; mitigated today by
+	// the RestoreMain + CleanUntracked that reset the working tree to main's
+	// HEAD before any files are read (rehydrateMainAfterRecovery). Upgrade
+	// path: surface a recovered-from-corruption signal from ladybug.Open (or
+	// gate on a main-is-empty probe) so a healthy main.lbug is left untouched.
 	// A failure here is fatal: serving an empty graph after a corrupt-reopen
 	// silently drops all committed data, so fail loudly instead.
 	if err := rehydrateMainAfterRecovery(context.Background(), dbStore, gs); err != nil {
