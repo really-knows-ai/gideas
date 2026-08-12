@@ -86,6 +86,60 @@ func TestDeploymentEnvVars(t *testing.T) {
 	}
 }
 
+// TestDeploymentEnvVarsPullOnInit exercises the two REMOTE_PULL_ON_INIT value branches
+// (foundrygraph_infra.go:301-304): the env var must be rendered from the CRD spec field
+// versioning.remote.pullOnInit — "true" when the field is set, "false" when it is unset
+// (SPEC R6 step 3: REMOTE_PULL_ON_INIT set from the corresponding CRD spec field; SPEC R5
+// table: default false). A wrong value in either branch must fail the test.
+func TestDeploymentEnvVarsPullOnInit(t *testing.T) {
+	r := &FoundryGraphReconciler{CartographerPort: 50051, CapabilityStalenessWindow: "30s"}
+
+	t.Run("true when pullOnInit is set", func(t *testing.T) {
+		fg := &flowv1.FoundryGraph{
+			ObjectMeta: metav1.ObjectMeta{Name: defaultGraphName},
+			Spec: flowv1.FoundryGraphSpec{
+				Versioning: &flowv1.VersioningSpec{
+					Remote: &flowv1.RemoteConfig{
+						URL:        "https://github.com/org/repo.git",
+						PullOnInit: true,
+					},
+				},
+			},
+		}
+
+		env := r.deploymentEnvVars(fg)
+		envMap := make(map[string]corev1.EnvVar, len(env))
+		for _, e := range env {
+			envMap[e.Name] = e
+		}
+		if e, ok := envMap["REMOTE_PULL_ON_INIT"]; !ok || e.Value != "true" {
+			t.Errorf("expected REMOTE_PULL_ON_INIT=true from versioning.remote.pullOnInit, got %+v (present=%v)", e, ok)
+		}
+	})
+
+	t.Run("false when pullOnInit is unset", func(t *testing.T) {
+		fg := &flowv1.FoundryGraph{
+			ObjectMeta: metav1.ObjectMeta{Name: defaultGraphName},
+			Spec: flowv1.FoundryGraphSpec{
+				Versioning: &flowv1.VersioningSpec{
+					Remote: &flowv1.RemoteConfig{
+						URL: "https://github.com/org/repo.git",
+					},
+				},
+			},
+		}
+
+		env := r.deploymentEnvVars(fg)
+		envMap := make(map[string]corev1.EnvVar, len(env))
+		for _, e := range env {
+			envMap[e.Name] = e
+		}
+		if e, ok := envMap["REMOTE_PULL_ON_INIT"]; !ok || e.Value != "false" {
+			t.Errorf("expected REMOTE_PULL_ON_INIT=false when pullOnInit is unset (SPEC R5 default), got %+v (present=%v)", e, ok)
+		}
+	})
+}
+
 // TestDeploymentEnvVarsRemoteAuthSecretRef exercises the REMOTE_AUTH_SECRET_REF env var
 // branch (foundrygraph_infra.go:300-302): when secretRef is set on the remote auth
 // config, the env var must be populated with the secret name.
