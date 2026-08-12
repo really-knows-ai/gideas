@@ -242,20 +242,7 @@ func main() {
 	// CartographerService: proxy to the real Cartographer if address is set.
 	// When unset or empty, the CartographerProxy is not created and
 	// Cartographer-related RPCs are unavailable from that node (SPEC R5).
-	var cartographerCloser func() error
-	if cartographerAddr != "" {
-		cartographerProxy, err := proxy.NewCartographerProxy(cartographerAddr)
-		if err != nil {
-			slog.Error("Failed to connect to Cartographer", "address", cartographerAddr, "error", err)
-			os.Exit(1)
-		}
-		flowv1.RegisterCartographerServiceServer(srv, cartographerProxy)
-		cartographerCloser = cartographerProxy.Close
-		slog.Info("Cartographer proxy enabled", "address", cartographerAddr)
-	} else {
-		cartographerCloser = func() error { return nil }
-		slog.Info("Cartographer proxy disabled (no CARTOGRAPHER_ADDRESS set)")
-	}
+	cartographerCloser := registerCartographerProxy(srv, cartographerAddr)
 
 	// Enable gRPC reflection for debugging with grpcurl.
 	reflection.Register(srv)
@@ -287,4 +274,26 @@ func main() {
 	}
 
 	slog.Info("Sidecar stopped")
+}
+
+// registerCartographerProxy wires the CartographerServiceServer proxy onto srv
+// when cartographerAddr is non-empty. When unset or empty, the CartographerProxy
+// is not created and Cartographer-related RPCs are unavailable from that node
+// (SPEC R5). The function is a seam extracted from main() — where the block
+// could not be reached by a test — so the R5 branch is pinnable. It returns a
+// closer for the proxy's gRPC connection (a no-op when the proxy is not
+// created).
+func registerCartographerProxy(srv *grpc.Server, cartographerAddr string) func() error {
+	if cartographerAddr == "" {
+		slog.Info("Cartographer proxy disabled (no CARTOGRAPHER_ADDRESS set)")
+		return func() error { return nil }
+	}
+	cartographerProxy, err := proxy.NewCartographerProxy(cartographerAddr)
+	if err != nil {
+		slog.Error("Failed to connect to Cartographer", "address", cartographerAddr, "error", err)
+		os.Exit(1)
+	}
+	flowv1.RegisterCartographerServiceServer(srv, cartographerProxy)
+	slog.Info("Cartographer proxy enabled", "address", cartographerAddr)
+	return cartographerProxy.Close
 }
