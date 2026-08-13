@@ -40,11 +40,15 @@ type Edge struct {
 
 // SearchResult is a single result from a vector similarity search.
 // Identity is exposed as typed fields; properties are carried losslessly.
+// Distance is the raw cosine distance to the query embedding — LOWER is more
+// similar, and results are ordered ascending by distance. It is a distance,
+// not a similarity score: consumers must not sort by Distance descending
+// expecting higher-is-better.
 type SearchResult struct {
 	ID         string
 	Type       string
 	Properties map[string]string
-	Similarity float64
+	Distance   float64
 }
 
 // EntityPage is a page of entities returned by ListEntities.
@@ -388,7 +392,7 @@ func (g *Graph) SearchNeighbors(embedding []float32, entityType string, topK int
 			ID:         r.GetEntityId(),
 			Type:       r.GetEntityType(),
 			Properties: r.GetProperties(),
-			Similarity: r.GetScore(),
+			Distance:   r.GetDistance(),
 		})
 		// Populate ID-to-type map.
 		g.idTypeMap.store(r.GetEntityId(), r.GetEntityType())

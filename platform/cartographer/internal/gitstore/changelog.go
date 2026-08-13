@@ -137,10 +137,18 @@ func (cl *ChangeLog) add(entry ChangeLogEntry) error {
 		if !cl.hasElement(entry.ID) {
 			cl.count++
 		}
-		cl.DeletedEntities[entry.ID] = &DeletionInfo{
+		info := &DeletionInfo{
 			Type:      entry.Type,
 			Suspected: entry.Suspected,
 		}
+		// The deleted entity's snapshot is optional: it is present for live
+		// deletions (recorded with the data in hand) and absent for suspected
+		// recovery deletions (the element is absent from the branch DB).
+		if entry.Entity != nil {
+			info.Properties = entry.Entity.Properties
+			info.Embedding = entry.Entity.Embedding
+		}
+		cl.DeletedEntities[entry.ID] = info
 	case ChangeAddEdge:
 		if entry.Edge == nil {
 			return ErrChangeLogNilSnapshot
@@ -161,10 +169,17 @@ func (cl *ChangeLog) add(entry ChangeLogEntry) error {
 		if !cl.hasElement(entry.ID) {
 			cl.count++
 		}
-		cl.DeletedEdges[entry.ID] = &DeletionInfo{
+		info := &DeletionInfo{
 			Type:      entry.Type,
 			Suspected: entry.Suspected,
 		}
+		// The deleted edge's snapshot is optional (see ChangeDelEntity above).
+		if entry.Edge != nil {
+			info.Properties = entry.Edge.Properties
+			info.FromEntityID = entry.Edge.FromEntityID
+			info.ToEntityID = entry.Edge.ToEntityID
+		}
+		cl.DeletedEdges[entry.ID] = info
 	default:
 		return ErrUnknownChangeKind
 	}
@@ -225,6 +240,12 @@ func (cl *ChangeLog) Entries() []ChangeLogEntry {
 			ID:        id,
 			Type:      info.Type,
 			Suspected: info.Suspected,
+			// Carry the captured payload so GetTransactionDiff can populate the
+			// wire fields for deleted entities (nil snapshot for suspected
+			// recoveries, whose payload is inherently absent).
+			Entity: &EntityEntry{
+				ID: id, Type: info.Type, Properties: info.Properties, Embedding: info.Embedding,
+			},
 		})
 	}
 	for id, edge := range cl.AddedEdges {
@@ -249,6 +270,13 @@ func (cl *ChangeLog) Entries() []ChangeLogEntry {
 			ID:        id,
 			Type:      info.Type,
 			Suspected: info.Suspected,
+			// Carry the captured payload so GetTransactionDiff can populate the
+			// wire fields for deleted edges (nil snapshot for suspected
+			// recoveries, whose payload is inherently absent).
+			Edge: &EdgeEntry{
+				ID: id, Type: info.Type, FromEntityID: info.FromEntityID,
+				ToEntityID: info.ToEntityID, Properties: info.Properties,
+			},
 		})
 	}
 

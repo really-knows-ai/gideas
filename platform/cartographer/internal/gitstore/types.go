@@ -112,10 +112,22 @@ const (
 	ChangeDelEdge
 )
 
-// DeletionInfo carries the type and suspected flag for a deleted entity or edge.
+// DeletionInfo carries the type and suspected flag for a deleted entity or edge,
+// plus the payload captured at live-deletion time. The payload fields let
+// GetTransactionDiff populate DiffEntry's declared properties/embedding/endpoint
+// fields for deleted entities/edges instead of dropping the data that was in
+// hand when the deletion was recorded. A deletion reconstructed during startup
+// recovery is flagged Suspected and has no payload — the element is absent from
+// the branch DB, so the payload fields are empty there.
 type DeletionInfo struct {
 	Type      string
 	Suspected bool // true when reconstructed during startup recovery
+
+	// Payload captured at live-deletion time. Empty for suspected recoveries.
+	Properties   map[string]string
+	Embedding    []float32
+	FromEntityID string // edges only
+	ToEntityID   string // edges only
 }
 
 // ChangeLogEntry is a generic entry used by Recovery and the

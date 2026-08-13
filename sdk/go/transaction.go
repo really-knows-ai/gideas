@@ -149,7 +149,7 @@ func (tx *Transaction) SearchNeighbors(embedding []float32, entityType string, t
 			ID:         r.GetEntityId(),
 			Type:       r.GetEntityType(),
 			Properties: r.GetProperties(),
-			Similarity: r.GetScore(),
+			Distance:   r.GetDistance(),
 		})
 		tx.idTypeMap.store(r.GetEntityId(), r.GetEntityType())
 	}

@@ -160,11 +160,6 @@ func (s *CartographerServer) publishTelemetry(eventType string, attrs map[string
 	}
 }
 
-// ReadSecret wraps readSecretFn.
-func (s *CartographerServer) ReadSecret(ctx context.Context, name string) (map[string]string, error) {
-	return s.readSecretFn(ctx, name)
-}
-
 func (s *CartographerServer) withGitLock(fn func() error) error {
 	return s.gitstore.WithGitLock(fn)
 }
@@ -374,6 +369,39 @@ func (s *CartographerServer) RecoverOpenTransactions(ctx context.Context) error 
 			continue
 		}
 		if dumpErr != nil {
+			// resetBranchStoreFromWorkingTree swaps the branch DB via a
+			// non-atomic rename loop (.lbug → .schema.json → .state.json), so a
+			// crash between the .lbug rename and the .schema.json rename leaves
+			// the swapped-in branch DB (built under main's *current* schema)
+			// paired with the stale pre-refresh .schema.json. When main gained a
+			// non-destructive R6 schema change during the transaction's lifetime,
+			// reopening that branch fails hard in restoreBranchSchemaMetadata →
+			// validateMetadataAgainstCatalog ("database entity type %q is absent
+			// from schema metadata" / property-count mismatch) — a hard error,
+			// not the os.ErrNotExist branch classified as recoverable above. The
+			// durable state record carries the refresh-in-progress marker across
+			// the swap (persisted before the renames begin, cleared only by the
+			// refresh's final persist), so a branch that cannot be opened while
+			// marked is a mid-swap casualty: its uncommitted mutations are
+			// unreachable through the unopenable branch DB (the .lbug is the only
+			// durable record of the transaction's mutations, and it is paired
+			// with an incompatible schema sidecar). Roll it back loudly — never
+			// hard-fail startup into a crash loop (SPEC R9 change-log recovery
+			// point 4's rollback posture for an unusable branch DB).
+			midSwap, midErr := s.isMidRefreshSwapBranch(ctx, txID)
+			if midErr != nil {
+				return fmt.Errorf("classify unopenable branch DB %q: %w", txID, midErr)
+			}
+			if midSwap {
+				if err := s.cleanupMissingRecoveryBranch(ctx, txID); err != nil {
+					return fmt.Errorf("roll back mid-swap transaction %q: %w", txID, err)
+				}
+				slog.Warn(
+					"RecoverOpenTransactions: rolled back transaction whose branch DB was left unusable by a mid-refresh swap crash",
+					"tx_id", txID,
+				)
+				continue
+			}
 			return fmt.Errorf("open transaction branch DB %q: %w", txID, dumpErr)
 		}
 		durableState, stateErr := s.store.LoadBranchTransactionState(ctx, txID)
@@ -452,6 +480,20 @@ func (s *CartographerServer) RecoverOpenTransactions(ctx context.Context) error 
 		// silently resetting to the 7-day hard maximum. A transaction whose branch
 		// record predates the persisted timeout (zero) still falls back to the hard
 		// maximum, matching the pre-persistence recovery behavior.
+		//
+		// IMPL-NOTE — SPEC divergence (R9 "absolute lifetime from BeginTransaction,
+		// not an idle timeout"): the restored timeout is re-based from the restart
+		// instant. txManager.Create sets ExpiresAt = now + AppliedTimeout and
+		// CreatedAt = now, so after each crash/restart the transaction's absolute
+		// lifetime AND its 7-day hard-maximum baseline (enforced against CreatedAt
+		// in ExtendTimeout, transaction_manager.go) reset from the restart moment —
+		// a transaction can live materially longer than 7 days measured from the
+		// original begin. This errs toward data preservation (a transaction is
+		// never killed early), so there is no silent data loss, but the SPEC's
+		// "absolute lifetime / hard maximum" guarantee holds per process lifetime,
+		// not per transaction lifetime. Closing the gap would require persisting
+		// CreatedAt (and the original begin instant) in the branch state and
+		// re-deriving ExpiresAt from it at recovery.
 		restoredTimeout := durableState.AppliedTimeout
 		if restoredTimeout <= 0 {
 			restoredTimeout = HardMaxTimeout
@@ -503,6 +545,27 @@ func (s *CartographerServer) cleanupMissingRecoveryBranch(ctx context.Context, t
 // failure.
 func isMissingBranchStateError(err error) bool {
 	return errors.Is(err, store.ErrBranchStateMissing)
+}
+
+// isMidRefreshSwapBranch reports whether a branch whose persisted DB failed to
+// open carries the refresh-in-progress marker, identifying the mid-refresh
+// branch-DB swap crash window (see RecoverOpenTransactions): the marker is
+// persisted on the transaction's durable record before the swap's renames
+// begin and cleared only by the refresh's final persist, so it is set in every
+// mid-swap crash state. A branch marked refresh-in-progress that cannot be
+// opened is a swap casualty — the swapped-in .lbug is paired with the stale
+// pre-refresh .schema.json — and must be rolled back loudly instead of
+// hard-failing startup. A branch without the marker (or with no durable
+// record) keeps the hard-error path so genuine corruption stays loud.
+func (s *CartographerServer) isMidRefreshSwapBranch(ctx context.Context, txID string) (bool, error) {
+	durable, err := s.store.LoadBranchTransactionState(ctx, txID)
+	if err != nil {
+		if isMissingBranchStateError(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return durable.BranchRefreshInProgress, nil
 }
 
 func (s *CartographerServer) cleanupIdenticalRecoveryBranch(ctx context.Context, txID string) error {
@@ -1060,24 +1123,15 @@ func (s *CartographerServer) SearchNeighbors(
 	}
 	proto := make([]*flowv1.SearchNeighborResult, 0, len(results))
 	for _, r := range results {
-		// ponytail: SearchNeighborResult.score (proto/flow/v1/cartographer.proto)
-		// carries the raw LadybugDB cosine *distance* — lower is more similar,
-		// and the store sorts ascending by distance (store.SearchNeighbors) —
-		// yet the wire field is named `score` and the SDK surfaces it as
-		// SearchResult.Similarity (sdk/go/graph.go), which by name implies
-		// higher-is-better similarity. A consumer ordering results by
-		// `Similarity` descending would invert the actual similarity ordering.
-		// The distance-vs-score mapping is documented only in the store layer
-		// and nowhere on the wire or in the SDK. Upgrade path: rename the wire
-		// field to `distance` (and the SDK field to `Distance`) across
-		// proto/flow/v1/cartographer.proto, the generated SDK, and the service
-		// mapping, or invert to a true similarity score (1/(1+distance) or
-		// 1-distance). Ceiling: the field name is wire-format stability —
-		// renaming breaks existing consumers, so the mismatch is preserved as
-		// long as the name stays.
+		// The wire field is `distance`: it carries the raw LadybugDB cosine
+		// distance — lower is more similar, and the store sorts ascending by
+		// distance (store.SearchNeighbors). The field is documented as a
+		// distance on the wire (proto/flow/v1/cartographer.proto) and the SDK
+		// surfaces it as SearchResult.Distance (sdk/go/graph.go), so a consumer
+		// ordering by Distance descending would invert the similarity ordering.
 		proto = append(proto, &flowv1.SearchNeighborResult{
 			EntityId: r.Entity.Id, EntityType: r.Entity.Type,
-			Properties: r.Entity.Properties, Score: r.Distance,
+			Properties: r.Entity.Properties, Distance: r.Distance,
 		})
 	}
 	return &flowv1.SearchNeighborsResponse{Results: proto}, nil
@@ -1365,12 +1419,28 @@ func (s *CartographerServer) DeleteEntity(
 	for _, e := range cascadeEdges {
 		if err := s.addTransactionChange(ctx, req.TransactionId, gitstore.ChangeLogEntry{
 			Kind: gitstore.ChangeDelEdge, ID: e.Id, Type: e.Type,
+			// Capture the cascade-deleted edge's endpoints and properties so
+			// GetTransactionDiff can populate DiffEntry's declared payload
+			// fields instead of dropping the data in hand (SPEC R2
+			// Transaction.Diff: a review node must be able to tell which
+			// endpoints a deleted edge connected).
+			Edge: &gitstore.EdgeEntry{
+				ID: e.Id, Type: e.Type,
+				FromEntityID: e.FromEntityID, ToEntityID: e.ToEntityID,
+				Properties: e.Properties, CreatedAt: e.CreatedAt, UpdatedAt: e.UpdatedAt,
+			},
 		}); err != nil {
 			return nil, err
 		}
 	}
 	if err := s.addTransactionChange(ctx, req.TransactionId, gitstore.ChangeLogEntry{
 		Kind: gitstore.ChangeDelEntity, ID: ent.Id, Type: ent.Type,
+		// Capture the deleted entity's properties and embedding so
+		// GetTransactionDiff can populate DiffEntry's declared payload fields.
+		Entity: &gitstore.EntityEntry{
+			ID: ent.Id, Type: ent.Type, Properties: ent.Properties,
+			Embedding: ent.Embedding, CreatedAt: ent.CreatedAt, UpdatedAt: ent.UpdatedAt,
+		},
 	}); err != nil {
 		return nil, err
 	}
@@ -1560,6 +1630,14 @@ func (s *CartographerServer) DeleteEdge(
 	}
 	if err := s.addTransactionChange(ctx, req.TransactionId, gitstore.ChangeLogEntry{
 		Kind: gitstore.ChangeDelEdge, ID: edge.Id, Type: edge.Type,
+		// Capture the deleted edge's endpoints and properties so
+		// GetTransactionDiff can populate DiffEntry's declared payload fields
+		// instead of dropping the data in hand.
+		Edge: &gitstore.EdgeEntry{
+			ID: edge.Id, Type: edge.Type,
+			FromEntityID: edge.FromEntityID, ToEntityID: edge.ToEntityID,
+			Properties: edge.Properties, CreatedAt: edge.CreatedAt, UpdatedAt: edge.UpdatedAt,
+		},
 	}); err != nil {
 		return nil, mapGitError(err)
 	}
@@ -2411,7 +2489,14 @@ func (s *CartographerServer) buildBranchStoreFromWorkingTree(ctx context.Context
 	}
 	entitiesDir, edgesDir := s.gitstore.HydrationDirs()
 	if err := s.store.HydrateBranchFromFiles(ctx, key, entitiesDir, edgesDir); err != nil {
-		return mapStoreError(err)
+		// SPEC error-table row "Commit serialisation or re-hydration failed"
+		// (SPEC:987) assigns INTERNAL to re-hydration failures during the
+		// transaction lifecycle. The store's hydration surface reports
+		// ErrInvalidEntityDir/ErrInvalidEdgeDir for working-tree directory
+		// inconsistencies; those are re-hydration failures — not client input
+		// errors — so they must surface INTERNAL, never INVALID_ARGUMENT via
+		// mapStoreError.
+		return status.Errorf(codes.Internal, "re-hydrate branch from working tree: %v", err)
 	}
 	return nil
 }
@@ -2630,12 +2715,22 @@ func (s *CartographerServer) WipeGraph(
 ) (*flowv1.WipeGraphResponse, error) {
 	s.txAdmission.Lock()
 	defer s.txAdmission.Unlock()
+	// The open-transactions guard runs before the git lock (SPEC R2 WipeGraph
+	// check order: "open-transactions check → git wipe + commit"). HasActive
+	// takes each registered transaction's lifecycle lock
+	// (transaction_manager.go), while every other git-acquiring path
+	// (Commit/Rollback/Refresh/GC) takes the lifecycle lock before the git
+	// lock; running the guard inside the git lock would invert that order and
+	// deadlock a concurrent WipeGraph against in-flight transaction work.
+	// Hoisting is also race-safe: txAdmission.Lock (held for the whole wipe)
+	// blocks new BeginTransaction calls, and a transaction can never transition
+	// from inactive to active, so a guard that passes here stays passed for the
+	// git-side duration.
+	if s.txManager.HasActive() {
+		return nil, errWipeGraphOpenTransactions()
+	}
 	var wipeErr error
 	lockErr := s.withGitLock(func() error {
-		if s.txManager.HasActive() {
-			wipeErr = errWipeGraphOpenTransactions()
-			return nil
-		}
 		// Restore the working tree to main before the git rm/commit. The tree
 		// can legitimately be checked out on a transaction branch after a
 		// failed commit (reconcileFailedCommitGitLocked, RefreshTransaction),
@@ -2691,13 +2786,11 @@ func (s *CartographerServer) WipeGraph(
 	})
 	if wipeErr != nil {
 		// The open-transactions guard is its own SPEC error (FAILED_PRECONDITION,
-		// error-table row 918). Every other git-side failure (git rm entities/edges,
-		// wipe commit, clean untracked) is a mid-wipe failure — the graph may be
-		// partially cleaned — and maps to INTERNAL per error-table row 940,
-		// mirroring the store-side mid-wipe path below (errWipeGraphMidWipe).
-		if status.Code(wipeErr) == codes.FailedPrecondition {
-			return nil, wipeErr
-		}
+		// error-table row 918) and runs before the git lock above. Every git-side
+		// failure here (git rm entities/edges, wipe commit, clean untracked) is a
+		// mid-wipe failure — the graph may be partially cleaned — and maps to
+		// INTERNAL per error-table row 940, mirroring the store-side mid-wipe path
+		// below (errWipeGraphMidWipe).
 		return nil, errWipeGraphMidWipe(wipeErr.Error())
 	}
 	if lockErr != nil {
@@ -2731,11 +2824,18 @@ func (s *CartographerServer) HealthCheck(
 // Sync wakes the background sync worker and blocks until one full sync cycle
 // completes (fetch → merge → re-hydrate → push).
 func (s *CartographerServer) Sync(ctx context.Context, req *flowv1.SyncRequest) (*flowv1.SyncResponse, error) {
-	if s.remoteURL == "" {
-		return nil, errRemoteNotConfigured()
-	}
+	// SPEC R10 Sync requires WRITE:graph/entity/*, and the SPEC check-order
+	// table lists Sync under "general rule only" — the capability gate. It runs
+	// before the remote-configuration probe so an unprivileged caller receives
+	// PERMISSION_DENIED regardless of whether a remote is configured; probing
+	// remoteURL first would disclose remote-configuration state (FAILED_PRECONDITION
+	// vs PERMISSION_DENIED) ahead of any authorization decision. Mirrors
+	// BeginTransaction (line 1596) and ExportGraph (line 2769), which gate first.
 	if err := s.checkWildcardEntityCap(ctx, "WRITE"); err != nil {
 		return nil, err
+	}
+	if s.remoteURL == "" {
+		return nil, errRemoteNotConfigured()
 	}
 	if s.syncWorker == nil {
 		return nil, status.Error(codes.Internal, "sync worker not initialised")
@@ -2941,48 +3041,50 @@ func toGitEdges(entries []*gitstore.EdgeEntry) []gitstore.Edge {
 	return r
 }
 
-// entityContentEqual returns true when the data content of a store.Entity
-// matches a gitstore.EntityFile (ignoring timestamps, since these may differ
-// due to JSON round-trip precision or re-hydration timing).
-func entityContentEqual(a store.Entity, b gitstore.EntityFile) bool {
-	if a.Id != b.ID || a.Type != b.Type {
+// contentEqual compares the shared data content of a store element against its
+// gitstore file form — ID, type, and the properties map — then delegates the
+// type-specific fields (edge endpoints, entity embedding) to extra. Timestamps
+// are ignored, since they may differ due to JSON round-trip precision or
+// re-hydration timing.
+func contentEqual(
+	idA, typeA string, propsA map[string]string,
+	idB, typeB string, propsB map[string]string,
+	extra func() bool,
+) bool {
+	if idA != idB || typeA != typeB {
 		return false
 	}
-	if len(a.Properties) != len(b.Properties) {
+	if len(propsA) != len(propsB) {
 		return false
 	}
-	for k, v := range a.Properties {
-		if b.Properties[k] != v {
+	for k, v := range propsA {
+		if propsB[k] != v {
 			return false
 		}
 	}
-	if len(a.Embedding) != len(b.Embedding) {
-		return false
-	}
-	for i := range a.Embedding {
-		if a.Embedding[i] != b.Embedding[i] {
-			return false
-		}
-	}
-	return true
+	return extra()
 }
 
-// edgeContentEqual returns true when the data content of a store.Edge
-// matches a gitstore.EdgeFile (ignoring timestamps).
-func edgeContentEqual(a store.Edge, b gitstore.EdgeFile) bool {
-	if a.Id != b.ID || a.Type != b.Type {
-		return false
-	}
-	if a.FromEntityID != b.FromEntityID || a.ToEntityID != b.ToEntityID {
-		return false
-	}
-	if len(a.Properties) != len(b.Properties) {
-		return false
-	}
-	for k, v := range a.Properties {
-		if b.Properties[k] != v {
+// entityContentEqual returns true when the data content of a store.Entity
+// matches a gitstore.EntityFile (the entity-specific embedding compare).
+func entityContentEqual(a store.Entity, b gitstore.EntityFile) bool {
+	return contentEqual(a.Id, a.Type, a.Properties, b.ID, b.Type, b.Properties, func() bool {
+		if len(a.Embedding) != len(b.Embedding) {
 			return false
 		}
-	}
-	return true
+		for i := range a.Embedding {
+			if a.Embedding[i] != b.Embedding[i] {
+				return false
+			}
+		}
+		return true
+	})
+}
+
+// edgeContentEqual returns true when the data content of a store.Edge matches
+// a gitstore.EdgeFile (the edge-specific endpoint compare).
+func edgeContentEqual(a store.Edge, b gitstore.EdgeFile) bool {
+	return contentEqual(a.Id, a.Type, a.Properties, b.ID, b.Type, b.Properties, func() bool {
+		return a.FromEntityID == b.FromEntityID && a.ToEntityID == b.ToEntityID
+	})
 }

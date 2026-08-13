@@ -75,7 +75,11 @@ message SearchNeighborResult {
   string entity_id = 1;
   string entity_type = 2;
   map<string, string> properties = 3;
-  double score = 4;
+  // distance is the raw LadybugDB cosine distance between the query embedding
+  // and this result's embedding — LOWER is more similar, and results are
+  // ordered ascending by distance. It is a distance, not a similarity score:
+  // consumers must not order by it descending expecting higher-is-better.
+  double distance = 4;
 }
 
 message FullTextSearchRequest {

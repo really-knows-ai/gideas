@@ -418,7 +418,7 @@ func TestSearchNeighbors_LosslessIdentityLikeProperties(t *testing.T) {
 							"entity_type": clobberedTypeProp,
 							"score":       "0.9",
 						},
-						Score: 0.9,
+						Distance: 0.9,
 					},
 				},
 			}, nil
@@ -445,8 +445,8 @@ func TestSearchNeighbors_LosslessIdentityLikeProperties(t *testing.T) {
 	if r.Properties["entity_type"] != clobberedTypeProp {
 		t.Errorf("expected identity-like property entity_type preserved, got %q", r.Properties["entity_type"])
 	}
-	if r.Similarity != 0.9 {
-		t.Errorf("expected similarity 0.9, got %v", r.Similarity)
+	if r.Distance != 0.9 {
+		t.Errorf("expected distance 0.9, got %v", r.Distance)
 	}
 }
 
@@ -1409,8 +1409,8 @@ func TestSearchNeighbors_PopulatesMap(t *testing.T) {
 		) (*flowv1.SearchNeighborsResponse, error) {
 			return &flowv1.SearchNeighborsResponse{
 				Results: []*flowv1.SearchNeighborResult{
-					{EntityId: "n1", EntityType: "Component", Score: 0.9},
-					{EntityId: "n2", EntityType: "Service", Score: 0.8},
+					{EntityId: "n1", EntityType: "Component", Distance: 0.9},
+					{EntityId: "n2", EntityType: "Service", Distance: 0.8},
 				},
 			}, nil
 		},

@@ -134,10 +134,6 @@ func mapStoreError(err error) error {
 		return status.Error(codes.FailedPrecondition, err.Error())
 	case errors.Is(err, store.ErrBranchAlreadyExists):
 		return status.Error(codes.AlreadyExists, err.Error())
-	case errors.Is(err, store.ErrInvalidEntityDir):
-		return status.Error(codes.InvalidArgument, err.Error())
-	case errors.Is(err, store.ErrInvalidEdgeDir):
-		return status.Error(codes.InvalidArgument, err.Error())
 
 	// Schema errors (from schema package, surfaced through store)
 	case isSchemaError(err):

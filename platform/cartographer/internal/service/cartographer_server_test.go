@@ -12479,3 +12479,543 @@ func TestDeleteEdge_ReturnsFullDeletedEdge(t *testing.T) {
 		t.Fatalf("deleted edge properties = %v, want weight=high", deleteResp.Properties)
 	}
 }
+
+// =========================================================================
+// Special-fixer review items (cartographer_server.go)
+// =========================================================================
+
+// hydrationDirErrorStore fails the refresh's branch re-hydration with the
+// store's ErrInvalidEntityDir sentinel — the error mapStoreError previously
+// misclassified as INVALID_ARGUMENT — to pin the SPEC re-hydration INTERNAL
+// mapping (SPEC:987).
+type hydrationDirErrorStore struct {
+	store.Store
+	fail bool
+}
+
+func (s *hydrationDirErrorStore) HydrateBranchFromFiles(
+	ctx context.Context, txID, entitiesDir, edgesDir string,
+) error {
+	if s.fail {
+		return fmt.Errorf("%w: entities directory inconsistent", store.ErrInvalidEntityDir)
+	}
+	return s.Store.HydrateBranchFromFiles(ctx, txID, entitiesDir, edgesDir)
+}
+
+// TestRefreshTransaction_RehydrationFailureIsInternal pins SPEC error-table
+// row "Commit serialisation or re-hydration failed" (INTERNAL, SPEC:987) for
+// the RefreshTransaction branch re-hydration path: a refresh whose
+// HydrateBranchFromFiles fails with the store's ErrInvalidEntityDir sentinel
+// must surface INTERNAL, never the INVALID_ARGUMENT the old mapStoreError
+// mapping produced. TestRefreshTransaction_HydrationFailureDoesNotAdvanceSyncHead
+// covers the plain-error hydration failure; this test covers the sentinel that
+// previously hit the removed ErrInvalidEntityDir/ErrInvalidEdgeDir →
+// INVALID_ARGUMENT mappings (errors.go).
+func TestRefreshTransaction_RehydrationFailureIsInternal(t *testing.T) {
+	ctx := testCtx()
+	dataPath := t.TempDir()
+	opPub, _ := generateTestKey()
+	base, err := ladybug.Open(dataPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = base.Close() })
+	dirErr := &hydrationDirErrorStore{Store: base}
+	gs, err := gitstore.New(dataPath)
+	if err != nil {
+		t.Fatalf("open git store: %v", err)
+	}
+	srv := NewCartographerServer(
+		dirErr, gs, opPub, initTestKey(), nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000,
+		WithLadybugPath(dataPath),
+	)
+	srv.MarkDBReady()
+	applyTestSchema(ctx, t, base)
+	begin, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
+	if err != nil {
+		t.Fatalf("BeginTransaction: %v", err)
+	}
+	if _, err := srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
+		EntityType: "Component", Properties: map[string]string{"name": "tx"}, TransactionId: begin.TransactionId,
+	}); err != nil {
+		t.Fatalf("CreateEntity: %v", err)
+	}
+	// Main advances while the transaction is open so the refresh re-hydrates.
+	interim, err := base.CreateEntity(ctx, "Component", "", map[string]string{"name": "interim"}, nil, "main")
+	if err != nil {
+		t.Fatalf("create interim entity: %v", err)
+	}
+	commitGitEntity(ctx, t, gs, interim.Id, "interim")
+	// Arm the failure for the refresh's HydrateBranchFromFiles call (the
+	// BeginTransaction call has already completed).
+	dirErr.fail = true
+
+	_, err = srv.RefreshTransaction(ctx, &flowv1.RefreshTransactionRequest{TransactionId: begin.TransactionId})
+	if err == nil {
+		t.Fatal("expected branch re-hydration failure during refresh")
+	}
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("expected Internal for branch re-hydration failure, got %v (%v)", status.Code(err), err)
+	}
+}
+
+// TestReadPathTransactionID_ScopesToTransaction pins the SPEC R2 read-path
+// positive branch (SPEC:189-194: "When present, the operation is scoped to that
+// transaction's isolated LadybugDB instance. When absent, the operation reads
+// from main") at the service layer: with a valid active transaction, every
+// read-path RPC routed through the handler's transactionId wiring
+// (ExecuteCypher, SearchNeighbors, FullTextSearch, ListEntities) must observe
+// the transaction's branch data, and the unscoped call must observe main's
+// (empty) data. TestReadPathTransactionID_Rejected pins the rejection half
+// (invalid/unknown transactionId) and the store-layer TestBranch_*Scoped tests
+// pin the store primitive; this test pins the handler pass-through.
+func TestReadPathTransactionID_ScopesToTransaction(t *testing.T) {
+	srv, _ := newTestServer(t)
+	ctx := testCtx()
+
+	schema := &flowv1.Schema{
+		EntityTypes: []*flowv1.EntityType{
+			{Name: "Component", Properties: []*flowv1.Property{{Name: "name", Type: "string", Required: true}}},
+			{Name: "VectorType", EnableVectorIndex: true, Properties: []*flowv1.Property{{Name: "name", Type: "string"}}},
+		},
+	}
+	if err := srv.store.ApplySchema(ctx, schema); err != nil {
+		t.Fatalf("ApplySchema: %v", err)
+	}
+	txID := beginTestTx(t, srv, ctx)
+	comp, err := srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
+		EntityType: "Component", Properties: map[string]string{"name": "gadget"}, TransactionId: txID,
+	})
+	if err != nil {
+		t.Fatalf("CreateEntity: %v", err)
+	}
+	vec, err := srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
+		EntityType: "VectorType", Properties: map[string]string{"name": "vec"},
+		Embedding: []float32{1.0, 0.0, 0.0}, TransactionId: txID,
+	})
+	if err != nil {
+		t.Fatalf("CreateEntity vector: %v", err)
+	}
+
+	t.Run("ListEntities scoped to branch", func(t *testing.T) {
+		scoped, err := srv.ListEntities(ctx, &flowv1.ListEntitiesRequest{
+			EntityType: "Component", PageSize: 100, TransactionId: txID,
+		})
+		if err != nil {
+			t.Fatalf("scoped ListEntities: %v", err)
+		}
+		if len(scoped.Entities) != 1 || scoped.Entities[0].EntityId != comp.EntityId {
+			t.Fatalf("scoped ListEntities = %+v, want the transaction's entity", scoped.Entities)
+		}
+		unscoped, err := srv.ListEntities(ctx, &flowv1.ListEntitiesRequest{EntityType: "Component", PageSize: 100})
+		if err != nil {
+			t.Fatalf("unscoped ListEntities: %v", err)
+		}
+		if len(unscoped.Entities) != 0 {
+			t.Fatalf("unscoped ListEntities saw transaction data: %+v", unscoped.Entities)
+		}
+	})
+
+	t.Run("ExecuteCypher scoped to branch", func(t *testing.T) {
+		scoped, err := srv.ExecuteCypher(ctx, &flowv1.ExecuteCypherRequest{
+			Cypher: "MATCH (n:Component) RETURN n", TransactionId: txID,
+		})
+		if err != nil {
+			t.Fatalf("scoped ExecuteCypher: %v", err)
+		}
+		if len(scoped.Rows) != 1 {
+			t.Fatalf("scoped ExecuteCypher rows = %d, want 1", len(scoped.Rows))
+		}
+		unscoped, err := srv.ExecuteCypher(ctx, &flowv1.ExecuteCypherRequest{Cypher: "MATCH (n:Component) RETURN n"})
+		if err != nil {
+			t.Fatalf("unscoped ExecuteCypher: %v", err)
+		}
+		if len(unscoped.Rows) != 0 {
+			t.Fatalf("unscoped ExecuteCypher saw transaction data: %+v", unscoped.Rows)
+		}
+	})
+
+	t.Run("FullTextSearch scoped to branch", func(t *testing.T) {
+		scoped, err := srv.FullTextSearch(ctx, &flowv1.FullTextSearchRequest{
+			Query: "gadget", EntityType: "Component", TransactionId: txID,
+		})
+		if err != nil {
+			t.Fatalf("scoped FullTextSearch: %v", err)
+		}
+		if len(scoped.Results) != 1 || scoped.Results[0].EntityId != comp.EntityId {
+			t.Fatalf("scoped FullTextSearch = %+v, want the transaction's entity", scoped.Results)
+		}
+		unscoped, err := srv.FullTextSearch(ctx, &flowv1.FullTextSearchRequest{Query: "gadget", EntityType: "Component"})
+		if err != nil {
+			t.Fatalf("unscoped FullTextSearch: %v", err)
+		}
+		if len(unscoped.Results) != 0 {
+			t.Fatalf("unscoped FullTextSearch saw transaction data: %+v", unscoped.Results)
+		}
+	})
+
+	t.Run("SearchNeighbors scoped to branch", func(t *testing.T) {
+		scoped, err := srv.SearchNeighbors(ctx, &flowv1.SearchNeighborsRequest{
+			Embedding: []float32{1.0, 0.0, 0.0}, EntityType: "VectorType", TopK: 5, TransactionId: txID,
+		})
+		if err != nil {
+			t.Fatalf("scoped SearchNeighbors: %v", err)
+		}
+		if len(scoped.Results) != 1 || scoped.Results[0].EntityId != vec.EntityId {
+			t.Fatalf("scoped SearchNeighbors = %+v, want the transaction's entity", scoped.Results)
+		}
+		unscoped, err := srv.SearchNeighbors(ctx, &flowv1.SearchNeighborsRequest{
+			Embedding: []float32{1.0, 0.0, 0.0}, EntityType: "VectorType", TopK: 5,
+		})
+		if err != nil {
+			t.Fatalf("unscoped SearchNeighbors: %v", err)
+		}
+		if len(unscoped.Results) != 0 {
+			t.Fatalf("unscoped SearchNeighbors saw transaction data: %+v", unscoped.Results)
+		}
+	})
+}
+
+// TestSearchNeighbors_MissingCapBeforeTypeCheck pins the SPEC check-order row
+// "SearchNeighbors / FullTextSearch: capability → structural" (SPEC:1019) at
+// the service layer for SearchNeighbors: a caller lacking READ capability who
+// also supplies an unknown entity type must receive PERMISSION_DENIED (the
+// capability gate fires first), never the structural INVALID_ARGUMENT from
+// errUnknownEntityType. TestSearchNeighbors_NaNBeforeTypeCheck pins the
+// NaN-before-type ordering with full capabilities; only this test detects a
+// gate reorder that moved capability after the type check.
+func TestSearchNeighbors_MissingCapBeforeTypeCheck(t *testing.T) {
+	srv, _ := newTestServer(t)
+	ctx := noReadCtx() // WRITE-only, no READ
+
+	_, err := srv.SearchNeighbors(ctx, &flowv1.SearchNeighborsRequest{
+		Embedding:  []float32{1.0, 2.0, 3.0},
+		EntityType: "NonExistentType",
+		TopK:       5,
+	})
+	if err == nil {
+		t.Fatal("expected error for missing READ capability, got nil")
+	}
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("expected PermissionDenied (capability gate first), got %v", status.Code(err))
+	}
+}
+
+// TestFullTextSearch_MissingCapBeforeTypeCheck pins the same capability →
+// structural ordering for FullTextSearch (SPEC:1019).
+func TestFullTextSearch_MissingCapBeforeTypeCheck(t *testing.T) {
+	srv, _ := newTestServer(t)
+	ctx := noReadCtx() // WRITE-only, no READ
+
+	_, err := srv.FullTextSearch(ctx, &flowv1.FullTextSearchRequest{
+		Query:      "apple",
+		EntityType: "NonExistentType",
+	})
+	if err == nil {
+		t.Fatal("expected error for missing READ capability, got nil")
+	}
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("expected PermissionDenied (capability gate first), got %v", status.Code(err))
+	}
+}
+
+// TestExecuteCypher_MutationRejectedBeforeCapability pins the SPEC ExecuteCypher
+// check order (SPEC:1018: empty query → Cypher syntax → read-only enforcement →
+// capability) for a combined fault: a caller lacking READ capability sending a
+// mutation statement must receive the read-only enforcement's PERMISSION_DENIED
+// ("mutation or DDL Cypher statements are not allowed"), NOT the capability
+// gate's denial — the read-only enforcement precedes the capability check.
+// Every mutation test uses a full-capability context and every capability test
+// uses a read-only statement, so only a combined-fault test can detect a
+// reorder that surfaced the capability denial ahead of the read-only rejection.
+func TestExecuteCypher_MutationRejectedBeforeCapability(t *testing.T) {
+	srv, st := newTestServer(t)
+	ctx := noReadCtx() // WRITE-only, no READ
+	applyTestSchema(ctx, t, st)
+
+	_, err := srv.ExecuteCypher(ctx, &flowv1.ExecuteCypherRequest{
+		Cypher: "CREATE (n:Component {id: '11111111-1111-1111-1111-111111111111', name: 'x'})",
+	})
+	if err == nil {
+		t.Fatal("expected error for mutation statement from a no-READ caller, got nil")
+	}
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("expected PermissionDenied, got %v", status.Code(err))
+	}
+	if msg := status.Convert(err).Message(); !strings.Contains(msg, "mutation or DDL") {
+		t.Fatalf("expected the read-only enforcement's rejection (mutation/DDL), got %q", msg)
+	}
+}
+
+// TestGetTransactionDiff_LiveDeletePopulatesDeletionBuckets pins SPEC R2
+// GetTransactionDiff's deleted_entities / deleted_edges wire fields for a live
+// (non-recovery) transaction: after a DeleteEntity and a DeleteEdge inside an
+// open transaction, the RPC response must carry the deleted entities and edges
+// in their respective buckets, populated with the payload captured at deletion
+// time (properties for the entity, endpoints for the edge). All prior
+// assertions on these buckets came from the recovery path (suspected
+// deletions), so a regression that stopped populating them for a normal delete
+// would previously fail no test.
+func TestGetTransactionDiff_LiveDeletePopulatesDeletionBuckets(t *testing.T) {
+	srv, _ := newTestServer(t)
+	ctx := testCtx()
+	applyTestSchema(ctx, t, srv.store)
+	txID := beginTestTx(t, srv, ctx)
+	svc, err := srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
+		EntityType: "Service", Properties: map[string]string{"name": "svc"}, TransactionId: txID,
+	})
+	if err != nil {
+		t.Fatalf("CreateEntity svc: %v", err)
+	}
+	comp, err := srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
+		EntityType: "Component", Properties: map[string]string{"name": "core"}, TransactionId: txID,
+	})
+	if err != nil {
+		t.Fatalf("CreateEntity comp: %v", err)
+	}
+	edge, err := srv.CreateEdge(ctx, &flowv1.CreateEdgeRequest{
+		EdgeType: "DEPENDS_ON", FromEntityId: svc.EntityId, ToEntityId: comp.EntityId,
+		Properties: map[string]string{"weight": "medium"}, TransactionId: txID,
+	})
+	if err != nil {
+		t.Fatalf("CreateEdge: %v", err)
+	}
+	// A standalone DeleteEdge must populate deleted_edges with its endpoints.
+	if _, err := srv.DeleteEdge(ctx, &flowv1.DeleteEdgeRequest{Id: edge.EdgeId, TransactionId: txID}); err != nil {
+		t.Fatalf("DeleteEdge: %v", err)
+	}
+	// Deleting the entity populates deleted_entities with its payload.
+	if _, err := srv.DeleteEntity(ctx, &flowv1.DeleteEntityRequest{Id: svc.EntityId, TransactionId: txID}); err != nil {
+		t.Fatalf("DeleteEntity: %v", err)
+	}
+
+	diff, err := srv.GetTransactionDiff(ctx, &flowv1.GetTransactionDiffRequest{TransactionId: txID})
+	if err != nil {
+		t.Fatalf("GetTransactionDiff: %v", err)
+	}
+	if len(diff.DeletedEntities) != 1 || diff.DeletedEntities[0].Id != svc.EntityId {
+		t.Fatalf("expected the deleted entity in deleted_entities, got %+v", diff.DeletedEntities)
+	}
+	if diff.DeletedEntities[0].Suspected {
+		t.Fatal("live deletion must not be marked suspected")
+	}
+	if diff.DeletedEntities[0].Properties["name"] != "svc" {
+		t.Fatalf("deleted entity payload dropped: %+v", diff.DeletedEntities[0].Properties)
+	}
+	if len(diff.DeletedEdges) != 1 || diff.DeletedEdges[0].Id != edge.EdgeId {
+		t.Fatalf("expected the deleted edge in deleted_edges, got %+v", diff.DeletedEdges)
+	}
+	if diff.DeletedEdges[0].Suspected {
+		t.Fatal("live deletion must not be marked suspected")
+	}
+	if diff.DeletedEdges[0].FromEntityId != svc.EntityId || diff.DeletedEdges[0].ToEntityId != comp.EntityId {
+		t.Fatalf(
+			"deleted edge endpoints dropped: from=%q to=%q",
+			diff.DeletedEdges[0].FromEntityId, diff.DeletedEdges[0].ToEntityId,
+		)
+	}
+	if diff.DeletedEdges[0].Properties["weight"] != "medium" {
+		t.Fatalf("deleted edge payload dropped: %+v", diff.DeletedEdges[0].Properties)
+	}
+}
+
+// TestWipeGraph_RemovesUntrackedResidualFiles pins the SPEC R2 WipeGraph
+// sentence "performs a git clean -fd on the working tree to remove any
+// untracked residual files" (SPEC:207): a wipe must remove a file planted in
+// the git working tree so a subsequent re-hydration on restart does not
+// encounter stale files from removed types. The gitstore primitive is pinned
+// by TestCleanUntracked (gitstore_test.go) and the failure branch by
+// TestWipeGraph_GitSideMidWipeFailure; this test seeds an untracked residual
+// file and asserts the WipeGraph-level wipe removes it.
+func TestWipeGraph_RemovesUntrackedResidualFiles(t *testing.T) {
+	ctx := context.Background()
+	dataPath := t.TempDir()
+	st, err := ladybug.OpenInMemory()
+	if err != nil {
+		t.Fatalf("OpenInMemory: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	gs, err := gitstore.New(dataPath)
+	if err != nil {
+		t.Fatalf("gitstore.New: %v", err)
+	}
+	opPub, _ := generateTestKey()
+	srv := NewCartographerServer(
+		st, gs, opPub, initTestKey(), nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000,
+		WithLadybugPath(dataPath),
+	)
+	srv.MarkDBReady()
+
+	// Plant an untracked residual file inside the tracked entities directory of
+	// the git working tree (graph-repo/entities/.gitkeep is tracked, so a new
+	// file there is untracked and must be removed by git clean -fd).
+	residual := filepath.Join(dataPath, "graph-repo", "entities", "stale-residual.json")
+	if err := os.MkdirAll(filepath.Dir(residual), 0o755); err != nil {
+		t.Fatalf("mkdir residual dir: %v", err)
+	}
+	if err := os.WriteFile(residual, []byte(`{"stale":true}`), 0o600); err != nil {
+		t.Fatalf("plant residual file: %v", err)
+	}
+
+	if _, err := srv.WipeGraph(ctx, &flowv1.WipeGraphRequest{}); err != nil {
+		t.Fatalf("WipeGraph: %v", err)
+	}
+	if _, err := os.Stat(residual); !os.IsNotExist(err) {
+		t.Fatalf("untracked residual file survived the wipe: %v", err)
+	}
+}
+
+// TestSync_MissingCapabilityBeforeRemoteProbe pins the SPEC check-order table
+// (SPEC:1023: Sync is "general rule only" — the capability gate) combined with
+// SPEC R10's WRITE:graph/entity/* requirement (SPEC:243): the capability gate
+// runs before the remote-configuration probe, so a caller holding no WRITE
+// capability receives PERMISSION_DENIED regardless of whether a remote is
+// configured. Before the fix the remoteURL=="" probe ran first, disclosing
+// remote-configuration state to unprivileged callers (FAILED_PRECONDITION when
+// no remote is configured). TestSync_MissingWriteCapability pins the
+// configured-remote half; this test pins the no-remote half that detects a
+// regression moving the capability check after the probe.
+func TestSync_MissingCapabilityBeforeRemoteProbe(t *testing.T) {
+	srv, _ := newTestServer(t) // remoteURL == "" AND caller lacks WRITE:graph/entity/*
+	ctx := narrowCtx("READ:graph/entity/*", "READ:graph/tx")
+
+	_, err := srv.Sync(ctx, &flowv1.SyncRequest{})
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("expected PermissionDenied (capability gate before remote probe), got %v (%v)", status.Code(err), err)
+	}
+}
+
+// TestRecoverOpenTransactionsMidSwapMismatchRollsBack pins the branch-DB swap
+// crash window (SPEC R9 change-log recovery): resetBranchStoreFromWorkingTree
+// swaps the branch DB via a non-atomic rename loop (.lbug → .schema.json →
+// .state.json), so a crash between the .lbug rename and the .schema.json rename
+// leaves the swapped-in branch DB (built under main's *current* schema) paired
+// with the stale pre-refresh .schema.json. When main gained a non-destructive
+// R6 schema change during the transaction's lifetime, reopening that branch
+// fails hard in restoreBranchSchemaMetadata → validateMetadataAgainstCatalog
+// ("database entity type %q is absent from schema metadata"), a hard error the
+// old recovery propagated and cmd/main.go treated as fatal (pod crash loop).
+// Recovery must roll the mid-swap casualty back loudly instead.
+func TestRecoverOpenTransactionsMidSwapMismatchRollsBack(t *testing.T) {
+	ctx := testCtx()
+	dataPath := t.TempDir()
+	opPub, _ := generateTestKey()
+	st, err := ladybug.Open(dataPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	gs, err := gitstore.New(dataPath)
+	if err != nil {
+		t.Fatalf("open git store: %v", err)
+	}
+	srv := NewCartographerServer(
+		st, gs, opPub, initTestKey(), nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000,
+		WithLadybugPath(dataPath),
+	)
+	srv.MarkDBReady()
+	applyTestSchema(ctx, t, st)
+	begin, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
+	if err != nil {
+		t.Fatalf("BeginTransaction: %v", err)
+	}
+	if _, err := srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
+		EntityType: "Component", Properties: map[string]string{"name": "tx"}, TransactionId: begin.TransactionId,
+	}); err != nil {
+		t.Fatalf("CreateEntity: %v", err)
+	}
+	// Main gains a non-destructive R6 schema change during the transaction's
+	// lifetime: a new entity type added to the schema.
+	altered := &flowv1.Schema{
+		EntityTypes: []*flowv1.EntityType{
+			{
+				Name: "Component",
+				Properties: []*flowv1.Property{
+					{Name: "name", Type: "string", Required: true},
+					{Name: "version", Type: "string"},
+				},
+			},
+			{
+				Name: "Service",
+				Properties: []*flowv1.Property{
+					{Name: "name", Type: "string", Required: true},
+				},
+				Rules: []*flowv1.ConnectionRule{
+					{CanConnectTo: []string{"Component"}, Using: []string{"DEPENDS_ON"}},
+				},
+			},
+			{Name: "Widget", Properties: []*flowv1.Property{{Name: "label", Type: "string"}}},
+		},
+		EdgeTypes: []*flowv1.EdgeType{
+			{Name: "DEPENDS_ON", Properties: []*flowv1.Property{{Name: "weight", Type: "string"}}},
+		},
+	}
+	if err := st.ApplySchema(ctx, altered); err != nil {
+		t.Fatalf("apply additive schema change: %v", err)
+	}
+	// Build the refresh replacement branch (under main's *current* schema, which
+	// now includes Widget) exactly as resetBranchStoreFromWorkingTree does, close
+	// it so its WAL is checkpointed, and rename only its .lbug onto the
+	// transaction's canonical name — leaving the pre-refresh branches/<txID>.
+	// schema.json (which does not declare Widget) in place. This is the on-disk
+	// state a crash between the swap's .lbug and .schema.json renames leaves
+	// behind.
+	const tempID = "99999999-9999-4999-8999-999999999999"
+	if err := srv.buildBranchStoreFromWorkingTree(ctx, tempID); err != nil {
+		t.Fatalf("build replacement branch: %v", err)
+	}
+	if err := st.CloseBranchDB(ctx, tempID); err != nil {
+		t.Fatalf("close replacement branch: %v", err)
+	}
+	// The durable state record carries the refresh-in-progress marker across the
+	// swap (persisted before the renames begin, cleared only by the refresh's
+	// final persist).
+	durable, err := st.LoadBranchTransactionState(ctx, begin.TransactionId)
+	if err != nil {
+		t.Fatalf("load durable state: %v", err)
+	}
+	durable.BranchRefreshInProgress = true
+	if err := st.SaveBranchTransactionState(ctx, begin.TransactionId, durable); err != nil {
+		t.Fatalf("persist refresh marker: %v", err)
+	}
+	// Evict the live in-memory handle for the tx branch so a reopen reloads from
+	// the (mismatched) files, then swap in the replacement .lbug.
+	if err := st.CloseBranchDB(ctx, begin.TransactionId); err != nil {
+		t.Fatalf("close tx branch handle: %v", err)
+	}
+	branchesDir := filepath.Join(dataPath, "branches")
+	if err := os.Rename(
+		filepath.Join(branchesDir, tempID+".lbug"),
+		filepath.Join(branchesDir, begin.TransactionId+".lbug"),
+	); err != nil {
+		t.Fatalf("swap replacement .lbug onto tx name: %v", err)
+	}
+
+	if err := st.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+	// Restart: the mismatched branch must be rolled back loudly, not crash-loop
+	// startup with a hard error.
+	reopened, err := ladybug.Open(dataPath)
+	if err != nil {
+		t.Fatalf("reopen store: %v", err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	reopenedGit, err := gitstore.New(dataPath)
+	if err != nil {
+		t.Fatalf("reopen git store: %v", err)
+	}
+	restarted := NewCartographerServer(
+		reopened, reopenedGit, opPub, initTestKey(), nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000,
+		WithLadybugPath(dataPath),
+	)
+	restarted.MarkDBReady()
+	if err := restarted.RecoverOpenTransactions(ctx); err != nil {
+		t.Fatalf("RecoverOpenTransactions: %v", err)
+	}
+	if _, err := restarted.txManager.Lookup(begin.TransactionId); err == nil {
+		t.Fatalf("expected mid-swap-crash transaction rolled back, got a registered transaction")
+	}
+	if _, err := os.Stat(filepath.Join(branchesDir, begin.TransactionId+".lbug")); !os.IsNotExist(err) {
+		t.Fatalf("rollback did not remove the mismatched branch DB: %v", err)
+	}
+}
