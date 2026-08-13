@@ -59,6 +59,7 @@ var (
 var (
 	ErrBranchAlreadyExists = errors.New("branch already exists")
 	ErrBranchNotFound      = errors.New("branch not found")
+	ErrBranchStateMissing  = errors.New("branch state is missing")
 )
 
 // Rehydration errors

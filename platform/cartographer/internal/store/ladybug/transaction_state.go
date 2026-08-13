@@ -65,12 +65,12 @@ func (db *ladybugDB) LoadBranchTransactionState(_ context.Context, txID string) 
 		return state, nil
 	}
 	if db.path == "" {
-		return store.BranchTransactionState{}, fmt.Errorf("branch state is missing")
+		return store.BranchTransactionState{}, fmt.Errorf("%w", store.ErrBranchStateMissing)
 	}
 	data, err := os.ReadFile(db.branchStatePath(txID))
 	if err != nil {
 		if os.IsNotExist(err) {
-			return store.BranchTransactionState{}, fmt.Errorf("branch state is missing")
+			return store.BranchTransactionState{}, fmt.Errorf("%w", store.ErrBranchStateMissing)
 		}
 		return store.BranchTransactionState{}, fmt.Errorf("read branch state: %w", err)
 	}
