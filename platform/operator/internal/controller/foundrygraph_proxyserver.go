@@ -227,16 +227,18 @@ func (c *authCache) Set(key string) {
 }
 
 func (c *authCache) key(token, ns, name, verb string) string {
-	// ponytail: pipe delimiter assumes none of the four fields contain a literal pipe. If
-	// one did (e.g. a token value containing '|'), distinct (token, ns, name, verb) tuples
-	// could hash to the same cache key, so a cached positive authz decision for one identity
-	// could be served for a different identity for up to the 30s TTL. This fails closed — a
-	// collision only ever grants access that was granted to some other identity, never
-	// revokes — but it is a real, if unlikely, boundary. Namespaces/verbs are operator/API
-	// normalised and pipe-free; only the raw Bearer token is user-supplied. Upgrade path:
-	// switch to a struct key or a length-prefixed field encoding (e.g. fmt of each field with
-	// an explicit length) so a pipe in a value cannot alias another tuple.
-	h := sha256.Sum256([]byte(token + "|" + ns + "|" + name + "|" + verb))
+	// Length-prefixed field encoding: each field is prefixed with its byte length and a
+	// separator, so no field value can alias another tuple regardless of separator
+	// characters. A raw pipe-delimited concatenation would let a token containing '|'
+	// collide with a different (token, ns, name, verb) tuple and serve one identity's cached
+	// positive authz decision to another identity without its own TokenReview/SAR; the length
+	// prefix makes the preimage parseable back into the original fields, so distinct tuples
+	// always hash to distinct keys. The sha256 output is kept so cache keys never carry raw
+	// token material.
+	h := sha256.Sum256([]byte(strconv.Itoa(len(token)) + ":" + token +
+		strconv.Itoa(len(ns)) + ":" + ns +
+		strconv.Itoa(len(name)) + ":" + name +
+		strconv.Itoa(len(verb)) + ":" + verb))
 	return fmt.Sprintf("%x", h)
 }
 
