@@ -101,6 +101,35 @@ func TestAuthCache(t *testing.T) {
 	}
 }
 
+// TestAuthCacheKeyCollisionSafety (item 11) pins the auth-cache key encoding as
+// collision-safe: two distinct (token, ns, name, verb) tuples whose pipe-delimited
+// concatenation would be identical (a pipe-containing token aliasing another tuple)
+// must map to distinct keys — otherwise one identity's cached positive authz decision
+// could be served to a different identity. The same tuple must also always map to the
+// same key (the cache-hit path).
+func TestAuthCacheKeyCollisionSafety(t *testing.T) {
+	cache := newAuthCache(30 * time.Second)
+
+	// Distinct tuples whose pipe-delimited preimages would both be "a|b|c|d|e".
+	tuples := [][4]string{
+		{"a|b", "c", "d", "e"}, // pipe in the user-supplied token
+		{"a", "b|c", "d", "e"}, // pipe in the namespace
+	}
+	seen := make(map[string]string)
+	for _, tp := range tuples {
+		k := cache.key(tp[0], tp[1], tp[2], tp[3])
+		if prev, ok := seen[k]; ok {
+			t.Fatalf("distinct tuples collided on cache key %q: %v aliases %v", k, tp, prev)
+		}
+		seen[k] = tp[0] + "/" + tp[1] + "/" + tp[2] + "/" + tp[3]
+	}
+
+	// The same tuple must always produce the same key (cache-hit path).
+	if k1, k2 := cache.key("token", "ns", "graph", "get"), cache.key("token", "ns", "graph", "get"); k1 != k2 {
+		t.Fatalf("same tuple produced different keys: %q vs %q", k1, k2)
+	}
+}
+
 func TestProxyUnimplemented(t *testing.T) {
 	s := &ProxyServer{}
 	err := s.proxyUnimplemented("TestMethod")
