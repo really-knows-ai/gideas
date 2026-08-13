@@ -481,6 +481,39 @@ func TestCartographerPodSecurityContext(t *testing.T) {
 	if probe.PeriodSeconds != 10 {
 		t.Errorf("expected readiness probe PeriodSeconds=10, got %d", probe.PeriodSeconds)
 	}
+
+	// SPEC R1 ssh:// known_hosts handling writes via os.CreateTemp("", "known_hosts-*")
+	// (cmd/main.go:800), resolving to os.TempDir() → /tmp. Under ReadOnlyRootFilesystem
+	// the rootfs /tmp is read-only, so the Deployment must mount a writable /tmp emptyDir
+	// or a remote auth secret carrying a known_hosts key fails EROFS (SPEC R1 fail-closed
+	// host verification can never succeed).
+	csc := containers[0].SecurityContext
+	if csc == nil {
+		t.Fatal("expected container SecurityContext to be set")
+	}
+	if csc.ReadOnlyRootFilesystem == nil || !*csc.ReadOnlyRootFilesystem {
+		t.Fatal("expected ReadOnlyRootFilesystem=true — rootfs must stay read-only")
+	}
+	var tmpMount *corev1.VolumeMount
+	for i := range containers[0].VolumeMounts {
+		if containers[0].VolumeMounts[i].MountPath == "/tmp" {
+			tmpMount = &containers[0].VolumeMounts[i]
+			break
+		}
+	}
+	if tmpMount == nil {
+		t.Fatal("expected a /tmp volumeMount — known_hosts temp-file write (os.CreateTemp, cmd/main.go:800) fails EROFS without it")
+	}
+	var tmpVol *corev1.Volume
+	for i := range deploy.Spec.Template.Spec.Volumes {
+		if deploy.Spec.Template.Spec.Volumes[i].Name == tmpMount.Name {
+			tmpVol = &deploy.Spec.Template.Spec.Volumes[i]
+			break
+		}
+	}
+	if tmpVol == nil || tmpVol.EmptyDir == nil {
+		t.Fatalf("expected /tmp volumeMount %q to back onto an emptyDir volume, got %v", tmpMount.Name, tmpVol)
+	}
 }
 
 func TestPVCStorageDefaulting(t *testing.T) {

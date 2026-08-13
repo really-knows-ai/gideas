@@ -439,23 +439,22 @@ func (r *FoundryGraphReconciler) reconcileDeployment(ctx context.Context, fg *fl
 					Image:           r.CartographerImage,
 					ImagePullPolicy: corev1.PullIfNotPresent,
 					// ponytail: restricted SecurityContext — ReadOnlyRootFilesystem=true
-					// makes the container rootfs unwritable (only the /data volumeMount
-					// is writable), with privilege escalation denied and ALL capabilities
-					// dropped. Consequence: any image write outside /data fails with
-					// EROFS. This is a live constraint today: main.go's SSH known_hosts
-					// handling calls os.CreateTemp("", "known_hosts-*") (cmd/main.go:792),
-					// which writes to the container's /tmp on the rootfs — so a remote
-					// auth secret carrying a known_hosts key fails at temp-file creation
-					// under this profile (auth construction errors out and the remote
-					// pull / pull-on-init fails) unless TMPDIR points at a writable
-					// mount. Failure mode: silent at render time — a rootfs-writing image
-					// change compiles and deploys but breaks only at runtime (EROFS on
-					// the write: startup or remote-sync failure), never surfacing in the
-					// rendered Deployment. Ceiling: writable locations are implicit
-					// (only /data), so the constraint is invisible until a write hits it.
-					// Upgrade path: if the image needs scratch space, mount an explicit
-					// emptyDir (e.g. at /tmp) or write to /data and keep the rootfs
-					// read-only.
+					// makes the container rootfs unwritable (only the /data PVC mount and
+					// the /tmp emptyDir are writable), with privilege escalation denied
+					// and ALL capabilities dropped. The /tmp emptyDir is mounted because
+					// main.go's SSH known_hosts handling calls
+					// os.CreateTemp("", "known_hosts-*") (cmd/main.go:800), which
+					// resolves to os.TempDir() → /tmp; without a writable /tmp that
+					// temp-file creation fails EROFS and a remote auth secret carrying a
+					// known_hosts key breaks (auth construction errors out and the remote
+					// pull / pull-on-init fails). Failure mode: silent at render time — a
+					// rootfs-writing image change compiles and deploys but breaks only at
+					// runtime (EROFS on a write outside /data and /tmp: startup or
+					// remote-sync failure), never surfacing in the rendered Deployment.
+					// Ceiling: writable locations are explicit (only /data and /tmp), so
+					// the constraint is invisible until a write hits it. Upgrade path: if
+					// the image needs additional scratch space, mount an explicit emptyDir
+					// for it or write to /data and keep the rootfs read-only.
 					SecurityContext: &corev1.SecurityContext{
 						ReadOnlyRootFilesystem:   new(true),
 						AllowPrivilegeEscalation: new(false),
@@ -506,6 +505,12 @@ func (r *FoundryGraphReconciler) reconcileDeployment(ctx context.Context, fg *fl
 					},
 					VolumeMounts: []corev1.VolumeMount{
 						{Name: "data", MountPath: "/data"},
+						// SPEC R1 ssh:// known_hosts handling writes via
+						// os.CreateTemp("", "known_hosts-*") (cmd/main.go:800), which
+						// resolves to os.TempDir() → /tmp; under ReadOnlyRootFilesystem
+						// the rootfs /tmp is read-only, so this emptyDir keeps the
+						// known_hosts temp write working (EROFS otherwise).
+						{Name: "tmp", MountPath: "/tmp"},
 					},
 				}},
 				Volumes: []corev1.Volume{
@@ -515,6 +520,15 @@ func (r *FoundryGraphReconciler) reconcileDeployment(ctx context.Context, fg *fl
 							PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
 								ClaimName: "data-" + fg.Name,
 							},
+						},
+					},
+					// Scratch space for the read-only rootfs: os.CreateTemp default-dir
+					// writes (known_hosts, cmd/main.go:800) land on /tmp. emptyDir is
+					// per-pod scratch; nothing durable is stored here.
+					{
+						Name: "tmp",
+						VolumeSource: corev1.VolumeSource{
+							EmptyDir: &corev1.EmptyDirVolumeSource{},
 						},
 					},
 				},
