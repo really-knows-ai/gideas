@@ -9996,6 +9996,102 @@ func TestTelemetry_TransactionGC(t *testing.T) {
 	}
 }
 
+// TestGC_ExpiredTransaction_Rollback pins the gcTick rollback body (SPEC R9:
+// "the branch DB, git branch, and change log are rolled back asynchronously
+// within the cleanup grace period"; Design → Versioning Architecture → Garbage
+// collection: "expired transactions ... are rolled back automatically. Orphaned
+// git branches and branches/<tx-id>.lbug files are deleted."). Unlike
+// TestTelemetry_TransactionGC, which only observes the telemetry event, this
+// test registers a transaction with real branch resources (git branch + branch
+// DB, mirroring BeginTransaction), expires it past the 30-second cleanup grace
+// period, runs gcTick, and asserts every rollback observable: the branch DB is
+// dropped, the git branch is deleted, and the transaction — whose change log
+// is owned by its registration (TransactionState.ChangeLog) — is deregistered.
+// Deleting the rollback body of gcTick (cartographer_server.go) would fail
+// this test.
+func TestGC_ExpiredTransaction_Rollback(t *testing.T) {
+	opPub, _ := generateTestKey()
+	scPub, _ := generateTestKey()
+	st, err := ladybug.OpenInMemory()
+	if err != nil {
+		t.Fatalf("OpenInMemory: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	gs, err := gitstore.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("gitstore.New: %v", err)
+	}
+
+	srv := NewCartographerServer(st, gs, opPub, scPub, nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000)
+	mockPub := &mockTelemetryPublisher{}
+	srv.auditor = mockPub
+	srv.dbReady.Store(true)
+
+	fc := newFakeClock(time.Now())
+	srv.txManager = NewTransactionManager(7*24*time.Hour, 100000, WithClock(fc))
+
+	ctx := context.Background()
+	txID := srv.newIDFn()
+
+	// Mirror BeginTransaction's branch-resource creation so gcTick's rollback
+	// has real resources to remove: a git branch and a branch DB.
+	if err := srv.gitstore.WithGitLock(func() error {
+		if err := srv.gitstore.CreateBranch(ctx, txID); err != nil {
+			return err
+		}
+		return srv.gitstore.HardResetToBranch(ctx, txID)
+	}); err != nil {
+		t.Fatalf("create git branch: %v", err)
+	}
+	if err := srv.store.CreateBranchDB(ctx, txID); err != nil {
+		t.Fatalf("create branch DB: %v", err)
+	}
+	state, err := srv.txManager.Create(txID, 1*time.Minute, "head")
+	if err != nil {
+		t.Fatalf("register transaction: %v", err)
+	}
+	// The change log lives on the registered transaction state; seed it so the
+	// rollback has a log to discard along with the registration.
+	if err := state.ChangeLog.Add(gitstore.ChangeLogEntry{
+		Kind: gitstore.ChangeDelEntity,
+		ID:   "22222222-2222-4222-8222-222222222222",
+		Type: "Component",
+	}); err != nil {
+		t.Fatalf("seed change log: %v", err)
+	}
+
+	// Sanity: the branch resources exist and the transaction is registered
+	// before gcTick runs.
+	if exists, err := srv.gitstore.BranchExists(ctx, txID); err != nil || !exists {
+		t.Fatalf("git branch should exist before gcTick (exists=%v err=%v)", exists, err)
+	}
+	if _, err := srv.store.DumpAllEntities(ctx, txID); err != nil {
+		t.Fatalf("branch DB should exist before gcTick: %v", err)
+	}
+	if _, err := srv.txManager.Lookup(txID); err != nil {
+		t.Fatalf("transaction should be registered before gcTick: %v", err)
+	}
+
+	// Expire the transaction past its timeout plus the 30-second cleanup grace
+	// period, then run the GC tick.
+	fc.Advance(2 * time.Minute)
+	srv.gcTick()
+
+	// Rollback asserts (SPEC R9 + Garbage collection):
+	// 1. the branch DB is dropped,
+	if _, err := srv.store.DumpAllEntities(ctx, txID); !errors.Is(err, store.ErrBranchNotFound) {
+		t.Fatalf("branch DB not rolled back: DumpAllEntities err = %v, want store.ErrBranchNotFound", err)
+	}
+	// 2. the git branch is deleted,
+	if exists, err := srv.gitstore.BranchExists(ctx, txID); err != nil || exists {
+		t.Fatalf("git branch not rolled back: BranchExists = %v (err %v), want false", exists, err)
+	}
+	// 3. the transaction (and its change log) is deregistered.
+	if _, err := srv.txManager.Lookup(txID); err == nil {
+		t.Fatal("transaction not deregistered after gcTick")
+	}
+}
+
 // =========================================================================
 // 30. Service check-order fix tests (Phase 2)
 // =========================================================================
