@@ -18,6 +18,7 @@ import (
 	lbug "github.com/LadybugDB/go-ladybug"
 	"github.com/foundry/flow/cartographer/internal/gitstore"
 	schemavalidator "github.com/foundry/flow/cartographer/internal/schema"
+	"github.com/foundry/flow/cartographer/internal/schemaerrors"
 	"github.com/foundry/flow/cartographer/internal/store"
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
 	"github.com/google/uuid"
@@ -654,15 +655,15 @@ func TestApplySchema_RejectsUntypedPlaceholderName(t *testing.T) {
 			err = s.ApplySchema(context.Background(), tc.s)
 			if err == nil {
 				t.Fatal("expected ApplySchema to reject, got nil")
-			} else if !errors.Is(err, schemavalidator.ErrReservedWord) {
-				t.Fatalf("expected schemavalidator.ErrReservedWord, got: %v", err)
+			} else if !errors.Is(err, schemaerrors.ErrReservedWord) {
+				t.Fatalf("expected schemaerrors.ErrReservedWord, got: %v", err)
 			}
 		})
 	}
 }
 
 // A nil schema (an ApplySchemaRequest whose schema field is unset, forwarded
-// by the service handler unguarded) must be rejected with the schema
+// by the service handler unguarded) must be rejected with the schemaerrors
 // package's ErrNilSchema sentinel (→ INVALID_ARGUMENT at the gRPC boundary via
 // mapStoreError/isSchemaError), never applied: after schema.Validate passes,
 // the catalog diff (diffSchemaAgainstCatalog → collectFromToPairs) reads
@@ -677,8 +678,8 @@ func TestApplySchema_NilSchema_Rejected(t *testing.T) {
 	err = s.ApplySchema(context.Background(), nil)
 	if err == nil {
 		t.Fatal("expected ApplySchema to reject a nil schema, got nil")
-	} else if !errors.Is(err, schemavalidator.ErrNilSchema) {
-		t.Fatalf("expected schemavalidator.ErrNilSchema, got: %v", err)
+	} else if !errors.Is(err, schemaerrors.ErrNilSchema) {
+		t.Fatalf("expected schemaerrors.ErrNilSchema, got: %v", err)
 	}
 }
 
