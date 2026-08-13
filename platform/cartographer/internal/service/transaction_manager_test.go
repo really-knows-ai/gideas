@@ -1,6 +1,8 @@
 package service
 
 import (
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -103,5 +105,47 @@ func TestExtendTimeout_DirectRejectsExpired(t *testing.T) {
 	if state.ExpiresAt != oldExpiresAt || state.AppliedTimeout != oldAppliedTimeout {
 		t.Fatalf("expired transaction was extended: expiresAt=%v applied=%v",
 			state.ExpiresAt, state.AppliedTimeout)
+	}
+}
+
+// TestHasActive_ConcurrentWithExtendTimeout pins that HasActive reads
+// ExpiresAt under the transaction's lifecycle lock — the same lock
+// ExtendTimeout writes it under — not under tm.mu alone. Before the fix,
+// HasActive read state.ExpiresAt while holding only tm.mu.RLock, racing the
+// lifecycle-locked write; run under -race this test reports that race, and
+// without -race it still completes with the extended transaction always
+// reported active (the reader goroutine never sees a false negative).
+func TestHasActive_ConcurrentWithExtendTimeout(t *testing.T) {
+	tm := NewTransactionManager(7*24*time.Hour, 100000)
+	txID := "test-tx-id"
+	if _, err := tm.Create(txID, 10*time.Minute, "head"); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	done := make(chan error, 2)
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for range 1000 {
+			if err := tm.ExtendTimeout(txID, 10*time.Minute, nil); err != nil {
+				done <- fmt.Errorf("ExtendTimeout: %w", err)
+				return
+			}
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for range 1000 {
+			if !tm.HasActive() {
+				done <- fmt.Errorf("HasActive() = false while a live extension loop holds the transaction active")
+				return
+			}
+		}
+	}()
+	wg.Wait()
+	close(done)
+	for err := range done {
+		t.Fatal(err)
 	}
 }

@@ -10419,6 +10419,48 @@ func TestGC_ExpiredTransaction_Rollback(t *testing.T) {
 	}
 }
 
+// TestGCScan_ConcurrentWithExtendTimeout pins that gcTick's first expiry scan
+// reads ExpiresAt under the transaction's lifecycle lock — the same lock
+// ExtendTimeout writes it under — not under tm.mu alone. Before the fix, the
+// first scan read state.ExpiresAt while holding only tm.mu.RLock, racing the
+// lifecycle-locked write; run under -race this test reports that race, and
+// without -race it still completes with the unexpired transaction surviving
+// (gcTick must not collect a transaction the extension loop keeps alive).
+func TestGCScan_ConcurrentWithExtendTimeout(t *testing.T) {
+	srv, _ := newTestServer(t)
+	txID := srv.newIDFn()
+	if _, err := srv.txManager.Create(txID, 10*time.Minute, "head"); err != nil {
+		t.Fatalf("register transaction: %v", err)
+	}
+
+	done := make(chan error, 2)
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for range 500 {
+			if err := srv.txManager.ExtendTimeout(txID, 10*time.Minute, nil); err != nil {
+				done <- fmt.Errorf("ExtendTimeout: %w", err)
+				return
+			}
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for range 500 {
+			srv.gcTick()
+		}
+	}()
+	wg.Wait()
+	close(done)
+	for err := range done {
+		t.Fatal(err)
+	}
+	if _, err := srv.txManager.Lookup(txID); err != nil {
+		t.Fatalf("unexpired transaction must survive the concurrent GC scan: %v", err)
+	}
+}
+
 // =========================================================================
 // 30. Service check-order fix tests (Phase 2)
 // =========================================================================
