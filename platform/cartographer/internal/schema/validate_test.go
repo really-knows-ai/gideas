@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/foundry/flow/cartographer/internal/schemaerrors"
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
 )
 
@@ -44,9 +45,9 @@ func TestValidate_DuplicateEntityTypeName(t *testing.T) {
 		},
 	}
 	if err := Validate(s); err == nil {
-		t.Fatal("expected ErrDuplicateTypeName, got nil")
-	} else if !errors.Is(err, ErrDuplicateTypeName) {
-		t.Fatalf("expected ErrDuplicateTypeName, got: %v", err)
+		t.Fatal("expected schemaerrors.ErrDuplicateTypeName, got nil")
+	} else if !errors.Is(err, schemaerrors.ErrDuplicateTypeName) {
+		t.Fatalf("expected schemaerrors.ErrDuplicateTypeName, got: %v", err)
 	}
 }
 
@@ -58,15 +59,15 @@ func TestValidate_DuplicateEdgeTypeName(t *testing.T) {
 		},
 	}
 	if err := Validate(s); err == nil {
-		t.Fatal("expected ErrDuplicateTypeName, got nil")
-	} else if !errors.Is(err, ErrDuplicateTypeName) {
-		t.Fatalf("expected ErrDuplicateTypeName, got: %v", err)
+		t.Fatal("expected schemaerrors.ErrDuplicateTypeName, got nil")
+	} else if !errors.Is(err, schemaerrors.ErrDuplicateTypeName) {
+		t.Fatalf("expected schemaerrors.ErrDuplicateTypeName, got: %v", err)
 	}
 }
 
 // Format validation runs before duplicate detection (validate.go), so two
-// identically-named but invalid types or properties surface ErrInvalidName —
-// the structural defect — not ErrDuplicateTypeName/ErrDuplicatePropertyName.
+// identically-named but invalid types or properties surface schemaerrors.ErrInvalidName —
+// the structural defect — not schemaerrors.ErrDuplicateTypeName/schemaerrors.ErrDuplicatePropertyName.
 // Both are INVALID_ARGUMENT at the wire; the ordering only fixes the
 // diagnostic.
 func TestValidate_InvalidNameBeforeDuplicateDetection(t *testing.T) {
@@ -79,9 +80,9 @@ func TestValidate_InvalidNameBeforeDuplicateDetection(t *testing.T) {
 		},
 	}
 	if err := Validate(s); err == nil {
-		t.Fatal("expected ErrInvalidName, got nil")
-	} else if !errors.Is(err, ErrInvalidName) {
-		t.Fatalf("expected ErrInvalidName for two empty-named entity types, got: %v", err)
+		t.Fatal("expected schemaerrors.ErrInvalidName, got nil")
+	} else if !errors.Is(err, schemaerrors.ErrInvalidName) {
+		t.Fatalf("expected schemaerrors.ErrInvalidName for two empty-named entity types, got: %v", err)
 	}
 
 	// Two empty-named properties in one entity type: same ordering.
@@ -95,9 +96,9 @@ func TestValidate_InvalidNameBeforeDuplicateDetection(t *testing.T) {
 		}},
 	}
 	if err := Validate(s); err == nil {
-		t.Fatal("expected ErrInvalidName, got nil")
-	} else if !errors.Is(err, ErrInvalidName) {
-		t.Fatalf("expected ErrInvalidName for two empty-named properties, got: %v", err)
+		t.Fatal("expected schemaerrors.ErrInvalidName, got nil")
+	} else if !errors.Is(err, schemaerrors.ErrInvalidName) {
+		t.Fatalf("expected schemaerrors.ErrInvalidName for two empty-named properties, got: %v", err)
 	}
 }
 
@@ -114,7 +115,7 @@ func TestValidate_DuplicatePropertyNameOnEntity(t *testing.T) {
 		},
 	}
 	if err := Validate(s); err == nil {
-		t.Fatal("expected ErrDuplicatePropertyName, got nil")
+		t.Fatal("expected schemaerrors.ErrDuplicatePropertyName, got nil")
 	}
 }
 
@@ -131,7 +132,7 @@ func TestValidate_DuplicatePropertyNameOnEdge(t *testing.T) {
 		},
 	}
 	if err := Validate(s); err == nil {
-		t.Fatal("expected ErrDuplicatePropertyName, got nil")
+		t.Fatal("expected schemaerrors.ErrDuplicatePropertyName, got nil")
 	}
 }
 
@@ -187,7 +188,7 @@ func TestValidate_InvalidTypeName(t *testing.T) {
 		},
 	}
 	if err := Validate(s); err == nil {
-		t.Fatal("expected ErrInvalidName, got nil")
+		t.Fatal("expected schemaerrors.ErrInvalidName, got nil")
 	}
 }
 
@@ -203,7 +204,7 @@ func TestValidate_InvalidPropertyName(t *testing.T) {
 		},
 	}
 	if err := Validate(s); err == nil {
-		t.Fatal("expected ErrInvalidName, got nil")
+		t.Fatal("expected schemaerrors.ErrInvalidName, got nil")
 	}
 }
 
@@ -214,7 +215,7 @@ func TestValidate_ReservedWordTypeName(t *testing.T) {
 		},
 	}
 	if err := Validate(s); err == nil {
-		t.Fatal("expected ErrReservedWord, got nil")
+		t.Fatal("expected schemaerrors.ErrReservedWord, got nil")
 	}
 }
 
@@ -230,7 +231,7 @@ func TestValidate_ReservedWordPropertyName(t *testing.T) {
 		},
 	}
 	if err := Validate(s); err == nil {
-		t.Fatal("expected ErrReservedWord, got nil")
+		t.Fatal("expected schemaerrors.ErrReservedWord, got nil")
 	}
 }
 
@@ -246,7 +247,7 @@ func TestValidate_EntityPropertyCollidesWithID(t *testing.T) {
 		},
 	}
 	if err := Validate(s); err == nil {
-		t.Fatal("expected ErrImplicitColumnCollision, got nil")
+		t.Fatal("expected schemaerrors.ErrImplicitColumnCollision, got nil")
 	}
 }
 
@@ -263,7 +264,7 @@ func TestValidate_EntityPropertyCollidesWithEmbeddingIndexed(t *testing.T) {
 		},
 	}
 	if err := Validate(s); err == nil {
-		t.Fatal("expected ErrImplicitColumnCollision, got nil")
+		t.Fatal("expected schemaerrors.ErrImplicitColumnCollision, got nil")
 	}
 }
 
@@ -291,7 +292,7 @@ func TestValidate_EntityPropertyEmbeddingOKWhenNotIndexed(t *testing.T) {
 // implicit-column-collision guarantee ("Edge properties entries must not use
 // the names id, from, to, type") is self-contained and survives any future
 // trim of FROM from reservedWords. A property named "from" surfaces
-// ErrReservedWord today — also pinned by TestValidate_ReservedWordNewlyAdded.
+// schemaerrors.ErrReservedWord today — also pinned by TestValidate_ReservedWordNewlyAdded.
 // Both rows are INVALID_ARGUMENT
 // at the wire (SPEC R1 error-table rows "Name is a LadybugDB reserved word" and
 // implicit-column collision).
@@ -307,9 +308,9 @@ func TestValidate_EdgePropertyCollidesWithFrom(t *testing.T) {
 		},
 	}
 	if err := Validate(s); err == nil {
-		t.Fatal("expected ErrReservedWord for edge property \"from\", got nil")
-	} else if !errors.Is(err, ErrReservedWord) {
-		t.Fatalf("expected ErrReservedWord for edge property \"from\", got: %v", err)
+		t.Fatal("expected schemaerrors.ErrReservedWord for edge property \"from\", got nil")
+	} else if !errors.Is(err, schemaerrors.ErrReservedWord) {
+		t.Fatalf("expected schemaerrors.ErrReservedWord for edge property \"from\", got: %v", err)
 	}
 }
 
@@ -325,7 +326,7 @@ func TestValidate_EdgePropertyCollidesWithTo(t *testing.T) {
 		},
 	}
 	if err := Validate(s); err == nil {
-		t.Fatal("expected ErrImplicitColumnCollision, got nil")
+		t.Fatal("expected schemaerrors.ErrImplicitColumnCollision, got nil")
 	}
 }
 
@@ -341,7 +342,7 @@ func TestValidate_EdgePropertyCollidesWithType(t *testing.T) {
 		},
 	}
 	if err := Validate(s); err == nil {
-		t.Fatal("expected ErrImplicitColumnCollision, got nil")
+		t.Fatal("expected schemaerrors.ErrImplicitColumnCollision, got nil")
 	}
 }
 
@@ -357,7 +358,7 @@ func TestValidate_EdgePropertyCollidesWithID(t *testing.T) {
 		},
 	}
 	if err := Validate(s); err == nil {
-		t.Fatal("expected ErrImplicitColumnCollision, got nil")
+		t.Fatal("expected schemaerrors.ErrImplicitColumnCollision, got nil")
 	}
 }
 
@@ -373,7 +374,7 @@ func TestValidate_InvalidPropertyType(t *testing.T) {
 		},
 	}
 	if err := Validate(s); err == nil {
-		t.Fatal("expected ErrInvalidPropertyType, got nil")
+		t.Fatal("expected schemaerrors.ErrInvalidPropertyType, got nil")
 	}
 }
 
@@ -393,9 +394,9 @@ func TestValidate_EdgePropertyType(t *testing.T) {
 			},
 		}
 		if err := Validate(s); err == nil {
-			t.Fatal("expected ErrInvalidPropertyType, got nil")
-		} else if !errors.Is(err, ErrInvalidPropertyType) {
-			t.Fatalf("expected ErrInvalidPropertyType, got: %v", err)
+			t.Fatal("expected schemaerrors.ErrInvalidPropertyType, got nil")
+		} else if !errors.Is(err, schemaerrors.ErrInvalidPropertyType) {
+			t.Fatalf("expected schemaerrors.ErrInvalidPropertyType, got: %v", err)
 		}
 	})
 
@@ -431,7 +432,7 @@ func TestValidate_UndeclaredEntityInCanConnectTo(t *testing.T) {
 		},
 	}
 	if err := Validate(s); err == nil {
-		t.Fatal("expected ErrUndeclaredTypeRef, got nil")
+		t.Fatal("expected schemaerrors.ErrUndeclaredTypeRef, got nil")
 	}
 }
 
@@ -447,7 +448,7 @@ func TestValidate_UndeclaredEdgeInUsing(t *testing.T) {
 		},
 	}
 	if err := Validate(s); err == nil {
-		t.Fatal("expected ErrUndeclaredTypeRef, got nil")
+		t.Fatal("expected schemaerrors.ErrUndeclaredTypeRef, got nil")
 	}
 }
 
@@ -466,7 +467,7 @@ func TestValidate_EmptyCanConnectTo(t *testing.T) {
 		},
 	}
 	if err := Validate(s); err == nil {
-		t.Fatal("expected ErrEmptyRuleList, got nil")
+		t.Fatal("expected schemaerrors.ErrEmptyRuleList, got nil")
 	}
 }
 
@@ -482,7 +483,7 @@ func TestValidate_EmptyUsing(t *testing.T) {
 		},
 	}
 	if err := Validate(s); err == nil {
-		t.Fatal("expected ErrEmptyRuleList, got nil")
+		t.Fatal("expected schemaerrors.ErrEmptyRuleList, got nil")
 	}
 }
 
@@ -499,15 +500,15 @@ func TestValidate_EmptySchema(t *testing.T) {
 // entityTypes/edgeTypes arrays *within* a schema message, but a fully omitted
 // schema would be dereferenced by the store (diffSchemaAgainstCatalog →
 // collectFromToPairs read s.EntityTypes) after validation and panic, so
-// Validate must reject it with ErrNilSchema (→ INVALID_ARGUMENT at the gRPC
+// Validate must reject it with schemaerrors.ErrNilSchema (→ INVALID_ARGUMENT at the gRPC
 // boundary via the service's isSchemaError). Nil EntityTypes/EdgeTypes fields
 // on a non-nil schema are still treated as empty lists.
 func TestValidate_NilSchema(t *testing.T) {
 	err := Validate(nil)
 	if err == nil {
-		t.Fatal("expected ErrNilSchema for nil schema, got nil")
-	} else if !errors.Is(err, ErrNilSchema) {
-		t.Fatalf("expected ErrNilSchema for nil schema, got: %v", err)
+		t.Fatal("expected schemaerrors.ErrNilSchema for nil schema, got nil")
+	} else if !errors.Is(err, schemaerrors.ErrNilSchema) {
+		t.Fatalf("expected schemaerrors.ErrNilSchema for nil schema, got: %v", err)
 	}
 
 	// Nil EntityTypes / EdgeTypes fields treated as empty lists.
@@ -533,7 +534,7 @@ func TestValidate_NilSchema(t *testing.T) {
 }
 
 // A nil element inside a repeated field (nil *EntityType, *EdgeType, *Property,
-// or *ConnectionRule) must be rejected with ErrNilElement, never panicked on.
+// or *ConnectionRule) must be rejected with schemaerrors.ErrNilElement, never panicked on.
 // Validate guards every repeated-field element before dereferencing it
 // (validate.go), so a malformed ApplySchema request forwarded to Validate is
 // an INVALID_ARGUMENT, not a crash.
@@ -571,9 +572,9 @@ func TestValidate_NilElements(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			err := Validate(tc.s)
 			if err == nil {
-				t.Fatal("expected ErrNilElement, got nil")
-			} else if !errors.Is(err, ErrNilElement) {
-				t.Fatalf("expected ErrNilElement, got: %v", err)
+				t.Fatal("expected schemaerrors.ErrNilElement, got nil")
+			} else if !errors.Is(err, schemaerrors.ErrNilElement) {
+				t.Fatalf("expected schemaerrors.ErrNilElement, got: %v", err)
 			}
 		})
 	}
@@ -605,7 +606,7 @@ func TestValidate_ReservedWordEdgeTypeName(t *testing.T) {
 		},
 	}
 	if err := Validate(s); err == nil {
-		t.Fatal("expected ErrReservedWord, got nil")
+		t.Fatal("expected schemaerrors.ErrReservedWord, got nil")
 	}
 }
 
@@ -638,9 +639,9 @@ func TestValidate_ReservedWordCaseInsensitive(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			if err := Validate(tc.s); err == nil {
-				t.Fatal("expected ErrReservedWord, got nil")
-			} else if !errors.Is(err, ErrReservedWord) {
-				t.Fatalf("expected ErrReservedWord, got: %v", err)
+				t.Fatal("expected schemaerrors.ErrReservedWord, got nil")
+			} else if !errors.Is(err, schemaerrors.ErrReservedWord) {
+				t.Fatalf("expected schemaerrors.ErrReservedWord, got: %v", err)
 			}
 		})
 	}
@@ -665,9 +666,9 @@ func TestValidate_ReservedWordNewlyAdded(t *testing.T) {
 				EntityTypes: []*flowv1.EntityType{{Name: kw}},
 			}
 			if err := Validate(s); err == nil {
-				t.Fatalf("expected ErrReservedWord for %q, got nil", kw)
-			} else if !errors.Is(err, ErrReservedWord) {
-				t.Fatalf("expected ErrReservedWord for %q, got: %v", kw, err)
+				t.Fatalf("expected schemaerrors.ErrReservedWord for %q, got nil", kw)
+			} else if !errors.Is(err, schemaerrors.ErrReservedWord) {
+				t.Fatalf("expected schemaerrors.ErrReservedWord for %q, got: %v", kw, err)
 			}
 		})
 		t.Run("entity property/"+kw, func(t *testing.T) {
@@ -678,9 +679,9 @@ func TestValidate_ReservedWordNewlyAdded(t *testing.T) {
 				}},
 			}
 			if err := Validate(s); err == nil {
-				t.Fatalf("expected ErrReservedWord for property %q, got nil", kw)
-			} else if !errors.Is(err, ErrReservedWord) {
-				t.Fatalf("expected ErrReservedWord for property %q, got: %v", kw, err)
+				t.Fatalf("expected schemaerrors.ErrReservedWord for property %q, got nil", kw)
+			} else if !errors.Is(err, schemaerrors.ErrReservedWord) {
+				t.Fatalf("expected schemaerrors.ErrReservedWord for property %q, got: %v", kw, err)
 			}
 		})
 		t.Run("edge type/"+kw, func(t *testing.T) {
@@ -688,9 +689,9 @@ func TestValidate_ReservedWordNewlyAdded(t *testing.T) {
 				EdgeTypes: []*flowv1.EdgeType{{Name: kw}},
 			}
 			if err := Validate(s); err == nil {
-				t.Fatalf("expected ErrReservedWord for edge type %q, got nil", kw)
-			} else if !errors.Is(err, ErrReservedWord) {
-				t.Fatalf("expected ErrReservedWord for edge type %q, got: %v", kw, err)
+				t.Fatalf("expected schemaerrors.ErrReservedWord for edge type %q, got nil", kw)
+			} else if !errors.Is(err, schemaerrors.ErrReservedWord) {
+				t.Fatalf("expected schemaerrors.ErrReservedWord for edge type %q, got: %v", kw, err)
 			}
 		})
 		t.Run("edge property/"+kw, func(t *testing.T) {
@@ -701,9 +702,9 @@ func TestValidate_ReservedWordNewlyAdded(t *testing.T) {
 				}},
 			}
 			if err := Validate(s); err == nil {
-				t.Fatalf("expected ErrReservedWord for edge property %q, got nil", kw)
-			} else if !errors.Is(err, ErrReservedWord) {
-				t.Fatalf("expected ErrReservedWord for edge property %q, got: %v", kw, err)
+				t.Fatalf("expected schemaerrors.ErrReservedWord for edge property %q, got nil", kw)
+			} else if !errors.Is(err, schemaerrors.ErrReservedWord) {
+				t.Fatalf("expected schemaerrors.ErrReservedWord for edge property %q, got: %v", kw, err)
 			}
 		})
 	}
@@ -714,7 +715,7 @@ func TestValidate_ReservedWordNewlyAdded(t *testing.T) {
 // regex), so it must be explicitly reserved: a user entity or edge type with
 // that name would alias the placeholder table and be silently skipped by the
 // store's reopen structural check (validateMetadataAgainstCatalog). Both
-// entity and edge type names must be rejected with ErrReservedWord (→
+// entity and edge type names must be rejected with schemaerrors.ErrReservedWord (→
 // INVALID_ARGUMENT at the gRPC boundary).
 func TestValidate_ReservedUntypedPlaceholderName(t *testing.T) {
 	tests := []struct {
@@ -731,10 +732,10 @@ func TestValidate_ReservedUntypedPlaceholderName(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			if err := Validate(tc.s); err == nil {
-				t.Fatal("expected ErrReservedWord, got nil")
+				t.Fatal("expected schemaerrors.ErrReservedWord, got nil")
 			} else {
-				if !errors.Is(err, ErrReservedWord) {
-					t.Fatalf("expected ErrReservedWord, got: %v", err)
+				if !errors.Is(err, schemaerrors.ErrReservedWord) {
+					t.Fatalf("expected schemaerrors.ErrReservedWord, got: %v", err)
 				}
 				// SPEC:937 has its own error-table row ("Name is the reserved
 				// internal placeholder") distinct from SPEC:936 ("Name is a
@@ -812,8 +813,8 @@ func TestValidate_CypherIdentifierBoundaryCasesEdgeType(t *testing.T) {
 			if !tc.valid && err == nil {
 				t.Fatalf("expected error for %q, got nil", tc.typeName)
 			}
-			if !tc.valid && err != nil && !errors.Is(err, ErrInvalidName) {
-				t.Fatalf("expected ErrInvalidName for %q, got: %v", tc.typeName, err)
+			if !tc.valid && err != nil && !errors.Is(err, schemaerrors.ErrInvalidName) {
+				t.Fatalf("expected schemaerrors.ErrInvalidName for %q, got: %v", tc.typeName, err)
 			}
 		})
 	}
@@ -866,8 +867,8 @@ func TestValidate_CypherIdentifierBoundaryCasesProperty(t *testing.T) {
 				if !b.valid && err == nil {
 					t.Fatalf("expected error for %q, got nil", b.prop)
 				}
-				if !b.valid && err != nil && !errors.Is(err, ErrInvalidName) {
-					t.Fatalf("expected ErrInvalidName for %q, got: %v", b.prop, err)
+				if !b.valid && err != nil && !errors.Is(err, schemaerrors.ErrInvalidName) {
+					t.Fatalf("expected schemaerrors.ErrInvalidName for %q, got: %v", b.prop, err)
 				}
 			})
 		}
@@ -920,9 +921,9 @@ func TestValidate_NameLengthBoundary(t *testing.T) {
 		})
 		t.Run(tc.name+"/256-char rejected", func(t *testing.T) {
 			if err := Validate(tc.s(long256)); err == nil {
-				t.Fatal("expected ErrInvalidName for 256-char name, got nil")
-			} else if !errors.Is(err, ErrInvalidName) {
-				t.Fatalf("expected ErrInvalidName, got: %v", err)
+				t.Fatal("expected schemaerrors.ErrInvalidName for 256-char name, got nil")
+			} else if !errors.Is(err, schemaerrors.ErrInvalidName) {
+				t.Fatalf("expected schemaerrors.ErrInvalidName, got: %v", err)
 			}
 		})
 	}

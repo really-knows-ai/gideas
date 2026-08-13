@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/foundry/flow/cartographer/internal/schemaerrors"
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
 )
 
@@ -22,7 +23,7 @@ const maxNameLength = 255
 // user's declared columns) and the store's reopen structural check
 // (validateMetadataAgainstCatalog) skips the name, silently bypassing the
 // metadata↔catalog check for it. Validate rejects it like a reserved word
-// (ErrReservedWord → INVALID_ARGUMENT); the store references this constant
+// (schemaerrors.ErrReservedWord → INVALID_ARGUMENT); the store references this constant
 // for the placeholder table it creates.
 const UntypedTableName = "_untyped"
 
@@ -31,7 +32,7 @@ const UntypedTableName = "_untyped"
 //  1. Per type name, in declaration order: format validation, then duplicate
 //     detection (entity types, then edge types). Format runs first so two
 //     identically-named invalid types (e.g. two empty names) surface
-//     ErrInvalidName — the structural defect — not ErrDuplicateTypeName.
+//     schemaerrors.ErrInvalidName — the structural defect — not schemaerrors.ErrDuplicateTypeName.
 //  2. Per type, in list order: the type name's reserved-word status and the
 //     internal-placeholder name check
 //  3. Per property within a type, in declaration order: property name format,
@@ -48,10 +49,10 @@ func Validate(schema *flowv1.Schema) error {
 	// the store dereferences it (diffSchemaAgainstCatalog and
 	// collectFromToPairs read s.EntityTypes) after Validate returns, so
 	// accepting nil here would hand the store a nil pointer that panics
-	// (surfacing as gRPC INTERNAL). Reject it with ErrNilSchema, which the
+	// (surfacing as gRPC INTERNAL). Reject it with schemaerrors.ErrNilSchema, which the
 	// service's isSchemaError maps to INVALID_ARGUMENT.
 	if schema == nil {
-		return ErrNilSchema
+		return schemaerrors.ErrNilSchema
 	}
 
 	// 1. Type-name format, then duplicate detection (format first so an
@@ -59,13 +60,13 @@ func Validate(schema *flowv1.Schema) error {
 	entityTypeNames := make(map[string]bool, len(schema.EntityTypes))
 	for i, et := range schema.EntityTypes {
 		if et == nil {
-			return fmt.Errorf("%w: entity type %d is nil", ErrNilElement, i)
+			return fmt.Errorf("%w: entity type %d is nil", schemaerrors.ErrNilElement, i)
 		}
 		if err := validateName(et.Name); err != nil {
 			return err
 		}
 		if entityTypeNames[et.Name] {
-			return fmt.Errorf("%w: %q", ErrDuplicateTypeName, et.Name)
+			return fmt.Errorf("%w: %q", schemaerrors.ErrDuplicateTypeName, et.Name)
 		}
 		entityTypeNames[et.Name] = true
 	}
@@ -74,13 +75,13 @@ func Validate(schema *flowv1.Schema) error {
 	edgeTypeNames := make(map[string]bool, len(schema.EdgeTypes))
 	for i, et := range schema.EdgeTypes {
 		if et == nil {
-			return fmt.Errorf("%w: edge type %d is nil", ErrNilElement, i)
+			return fmt.Errorf("%w: edge type %d is nil", schemaerrors.ErrNilElement, i)
 		}
 		if err := validateName(et.Name); err != nil {
 			return err
 		}
 		if edgeTypeNames[et.Name] {
-			return fmt.Errorf("%w: %q", ErrDuplicateTypeName, et.Name)
+			return fmt.Errorf("%w: %q", schemaerrors.ErrDuplicateTypeName, et.Name)
 		}
 		edgeTypeNames[et.Name] = true
 	}
@@ -110,7 +111,7 @@ func validateEntityType(et *flowv1.EntityType, entityTypeNames, edgeTypeNames ma
 
 	// 2. Reserved word check
 	if reservedWords[strings.ToUpper(et.Name)] {
-		return fmt.Errorf("%w: %q is a reserved word", ErrReservedWord, et.Name)
+		return fmt.Errorf("%w: %q is a reserved word", schemaerrors.ErrReservedWord, et.Name)
 	}
 
 	// 2. Internal placeholder name: `_untyped` is the store's placeholder
@@ -118,7 +119,7 @@ func validateEntityType(et *flowv1.EntityType, entityTypeNames, edgeTypeNames ma
 	// type with that name would alias it and be silently skipped by the
 	// store's reopen structural check, so it is reserved like a keyword.
 	if et.Name == UntypedTableName {
-		return fmt.Errorf("%w: %q is the reserved internal placeholder", ErrReservedWord, et.Name)
+		return fmt.Errorf("%w: %q is the reserved internal placeholder", schemaerrors.ErrReservedWord, et.Name)
 	}
 
 	// 3. Property name format, then duplicate detection within this type
@@ -127,34 +128,37 @@ func validateEntityType(et *flowv1.EntityType, entityTypeNames, edgeTypeNames ma
 	propNames := make(map[string]bool, len(et.Properties))
 	for i, p := range et.Properties {
 		if p == nil {
-			return fmt.Errorf("%w: property %d in entity type %q is nil", ErrNilElement, i, et.Name)
+			return fmt.Errorf("%w: property %d in entity type %q is nil", schemaerrors.ErrNilElement, i, et.Name)
 		}
 		if err := validateName(p.Name); err != nil {
 			return fmt.Errorf("%w: property %q in entity type %q", err, p.Name, et.Name)
 		}
 		if propNames[p.Name] {
-			return fmt.Errorf("%w: duplicate property %q in entity type %q", ErrDuplicatePropertyName, p.Name, et.Name)
+			return fmt.Errorf("%w: duplicate property %q in entity type %q",
+				schemaerrors.ErrDuplicatePropertyName, p.Name, et.Name)
 		}
 		propNames[p.Name] = true
 
 		// 3. Reserved word check for property name
 		if reservedWords[strings.ToUpper(p.Name)] {
-			return fmt.Errorf("%w: property %q in entity type %q is a reserved word", ErrReservedWord, p.Name, et.Name)
+			return fmt.Errorf("%w: property %q in entity type %q is a reserved word",
+				schemaerrors.ErrReservedWord, p.Name, et.Name)
 		}
 
 		// 3. Implicit-column collision (entities)
 		if p.Name == "id" {
 			return fmt.Errorf("%w: property %q in entity type %q collides with reserved column",
-				ErrImplicitColumnCollision, p.Name, et.Name)
+				schemaerrors.ErrImplicitColumnCollision, p.Name, et.Name)
 		}
 		if et.EnableVectorIndex && p.Name == "embedding" {
 			return fmt.Errorf("%w: property %q in entity type %q collides with embedding column when vector index is enabled",
-				ErrImplicitColumnCollision, p.Name, et.Name)
+				schemaerrors.ErrImplicitColumnCollision, p.Name, et.Name)
 		}
 
 		// 3. Property type must be "string"
 		if p.Type != "string" {
-			return fmt.Errorf("%w: property %q in entity type %q has type %q", ErrInvalidPropertyType, p.Name, et.Name, p.Type)
+			return fmt.Errorf("%w: property %q in entity type %q has type %q",
+				schemaerrors.ErrInvalidPropertyType, p.Name, et.Name, p.Type)
 		}
 	}
 
@@ -170,14 +174,14 @@ func validateEdgeType(et *flowv1.EdgeType) error {
 
 	// 2. Reserved word check
 	if reservedWords[strings.ToUpper(et.Name)] {
-		return fmt.Errorf("%w: %q is a reserved word", ErrReservedWord, et.Name)
+		return fmt.Errorf("%w: %q is a reserved word", schemaerrors.ErrReservedWord, et.Name)
 	}
 
 	// 2. Internal placeholder name: `_untyped` is the store's placeholder
 	// NODE table for edgeless rel types (UntypedTableName). A user edge type
 	// with that name would collide with it, so it is reserved like a keyword.
 	if et.Name == UntypedTableName {
-		return fmt.Errorf("%w: %q is the reserved internal placeholder", ErrReservedWord, et.Name)
+		return fmt.Errorf("%w: %q is the reserved internal placeholder", schemaerrors.ErrReservedWord, et.Name)
 	}
 
 	// 3. Property name format, then duplicate detection within this type
@@ -186,19 +190,21 @@ func validateEdgeType(et *flowv1.EdgeType) error {
 	propNames := make(map[string]bool, len(et.Properties))
 	for i, p := range et.Properties {
 		if p == nil {
-			return fmt.Errorf("%w: property %d in edge type %q is nil", ErrNilElement, i, et.Name)
+			return fmt.Errorf("%w: property %d in edge type %q is nil", schemaerrors.ErrNilElement, i, et.Name)
 		}
 		if err := validateName(p.Name); err != nil {
 			return fmt.Errorf("%w: property %q in edge type %q", err, p.Name, et.Name)
 		}
 		if propNames[p.Name] {
-			return fmt.Errorf("%w: duplicate property %q in edge type %q", ErrDuplicatePropertyName, p.Name, et.Name)
+			return fmt.Errorf("%w: duplicate property %q in edge type %q",
+				schemaerrors.ErrDuplicatePropertyName, p.Name, et.Name)
 		}
 		propNames[p.Name] = true
 
 		// 3. Reserved word check for property name
 		if reservedWords[strings.ToUpper(p.Name)] {
-			return fmt.Errorf("%w: property %q in edge type %q is a reserved word", ErrReservedWord, p.Name, et.Name)
+			return fmt.Errorf("%w: property %q in edge type %q is a reserved word",
+				schemaerrors.ErrReservedWord, p.Name, et.Name)
 		}
 
 		// 3. Implicit-column collision (edges): id/from/to/type are the rel
@@ -209,15 +215,16 @@ func validateEdgeType(et *flowv1.EdgeType) error {
 		// reservedWords (a property named "from" would otherwise silently
 		// alias the rel table's source column). Today the reserved-word check
 		// fires first for "from", so the observable sentinel is
-		// ErrReservedWord; both rows are INVALID_ARGUMENT at the wire.
+		// schemaerrors.ErrReservedWord; both rows are INVALID_ARGUMENT at the wire.
 		if p.Name == "id" || p.Name == "from" || p.Name == "to" || p.Name == "type" {
 			return fmt.Errorf("%w: property %q in edge type %q collides with reserved column",
-				ErrImplicitColumnCollision, p.Name, et.Name)
+				schemaerrors.ErrImplicitColumnCollision, p.Name, et.Name)
 		}
 
 		// 3. Property type must be "string"
 		if p.Type != "string" {
-			return fmt.Errorf("%w: property %q in edge type %q has type %q", ErrInvalidPropertyType, p.Name, et.Name, p.Type)
+			return fmt.Errorf("%w: property %q in edge type %q has type %q",
+				schemaerrors.ErrInvalidPropertyType, p.Name, et.Name, p.Type)
 		}
 	}
 
@@ -228,24 +235,25 @@ func validateRules(rules []*flowv1.ConnectionRule, entityTypeNames,
 	edgeTypeNames map[string]bool, entityTypeName string) error {
 	for i, rule := range rules {
 		if rule == nil {
-			return fmt.Errorf("%w: rule %d in entity type %q is nil", ErrNilElement, i, entityTypeName)
+			return fmt.Errorf("%w: rule %d in entity type %q is nil", schemaerrors.ErrNilElement, i, entityTypeName)
 		}
 		if len(rule.CanConnectTo) == 0 {
-			return fmt.Errorf("%w: rule %d in entity type %q has empty canConnectTo", ErrEmptyRuleList, i, entityTypeName)
+			return fmt.Errorf("%w: rule %d in entity type %q has empty canConnectTo",
+				schemaerrors.ErrEmptyRuleList, i, entityTypeName)
 		}
 		if len(rule.Using) == 0 {
-			return fmt.Errorf("%w: rule %d in entity type %q has empty using", ErrEmptyRuleList, i, entityTypeName)
+			return fmt.Errorf("%w: rule %d in entity type %q has empty using", schemaerrors.ErrEmptyRuleList, i, entityTypeName)
 		}
 		for _, target := range rule.CanConnectTo {
 			if !entityTypeNames[target] {
 				return fmt.Errorf("%w: canConnectTo references undeclared entity type %q in rule %d of %q",
-					ErrUndeclaredTypeRef, target, i, entityTypeName)
+					schemaerrors.ErrUndeclaredTypeRef, target, i, entityTypeName)
 			}
 		}
 		for _, edgeRef := range rule.Using {
 			if !edgeTypeNames[edgeRef] {
 				return fmt.Errorf("%w: using references undeclared edge type %q in rule %d of %q",
-					ErrUndeclaredTypeRef, edgeRef, i, entityTypeName)
+					schemaerrors.ErrUndeclaredTypeRef, edgeRef, i, entityTypeName)
 			}
 		}
 	}
@@ -259,10 +267,10 @@ func validateName(name string) error {
 	// fails the regex below regardless, so it is never rejected over-length;
 	// only its diagnostic reports bytes. This is acceptable, so no rune counting.
 	if len(name) == 0 || len(name) > maxNameLength {
-		return fmt.Errorf("%w: %q (length %d)", ErrInvalidName, name, len(name))
+		return fmt.Errorf("%w: %q (length %d)", schemaerrors.ErrInvalidName, name, len(name))
 	}
 	if !cypherIdentifierRegex.MatchString(name) {
-		return fmt.Errorf("%w: %q does not match [a-zA-Z_][a-zA-Z0-9_]*", ErrInvalidName, name)
+		return fmt.Errorf("%w: %q does not match [a-zA-Z_][a-zA-Z0-9_]*", schemaerrors.ErrInvalidName, name)
 	}
 	return nil
 }
