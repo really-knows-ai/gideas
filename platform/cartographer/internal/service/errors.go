@@ -128,8 +128,6 @@ func mapStoreError(err error) error {
 		return status.Error(codes.InvalidArgument, err.Error())
 	case errors.Is(err, store.ErrEmbeddingDimension):
 		return status.Error(codes.InvalidArgument, err.Error())
-	case errors.Is(err, store.ErrEmbeddingUpdateUnsupported):
-		return status.Error(codes.InvalidArgument, err.Error())
 	case errors.Is(err, store.ErrDestructiveSchemaChange):
 		return status.Error(codes.FailedPrecondition, err.Error())
 	case errors.Is(err, store.ErrDatabaseNotReady):
