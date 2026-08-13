@@ -1,9 +1,10 @@
 module github.com/foundry/flow/sdk/go
 
-go 1.26
+go 1.26.0
 
 require (
 	github.com/foundry/flow/gen v0.0.0
+	github.com/foundry/flow/pkg/metadata v0.0.0
 	github.com/mattn/go-sqlite3 v1.14.34
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2
 	google.golang.org/grpc v1.80.0
@@ -21,3 +22,5 @@ require (
 )
 
 replace github.com/foundry/flow/gen => ../../gen
+
+replace github.com/foundry/flow/pkg/metadata => ../../platform/pkg/metadata

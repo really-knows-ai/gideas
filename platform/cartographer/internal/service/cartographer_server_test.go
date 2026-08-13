@@ -25,6 +25,7 @@ import (
 	"github.com/foundry/flow/cartographer/internal/store"
 	"github.com/foundry/flow/cartographer/internal/store/ladybug"
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
+	flowmeta "github.com/foundry/flow/pkg/metadata"
 	"github.com/go-git/go-git/v5/plumbing"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -76,10 +77,10 @@ func capabilityContextAt(caps string, priv ed25519.PrivateKey, signedBy string, 
 	payload := fmt.Sprintf("%s|%d", caps, signedAt)
 	sig := base64.StdEncoding.EncodeToString(ed25519.Sign(priv, []byte(payload)))
 	md := metadata.Pairs(
-		MetadataKeyCapabilities, caps,
-		MetadataKeyCapabilitiesSignature, sig,
-		MetadataKeyCapabilitiesSignedAt, fmt.Sprintf("%d", signedAt),
-		MetadataKeyCapabilitiesSignedBy, signedBy,
+		flowmeta.MetadataKeyCapabilities, caps,
+		flowmeta.MetadataKeyCapabilitiesSignature, sig,
+		flowmeta.MetadataKeyCapabilitiesSignedAt, fmt.Sprintf("%d", signedAt),
+		flowmeta.MetadataKeyCapabilitiesSignedBy, signedBy,
 	)
 	return metadata.NewIncomingContext(context.Background(), md)
 }
@@ -723,10 +724,10 @@ func testCtx() context.Context {
 	caps := "READ:graph/entity/*,WRITE:graph/entity/*,READ:graph/tx,WRITE:graph/tx"
 	sig, signedAt := signCapabilities(caps, testSidecarPriv)
 	md := metadata.Pairs(
-		MetadataKeyCapabilities, caps,
-		MetadataKeyCapabilitiesSignature, sig,
-		MetadataKeyCapabilitiesSignedAt, fmt.Sprintf("%d", signedAt),
-		MetadataKeyCapabilitiesSignedBy, "sidecar",
+		flowmeta.MetadataKeyCapabilities, caps,
+		flowmeta.MetadataKeyCapabilitiesSignature, sig,
+		flowmeta.MetadataKeyCapabilitiesSignedAt, fmt.Sprintf("%d", signedAt),
+		flowmeta.MetadataKeyCapabilitiesSignedBy, "sidecar",
 	)
 	ctx := metadata.NewIncomingContext(context.Background(), md)
 	// Store capabilities directly (simulates what VerifyInterceptor would do).
@@ -1047,10 +1048,10 @@ func TestCapability_UnrecognizedSigner(t *testing.T) {
 
 	sig := base64.StdEncoding.EncodeToString([]byte("fake"))
 	md := metadata.Pairs(
-		MetadataKeyCapabilities, "READ:graph/entity/Component",
-		MetadataKeyCapabilitiesSignature, sig,
-		MetadataKeyCapabilitiesSignedAt, "1234567890",
-		MetadataKeyCapabilitiesSignedBy, "unknown",
+		flowmeta.MetadataKeyCapabilities, "READ:graph/entity/Component",
+		flowmeta.MetadataKeyCapabilitiesSignature, sig,
+		flowmeta.MetadataKeyCapabilitiesSignedAt, "1234567890",
+		flowmeta.MetadataKeyCapabilitiesSignedBy, "unknown",
 	)
 	ctx := metadata.NewIncomingContext(context.Background(), md)
 	_, err := srv.verifier.verify(ctx)
@@ -1077,9 +1078,9 @@ func TestCapability_MissingSignedBy(t *testing.T) {
 	payload := "READ:graph/entity/Component|1234567890"
 	sig := base64.StdEncoding.EncodeToString(ed25519.Sign(scPriv, []byte(payload)))
 	md := metadata.Pairs(
-		MetadataKeyCapabilities, "READ:graph/entity/Component",
-		MetadataKeyCapabilitiesSignature, sig,
-		MetadataKeyCapabilitiesSignedAt, "1234567890",
+		flowmeta.MetadataKeyCapabilities, "READ:graph/entity/Component",
+		flowmeta.MetadataKeyCapabilitiesSignature, sig,
+		flowmeta.MetadataKeyCapabilitiesSignedAt, "1234567890",
 	)
 	ctx := metadata.NewIncomingContext(context.Background(), md)
 	_, err := srv.verifier.verify(ctx)
@@ -10399,10 +10400,10 @@ func TestCapability_StalenessBoundary_InsideAndPast(t *testing.T) {
 	payload := fmt.Sprintf("READ:graph/entity/Component|%d", insideWindow)
 	sig := base64.StdEncoding.EncodeToString(ed25519.Sign(scPriv, []byte(payload)))
 	md := metadata.Pairs(
-		MetadataKeyCapabilities, "READ:graph/entity/Component",
-		MetadataKeyCapabilitiesSignature, sig,
-		MetadataKeyCapabilitiesSignedAt, fmt.Sprintf("%d", insideWindow),
-		MetadataKeyCapabilitiesSignedBy, "sidecar",
+		flowmeta.MetadataKeyCapabilities, "READ:graph/entity/Component",
+		flowmeta.MetadataKeyCapabilitiesSignature, sig,
+		flowmeta.MetadataKeyCapabilitiesSignedAt, fmt.Sprintf("%d", insideWindow),
+		flowmeta.MetadataKeyCapabilitiesSignedBy, "sidecar",
 	)
 	ctx := metadata.NewIncomingContext(context.Background(), md)
 	_, err := srv.verifier.verify(ctx)
@@ -10415,10 +10416,10 @@ func TestCapability_StalenessBoundary_InsideAndPast(t *testing.T) {
 	payload2 := fmt.Sprintf("READ:graph/entity/Component|%d", past31s)
 	sig2 := base64.StdEncoding.EncodeToString(ed25519.Sign(scPriv, []byte(payload2)))
 	md2 := metadata.Pairs(
-		MetadataKeyCapabilities, "READ:graph/entity/Component",
-		MetadataKeyCapabilitiesSignature, sig2,
-		MetadataKeyCapabilitiesSignedAt, fmt.Sprintf("%d", past31s),
-		MetadataKeyCapabilitiesSignedBy, "sidecar",
+		flowmeta.MetadataKeyCapabilities, "READ:graph/entity/Component",
+		flowmeta.MetadataKeyCapabilitiesSignature, sig2,
+		flowmeta.MetadataKeyCapabilitiesSignedAt, fmt.Sprintf("%d", past31s),
+		flowmeta.MetadataKeyCapabilitiesSignedBy, "sidecar",
 	)
 	ctx2 := metadata.NewIncomingContext(context.Background(), md2)
 	_, err2 := srv.verifier.verify(ctx2)
@@ -10445,10 +10446,10 @@ func TestCapability_StalenessBoundary_NegativeWindow(t *testing.T) {
 	payload := fmt.Sprintf("READ:graph/entity/Component|%d", oldTime)
 	sig := base64.StdEncoding.EncodeToString(ed25519.Sign(scPriv, []byte(payload)))
 	md := metadata.Pairs(
-		MetadataKeyCapabilities, "READ:graph/entity/Component",
-		MetadataKeyCapabilitiesSignature, sig,
-		MetadataKeyCapabilitiesSignedAt, fmt.Sprintf("%d", oldTime),
-		MetadataKeyCapabilitiesSignedBy, "sidecar",
+		flowmeta.MetadataKeyCapabilities, "READ:graph/entity/Component",
+		flowmeta.MetadataKeyCapabilitiesSignature, sig,
+		flowmeta.MetadataKeyCapabilitiesSignedAt, fmt.Sprintf("%d", oldTime),
+		flowmeta.MetadataKeyCapabilitiesSignedBy, "sidecar",
 	)
 	ctx := metadata.NewIncomingContext(context.Background(), md)
 	_, err := srv.verifier.verify(ctx)
@@ -10688,10 +10689,10 @@ func narrowCtx(caps ...string) context.Context {
 	}
 	sig, signedAt := signCapabilities(capsStr, testSidecarPriv)
 	md := metadata.Pairs(
-		MetadataKeyCapabilities, capsStr,
-		MetadataKeyCapabilitiesSignature, sig,
-		MetadataKeyCapabilitiesSignedAt, fmt.Sprintf("%d", signedAt),
-		MetadataKeyCapabilitiesSignedBy, "sidecar",
+		flowmeta.MetadataKeyCapabilities, capsStr,
+		flowmeta.MetadataKeyCapabilitiesSignature, sig,
+		flowmeta.MetadataKeyCapabilitiesSignedAt, fmt.Sprintf("%d", signedAt),
+		flowmeta.MetadataKeyCapabilitiesSignedBy, "sidecar",
 	)
 	ctx := metadata.NewIncomingContext(context.Background(), md)
 	c := &Capabilities{
@@ -11346,9 +11347,9 @@ func TestCapability_MissingSignedAt(t *testing.T) {
 	payload := "READ:graph/entity/Component|1234567890"
 	sig := base64.StdEncoding.EncodeToString(ed25519.Sign(scPriv, []byte(payload)))
 	md := metadata.Pairs(
-		MetadataKeyCapabilities, "READ:graph/entity/Component",
-		MetadataKeyCapabilitiesSignature, sig,
-		MetadataKeyCapabilitiesSignedBy, "sidecar",
+		flowmeta.MetadataKeyCapabilities, "READ:graph/entity/Component",
+		flowmeta.MetadataKeyCapabilitiesSignature, sig,
+		flowmeta.MetadataKeyCapabilitiesSignedBy, "sidecar",
 	)
 	ctx := metadata.NewIncomingContext(context.Background(), md)
 	_, err := srv.verifier.verify(ctx)
@@ -11371,10 +11372,10 @@ func TestCapability_EmptySignedAt(t *testing.T) {
 		30*time.Second, "test-ns", 30*time.Minute, 100000)
 
 	md := metadata.Pairs(
-		MetadataKeyCapabilities, "READ:graph/entity/Component",
-		MetadataKeyCapabilitiesSignature, base64.StdEncoding.EncodeToString([]byte("fake")),
-		MetadataKeyCapabilitiesSignedAt, "",
-		MetadataKeyCapabilitiesSignedBy, "sidecar",
+		flowmeta.MetadataKeyCapabilities, "READ:graph/entity/Component",
+		flowmeta.MetadataKeyCapabilitiesSignature, base64.StdEncoding.EncodeToString([]byte("fake")),
+		flowmeta.MetadataKeyCapabilitiesSignedAt, "",
+		flowmeta.MetadataKeyCapabilitiesSignedBy, "sidecar",
 	)
 	ctx := metadata.NewIncomingContext(context.Background(), md)
 	_, err := srv.verifier.verify(ctx)
@@ -11402,10 +11403,10 @@ func TestCapability_MalformedSignedAt(t *testing.T) {
 	payload := "READ:graph/entity/Component|abc"
 	sig := base64.StdEncoding.EncodeToString(ed25519.Sign(scPriv, []byte(payload)))
 	md := metadata.Pairs(
-		MetadataKeyCapabilities, "READ:graph/entity/Component",
-		MetadataKeyCapabilitiesSignature, sig,
-		MetadataKeyCapabilitiesSignedBy, "sidecar",
-		MetadataKeyCapabilitiesSignedAt, "abc",
+		flowmeta.MetadataKeyCapabilities, "READ:graph/entity/Component",
+		flowmeta.MetadataKeyCapabilitiesSignature, sig,
+		flowmeta.MetadataKeyCapabilitiesSignedBy, "sidecar",
+		flowmeta.MetadataKeyCapabilitiesSignedAt, "abc",
 	)
 	ctx := metadata.NewIncomingContext(context.Background(), md)
 	_, err := srv.verifier.verify(ctx)

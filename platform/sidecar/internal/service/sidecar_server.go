@@ -18,6 +18,7 @@ import (
 	"time"
 
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
+	flowmeta "github.com/foundry/flow/pkg/metadata"
 	flow "github.com/foundry/flow/sdk/go"
 	"github.com/foundry/flow/sidecar/internal/buffer"
 	"google.golang.org/grpc"
@@ -480,13 +481,13 @@ func ExtractIdentityFromMD(ctx context.Context) (namespace, workitemID, nodeID s
 	if !ok {
 		return
 	}
-	if vals := md.Get(MetadataKeyNamespace); len(vals) > 0 {
+	if vals := md.Get(flowmeta.MetadataKeyNamespace); len(vals) > 0 {
 		namespace = vals[0]
 	}
-	if vals := md.Get(MetadataKeyWorkitemID); len(vals) > 0 {
+	if vals := md.Get(flowmeta.MetadataKeyWorkitemID); len(vals) > 0 {
 		workitemID = vals[0]
 	}
-	if vals := md.Get(MetadataKeyNodeID); len(vals) > 0 {
+	if vals := md.Get(flowmeta.MetadataKeyNodeID); len(vals) > 0 {
 		nodeID = vals[0]
 	}
 	return

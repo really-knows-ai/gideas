@@ -10,6 +10,7 @@ import (
 	"time"
 
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
+	flowmeta "github.com/foundry/flow/pkg/metadata"
 	"github.com/foundry/flow/tools/flowctl/internal/api"
 	"github.com/foundry/flow/tools/flowctl/manifestfs"
 	"github.com/spf13/cobra"
@@ -448,9 +449,9 @@ func (g *prodGraphExporter) dialOperatorStream(ctx context.Context, localPort in
 
 	// Attach bearer token and routing metadata.
 	callCtx := metadata.AppendToOutgoingContext(ctx,
-		"authorization", "Bearer "+token,
-		"x-flow-namespace", namespace,
-		"x-flow-graph-name", name,
+		flowmeta.MetadataKeyAuthorization, "Bearer "+token,
+		flowmeta.MetadataKeyNamespace, namespace,
+		flowmeta.MetadataKeyGraphName, name,
 	)
 
 	// Bound the stream with exportStreamTimeout (see its comment): the

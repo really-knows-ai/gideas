@@ -1,6 +1,6 @@
 module github.com/foundry/flow/librarian
 
-go 1.26
+go 1.26.0
 
 require (
 	github.com/asg017/sqlite-vec-go-bindings v0.1.6
@@ -15,6 +15,7 @@ require (
 )
 
 require (
+	github.com/foundry/flow/pkg/metadata v0.0.0 // indirect
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2 // indirect
 	golang.org/x/net v0.53.0 // indirect
 	golang.org/x/sys v0.43.0 // indirect
@@ -25,6 +26,8 @@ require (
 replace github.com/foundry/flow/gen => ../../gen
 
 replace github.com/foundry/flow/pkg/eventbus => ../pkg/eventbus
+
+replace github.com/foundry/flow/pkg/metadata => ../pkg/metadata
 
 replace github.com/foundry/flow/pkg/randid => ../pkg/randid
 

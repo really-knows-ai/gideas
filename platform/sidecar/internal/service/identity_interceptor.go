@@ -10,48 +10,14 @@ import (
 	"strconv"
 	"time"
 
+	flowmeta "github.com/foundry/flow/pkg/metadata"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
 )
 
-const (
-	// MetadataKeyNamespace is the gRPC metadata key for the namespace
-	// (flow identity boundary). Replaces the former x-flow-flow-id.
-	MetadataKeyNamespace = "x-flow-namespace"
-
-	// MetadataKeyWorkitemID is the gRPC metadata key for the workitem identity.
-	MetadataKeyWorkitemID = "x-flow-workitem-id"
-
-	// MetadataKeyNodeID is the gRPC metadata key for the node identity.
-	MetadataKeyNodeID = "x-flow-node-id"
-
-	// MetadataKeyCapabilities is the gRPC metadata key carrying the
-	// comma-separated capability grants for the node. Injected by the
-	// Sidecar from the FLOW_CAPABILITIES environment variable (set by the
-	// Operator during pod construction). Owning services read this header
-	// to enforce capability-gated access.
-	MetadataKeyCapabilities = "x-flow-capabilities"
-
-	// MetadataKeyCapabilitiesSignature is the gRPC metadata key carrying the
-	// base64-encoded Ed25519 signature over
-	// "{x-flow-capabilities}|{x-flow-capabilities-signed-at}" (SPEC R3 /
-	// Capability Authorisation Chain). Injected by the Sidecar alongside
-	// MetadataKeyCapabilities so the Cartographer can verify the attested
-	// capabilities on ingress.
-	MetadataKeyCapabilitiesSignature = "x-flow-capabilities-signature"
-
-	// MetadataKeyCapabilitiesSignedBy is the gRPC metadata key selecting the
-	// verification key at the Cartographer ("sidecar" or "operator").
-	MetadataKeyCapabilitiesSignedBy = "x-flow-capabilities-signed-by"
-
-	// MetadataKeyCapabilitiesSignedAt is the gRPC metadata key carrying the
-	// Unix timestamp (seconds) used for the anti-replay staleness check.
-	MetadataKeyCapabilitiesSignedAt = "x-flow-capabilities-signed-at"
-
-	// signerIdentitySidecar is the value carried in MetadataKeyCapabilitiesSignedBy
-	// for capabilities signed by the Sidecar's shared signing key.
-	signerIdentitySidecar = "sidecar"
-)
+// signerIdentitySidecar is the value carried in the x-flow-capabilities-signed-by
+// header for capabilities signed by the Sidecar's shared signing key.
+const signerIdentitySidecar = "sidecar"
 
 // IdentityInterceptor returns a gRPC unary server interceptor that enriches
 // incoming metadata with authoritative identity and capability fields.
@@ -156,7 +122,7 @@ func enrichIdentity(
 	md metadata.MD, method string,
 ) (metadata.MD, error) {
 	// Try session-based enrichment first.
-	vals := md.Get(MetadataKeyWorkitemID)
+	vals := md.Get(flowmeta.MetadataKeyWorkitemID)
 	if len(vals) > 0 {
 		identity := server.LookupSession(vals[0])
 		if identity != nil {
@@ -169,10 +135,10 @@ func enrichIdentity(
 			)
 
 			enriched := md.Copy()
-			enriched.Set(MetadataKeyNamespace, namespace)
-			enriched.Set(MetadataKeyWorkitemID, identity.WorkitemID)
-			enriched.Set(MetadataKeyNodeID, identity.NodeID)
-			enriched.Set(MetadataKeyCapabilities, capabilities)
+			enriched.Set(flowmeta.MetadataKeyNamespace, namespace)
+			enriched.Set(flowmeta.MetadataKeyWorkitemID, identity.WorkitemID)
+			enriched.Set(flowmeta.MetadataKeyNodeID, identity.NodeID)
+			enriched.Set(flowmeta.MetadataKeyCapabilities, capabilities)
 			return signCapabilities(enriched, capabilities, signingKey)
 		}
 		slog.Info("Identity interceptor: no session found for workitem",
@@ -192,9 +158,9 @@ func enrichIdentity(
 		)
 
 		enriched := md.Copy()
-		enriched.Set(MetadataKeyNamespace, namespace)
-		enriched.Set(MetadataKeyNodeID, nodeID)
-		enriched.Set(MetadataKeyCapabilities, capabilities)
+		enriched.Set(flowmeta.MetadataKeyNamespace, namespace)
+		enriched.Set(flowmeta.MetadataKeyNodeID, nodeID)
+		enriched.Set(flowmeta.MetadataKeyCapabilities, capabilities)
 		// Do NOT set x-flow-workitem-id — no active assignment.
 		return signCapabilities(enriched, capabilities, signingKey)
 	}
@@ -224,8 +190,8 @@ func signCapabilities(md metadata.MD, capabilities string, signingKey ed25519.Pr
 	signedAt := strconv.FormatInt(time.Now().Unix(), 10)
 	payload := []byte(capabilities + "|" + signedAt)
 	sig := ed25519.Sign(signingKey, payload)
-	md.Set(MetadataKeyCapabilitiesSignature, base64.StdEncoding.EncodeToString(sig))
-	md.Set(MetadataKeyCapabilitiesSignedBy, signerIdentitySidecar)
-	md.Set(MetadataKeyCapabilitiesSignedAt, signedAt)
+	md.Set(flowmeta.MetadataKeyCapabilitiesSignature, base64.StdEncoding.EncodeToString(sig))
+	md.Set(flowmeta.MetadataKeyCapabilitiesSignedBy, signerIdentitySidecar)
+	md.Set(flowmeta.MetadataKeyCapabilitiesSignedAt, signedAt)
 	return md, nil
 }

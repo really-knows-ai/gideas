@@ -8,6 +8,7 @@ import (
 	"time"
 
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
+	flowmeta "github.com/foundry/flow/pkg/metadata"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
@@ -77,8 +78,8 @@ func (c *ArchivistClient) Close() error {
 // withMetadata attaches x-flow-namespace and x-flow-workitem-id to the context.
 func withMetadata(ctx context.Context, namespace, workitemID string) context.Context {
 	md := metadata.Pairs(
-		"x-flow-namespace", namespace,
-		"x-flow-workitem-id", workitemID,
+		flowmeta.MetadataKeyNamespace, namespace,
+		flowmeta.MetadataKeyWorkitemID, workitemID,
 	)
 	return metadata.NewOutgoingContext(ctx, md)
 }

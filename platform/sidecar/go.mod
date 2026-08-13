@@ -1,10 +1,11 @@
 module github.com/foundry/flow/sidecar
 
-go 1.26
+go 1.26.0
 
 require (
 	github.com/foundry/flow/gen v0.0.0
 	github.com/foundry/flow/pkg/eventbus v0.0.0
+	github.com/foundry/flow/pkg/metadata v0.0.0
 	github.com/foundry/flow/pkg/randid v0.0.0
 	github.com/foundry/flow/sdk/go v0.0.0-00010101000000-000000000000
 	google.golang.org/grpc v1.80.0
@@ -23,6 +24,8 @@ require (
 replace github.com/foundry/flow/gen => ../../gen
 
 replace github.com/foundry/flow/pkg/eventbus => ../pkg/eventbus
+
+replace github.com/foundry/flow/pkg/metadata => ../pkg/metadata
 
 replace github.com/foundry/flow/pkg/randid => ../pkg/randid
 

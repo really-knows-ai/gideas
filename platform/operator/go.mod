@@ -5,6 +5,7 @@ go 1.26.0
 require (
 	github.com/foundry/flow/gen v0.0.0
 	github.com/foundry/flow/pkg/eventbus v0.0.0-00010101000000-000000000000
+	github.com/foundry/flow/pkg/metadata v0.0.0
 	github.com/foundry/flow/pkg/randid v0.0.0
 	github.com/foundry/flow/sdk/go v0.0.0-00010101000000-000000000000
 	github.com/go-logr/logr v1.4.3
@@ -109,6 +110,8 @@ require (
 replace github.com/foundry/flow/gen => ../../gen
 
 replace github.com/foundry/flow/pkg/eventbus => ../pkg/eventbus
+
+replace github.com/foundry/flow/pkg/metadata => ../pkg/metadata
 
 replace github.com/foundry/flow/pkg/randid => ../pkg/randid
 

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
+	flowmeta "github.com/foundry/flow/pkg/metadata"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/types/known/durationpb"
@@ -27,7 +28,7 @@ const (
 
 	// metadataKeyWorkitemID is the gRPC metadata key used to propagate
 	// the workitem context on every outgoing call.
-	metadataKeyWorkitemID = "x-flow-workitem-id"
+	metadataKeyWorkitemID = flowmeta.MetadataKeyWorkitemID
 
 	// EnvFlowNamespace is the environment variable injected by the runtime
 	// to identify the current flow's Kubernetes namespace.

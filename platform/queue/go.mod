@@ -1,6 +1,6 @@
 module github.com/foundry/flow/queue
 
-go 1.26
+go 1.26.0
 
 require (
 	github.com/foundry/flow/gen v0.0.0
@@ -9,6 +9,7 @@ require (
 )
 
 require (
+	github.com/foundry/flow/pkg/metadata v0.0.0 // indirect
 	github.com/mattn/go-sqlite3 v1.14.34 // indirect
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2 // indirect
 	golang.org/x/net v0.53.0 // indirect
@@ -19,5 +20,7 @@ require (
 )
 
 replace github.com/foundry/flow/gen => ../../gen
+
+replace github.com/foundry/flow/pkg/metadata => ../pkg/metadata
 
 replace github.com/foundry/flow/sdk/go => ../../sdk/go

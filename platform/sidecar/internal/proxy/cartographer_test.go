@@ -13,6 +13,7 @@ import (
 	"time"
 
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
+	flowmeta "github.com/foundry/flow/pkg/metadata"
 	flow "github.com/foundry/flow/sdk/go"
 	"github.com/foundry/flow/sidecar/internal/service"
 	"google.golang.org/grpc"
@@ -412,8 +413,8 @@ func TestCartographerProxy_CheckCapability_ExactOrLiteralWildcard(t *testing.T) 
 	nodeCtx := func(caps string) context.Context {
 		return metadata.NewIncomingContext(context.Background(),
 			metadata.Pairs(
-				service.MetadataKeyNodeID, "wire-node",
-				service.MetadataKeyCapabilities, caps,
+				flowmeta.MetadataKeyNodeID, "wire-node",
+				flowmeta.MetadataKeyCapabilities, caps,
 			))
 	}
 	p := &CartographerProxy{}
@@ -1402,7 +1403,7 @@ func TestCartographerProxy_E2E_SessionMode_SignsCapabilitiesWithKey(t *testing.T
 		t.Fatal("expected the fake Cartographer to receive the ExecuteCypher request")
 	}
 	assertSignedCapabilitiesOnMD(t, w.sidecarPub, w.capture.metadata(), caps)
-	if got := w.capture.metadata().Get(service.MetadataKeyNodeID); len(got) != 1 || got[0] != "session-node" {
+	if got := w.capture.metadata().Get(flowmeta.MetadataKeyNodeID); len(got) != 1 || got[0] != "session-node" {
 		t.Fatalf("expected the session's node identity to be injected, got %v", got)
 	}
 }

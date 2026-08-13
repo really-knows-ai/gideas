@@ -36,6 +36,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	flowv1gen "github.com/foundry/flow/gen/flow/v1"
+	flowmeta "github.com/foundry/flow/pkg/metadata"
 )
 
 // ProxyServer implements CartographerServiceServer for the Operator's gRPC proxy.
@@ -88,13 +89,13 @@ func (s *ProxyServer) extractRoutingMetadata(ctx context.Context) (namespace, na
 		return "", "", status.Error(codes.InvalidArgument, "missing gRPC metadata")
 	}
 
-	ns := md.Get("x-flow-namespace")
+	ns := md.Get(flowmeta.MetadataKeyNamespace)
 	if len(ns) == 0 || ns[0] == "" {
 		return "", "", status.Error(codes.InvalidArgument, "missing routing namespace (x-flow-namespace)")
 	}
 
 	graphName := defaultGraphName // SPEC R1 singleton convention
-	if gn := md.Get("x-flow-graph-name"); len(gn) > 0 && gn[0] != "" {
+	if gn := md.Get(flowmeta.MetadataKeyGraphName); len(gn) > 0 && gn[0] != "" {
 		graphName = gn[0]
 	}
 
@@ -111,7 +112,7 @@ func (s *ProxyServer) authorize(ctx context.Context, namespace, name string) err
 		return status.Error(codes.Unauthenticated, "missing gRPC metadata")
 	}
 
-	authHeaders := md.Get("authorization")
+	authHeaders := md.Get(flowmeta.MetadataKeyAuthorization)
 	if len(authHeaders) == 0 {
 		return status.Error(codes.Unauthenticated, "missing authorization header")
 	}
@@ -272,10 +273,10 @@ func (s *ProxyServer) ExportGraph(req *flowv1gen.ExportGraphRequest, stream flow
 		return err
 	}
 	ctx := metadata.AppendToOutgoingContext(stream.Context(),
-		"x-flow-capabilities", caps.capabilities,
-		"x-flow-capabilities-signed-by", caps.signedBy,
-		"x-flow-capabilities-signed-at", caps.signedAt,
-		"x-flow-capabilities-signature", caps.signature,
+		flowmeta.MetadataKeyCapabilities, caps.capabilities,
+		flowmeta.MetadataKeyCapabilitiesSignedBy, caps.signedBy,
+		flowmeta.MetadataKeyCapabilitiesSignedAt, caps.signedAt,
+		flowmeta.MetadataKeyCapabilitiesSignature, caps.signature,
 	)
 
 	// grpc.NewClient connects lazily, so the 10s dial timeout below does not by itself
