@@ -305,12 +305,15 @@ func (s *ProxyServer) ExportGraph(req *flowv1gen.ExportGraphRequest, stream flow
 		return status.Errorf(codes.Unavailable, "cannot start export stream: %v", err)
 	}
 
-	// A pre-stream rejection — the Cartographer returns INVALID_ARGUMENT (unsupported
-	// format) or RESOURCE_EXHAUSTED (buffer allocation) BEFORE sending any chunk (SPEC
-	// error table rows "Unsupported export format" and "ExportGraph buffer allocation
-	// failure", both "no data sent"); those statuses arrive at the proxy's first Recv
-	// with no chunk forwarded, so pass them through verbatim and let the documented CLI
-	// error codes surface (the sidecar relay preserves upstream statuses identically).
+	// A pre-stream rejection or transport failure — the Cartographer returns
+	// INVALID_ARGUMENT (unsupported format), RESOURCE_EXHAUSTED (buffer allocation), or
+	// UNAVAILABLE (upstream unreachable — the lazy grpc.NewClient dial delivers the
+	// connect failure on the first Recv) BEFORE sending any chunk (SPEC error table rows
+	// "Unsupported export format", "ExportGraph buffer allocation failure", and
+	// "ExportGraph stream-establishment failure", all "no data sent"); those statuses
+	// arrive at the proxy's first Recv with no chunk forwarded, so pass them through
+	// verbatim and let the documented CLI error codes surface (matching the sidecar
+	// relay's passthrough set exactly).
 	// Once at least one chunk has been forwarded, any failure — a transport-level break
 	// (Unavailable), a non-conforming upstream status (e.g. DataLoss), or a raw error —
 	// is a genuine mid-stream failure (partial data may already have been sent) and
@@ -324,7 +327,7 @@ func (s *ProxyServer) ExportGraph(req *flowv1gen.ExportGraphRequest, stream flow
 		if err != nil {
 			if !sentAny {
 				if st, ok := status.FromError(err); ok {
-					if c := st.Code(); c == codes.InvalidArgument || c == codes.ResourceExhausted {
+					if c := st.Code(); c == codes.InvalidArgument || c == codes.ResourceExhausted || c == codes.Unavailable {
 						return err
 					}
 				}

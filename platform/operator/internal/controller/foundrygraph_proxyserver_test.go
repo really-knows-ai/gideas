@@ -433,6 +433,32 @@ func (mockExportClientErr) CloseSend() error                                 { r
 func (mockExportClientErr) SendMsg(any) error                                { return nil }
 func (mockExportClientErr) RecvMsg(any) error                                { return nil }
 
+// mockExportClientChunkThenErr yields a single chunk and then returns the configured error
+// from the next Recv — pinning the relay's genuine mid-stream branch (at least one chunk
+// already forwarded) when the upstream breaks after streaming started, mirroring the sidecar
+// relay's mockExportClientChunkThenErr.
+type mockExportClientChunkThenErr struct {
+	err   error
+	calls int
+}
+
+func (m *mockExportClientChunkThenErr) Recv() (*flowv1gen.ExportGraphResponse, error) {
+	m.calls++
+	if m.calls == 1 {
+		return &flowv1gen.ExportGraphResponse{Chunk: []byte("chunk")}, nil
+	}
+	return nil, m.err
+}
+
+func (mockExportClientChunkThenErr) Context() context.Context { return context.Background() }
+func (mockExportClientChunkThenErr) Header() (metadata.MD, error) {
+	return nil, nil
+}
+func (mockExportClientChunkThenErr) Trailer() metadata.MD { return nil }
+func (mockExportClientChunkThenErr) CloseSend() error     { return nil }
+func (mockExportClientChunkThenErr) SendMsg(any) error    { return nil }
+func (mockExportClientChunkThenErr) RecvMsg(any) error    { return nil }
+
 // TestExportGraphPropagatesUpstreamStatus asserts an upstream INTERNAL status on a mid-stream
 // Recv error surfaces as INTERNAL to the caller (SPEC error table: "ExportGraph mid-stream
 // failure → INTERNAL") — the upstream error must not be recast as a dial-style Unavailable.
@@ -668,9 +694,63 @@ func TestExportGraphRawRecvErrorIsInternal(t *testing.T) {
 	}
 }
 
-// TestExportGraphMidStreamUnavailableIsInternal asserts that a mid-stream transport-level
-// break (Unavailable) after the stream has started surfaces as the SPEC's INTERNAL, not a
-// dial-timeout Unavailable.
+// TestExportGraphStreamEstablishmentUnavailableIsUnavailable asserts that an upstream
+// transport Unavailable at the first Recv with no chunk forwarded — a stream-establishment
+// failure, the Cartographer could not be reached before any data was sent (SPEC error table
+// row "ExportGraph stream-establishment failure → UNAVAILABLE") — surfaces as UNAVAILABLE,
+// not INTERNAL. The lazy grpc.NewClient dial delivers the connect failure on the first Recv
+// rather than on the stream call itself, so this is the operator's first-Recv equivalent of
+// the dial-timeout Unavailable, matching the sidecar relay
+// (TestCartographerProxy_ExportGraph_StreamEstablishmentUnavailable).
+func TestExportGraphStreamEstablishmentUnavailableIsUnavailable(t *testing.T) {
+	rt := NewProxyRoutingTable()
+	rt.Register("ns", "graph", "cartographer-graph.ns.svc.cluster.local:50051")
+
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate signing key: %v", err)
+	}
+
+	s := &ProxyServer{
+		routingTable: rt,
+		k8sClient:    authProxyClient(t, true, true),
+		authCache:    newAuthCache(30 * time.Second),
+		dialer: func(ctx context.Context, endpoint string) (CartographerClient, error) {
+			return &mockCartographerClient{
+				exportGraphFn: func(ctx context.Context, in *flowv1gen.ExportGraphRequest) (flowv1gen.CartographerService_ExportGraphClient, error) {
+					return &mockExportClientErr{err: status.Error(codes.Unavailable, "connection refused")}, nil
+				},
+			}, nil
+		},
+		operatorSigningKey: priv,
+	}
+
+	stream := &mockExportStream{}
+	md := metadata.Pairs(
+		"x-flow-namespace", "ns",
+		"x-flow-graph-name", "graph",
+		"authorization", "Bearer valid",
+	)
+	stream.ctx = metadata.NewIncomingContext(context.Background(), md)
+
+	err = s.ExportGraph(&flowv1gen.ExportGraphRequest{Format: "json"}, stream)
+	if err == nil {
+		t.Fatal("expected an error on stream-establishment failure")
+	}
+	// SPEC error table: a no-data-sent transport failure at stream establishment is
+	// UNAVAILABLE, not the INTERNAL reserved for a genuine mid-stream break.
+	if status.Code(err) != codes.Unavailable {
+		t.Errorf("expected UNAVAILABLE for stream-establishment failure, got %v", status.Code(err))
+	}
+	if len(stream.sends) != 0 {
+		t.Error("expected no chunks forwarded for a stream-establishment failure")
+	}
+}
+
+// TestExportGraphMidStreamUnavailableIsInternal asserts that a transport-level break
+// (Unavailable) AFTER at least one chunk has been forwarded — a genuine mid-stream failure
+// (SPEC error table row "ExportGraph mid-stream failure → INTERNAL", partial data may
+// already have been sent) — surfaces as INTERNAL, not a stream-establishment Unavailable.
 func TestExportGraphMidStreamUnavailableIsInternal(t *testing.T) {
 	rt := NewProxyRoutingTable()
 	rt.Register("ns", "graph", "cartographer-graph.ns.svc.cluster.local:50051")
@@ -687,7 +767,7 @@ func TestExportGraphMidStreamUnavailableIsInternal(t *testing.T) {
 		dialer: func(ctx context.Context, endpoint string) (CartographerClient, error) {
 			return &mockCartographerClient{
 				exportGraphFn: func(ctx context.Context, in *flowv1gen.ExportGraphRequest) (flowv1gen.CartographerService_ExportGraphClient, error) {
-					return &mockExportClientErr{err: status.Error(codes.Unavailable, "connection reset mid-stream")}, nil
+					return &mockExportClientChunkThenErr{err: status.Error(codes.Unavailable, "connection reset mid-stream")}, nil
 				},
 			}, nil
 		},
@@ -706,9 +786,13 @@ func TestExportGraphMidStreamUnavailableIsInternal(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected an error on mid-stream upstream break")
 	}
-	// SPEC R11: mid-stream export failure is INTERNAL, not the Unavailable used for dial.
+	// SPEC error table: a mid-stream break after a chunk has been forwarded is INTERNAL,
+	// not the stream-establishment Unavailable.
 	if status.Code(err) != codes.Internal {
 		t.Errorf("expected INTERNAL for mid-stream break, got %v", status.Code(err))
+	}
+	if len(stream.sends) == 0 {
+		t.Error("expected a chunk to have been forwarded before the mid-stream break")
 	}
 }
 
