@@ -201,19 +201,24 @@ func (db *ladybugDB) branchLocked(txID string) (*branchDB, error) {
 	)
 	if err != nil {
 		// SPEC R9 recovery point 4 rolls back a transaction whose branch .lbug
-		// is absent; this closes the sibling crash window. A crash between
-		// CreateBranchDB and ReplicateSchemaToBranch leaves a present-but-empty
-		// branch .lbug with no schema metadata (ReplicateSchemaToBranch writes
-		// branches/<txID>.schema.json only after its DDL loop). In that window
-		// the branch has no tables and no data — the transaction never made a
-		// durable change — so it is classified exactly like the absent-.lbug
-		// case (ErrBranchNotFound → RecoverOpenTransactions rolls the
-		// transaction back via cleanupTransaction/DropBranchDB) instead of
-		// surfacing a hard error that bricks startup. A non-empty catalog with
-		// no metadata stays a loud failure (genuine state loss, mirroring
-		// restoreMainSchemaMetadataLocked), and so does a present-but-corrupt
-		// metadata file (this check matches only the not-exist read error).
-		if errors.Is(err, os.ErrNotExist) && len(catalogEntities) == 0 && len(catalogEdges) == 0 {
+		// is absent; this closes the sibling crash windows around the branch
+		// schema metadata. ReplicateSchemaToBranch writes
+		// branches/<txID>.schema.json only after its DDL loop, so a crash at
+		// any point before that write leaves the file absent with an empty
+		// catalog (crash between CreateBranchDB and ReplicateSchemaToBranch)
+		// or a partial catalog (crash inside the DDL loop after ≥1 table was
+		// created). In both windows the branch is incomplete and the client
+		// never received the txID — the BeginTransaction response is sent only
+		// after ReplicateSchemaToBranch's metadata write succeeds — so the
+		// transaction is provably harmless and is classified exactly like the
+		// absent-.lbug case (ErrBranchNotFound → RecoverOpenTransactions rolls
+		// the transaction back via cleanupTransaction/DropBranchDB) instead of
+		// surfacing a hard error that bricks startup. A present-but-corrupt
+		// metadata file stays a loud failure (genuine state loss, mirroring
+		// restoreMainSchemaMetadataLocked): this guard matches only the
+		// not-exist read error, so a present file that fails to parse still
+		// propagates as a hard error.
+		if errors.Is(err, os.ErrNotExist) {
 			conn.Close()
 			database.Close()
 			return nil, fmt.Errorf("%w: branch for tx %q", store.ErrBranchNotFound, txID)
