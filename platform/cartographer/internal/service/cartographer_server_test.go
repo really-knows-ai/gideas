@@ -10632,28 +10632,6 @@ func TestListEntities_Pagination(t *testing.T) {
 }
 
 // =========================================================================
-// 31. Remote error-path mapping tests (SPEC error table)
-// =========================================================================
-
-// TestErrNoTransportCredentials covers the SPEC R2 error-table row "Request
-// without valid transport credentials → UNAUTHENTICATED". The sentinel is a
-// forward-looking placeholder for mTLS (currently unused because all internal
-// gRPC uses insecure credentials); the test pins the mapped gRPC status code
-// so the contract is locked before mTLS lands.
-func TestErrNoTransportCredentials(t *testing.T) {
-	got := errNoTransportCredentials()
-	if got == nil {
-		t.Fatal("expected non-nil error, got nil")
-	}
-	if code := status.Code(got); code != codes.Unauthenticated {
-		t.Fatalf("expected code UNAUTHENTICATED, got %v (%v)", code, got)
-	}
-	if !strings.Contains(got.Error(), "transport credentials") {
-		t.Fatalf("expected message mentioning transport credentials, got %q", got.Error())
-	}
-}
-
-// =========================================================================
 // 32. Read-path transactionId rejection tests (SPEC R2)
 // =========================================================================
 

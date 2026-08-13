@@ -312,15 +312,3 @@ func errCypherParamsNotAStruct() error {
 func errCapabilitySignedByUnrecognized(signer string) error {
 	return status.Errorf(codes.PermissionDenied, "unrecognized capability signer: %q", signer)
 }
-
-// errNoTransportCredentials is the error-table row "Request without valid
-// transport credentials → UNAUTHENTICATED". ponytail: mTLS is deferred to a
-// later phase — all internal gRPC uses insecure.NewCredentials() (consistent
-// with the codebase-wide pattern), so this sentinel is currently unused as a
-// forward-looking placeholder. When mTLS is added, transport-level rejection
-// occurs in the gRPC interceptor/credential layer; this sentinel exists so a
-// handler-thrown UNAUTHENTICATED status for a missing/invalid client
-// certificate has a single named source rather than a scattered status.Error.
-func errNoTransportCredentials() error {
-	return status.Error(codes.Unauthenticated, "request without valid transport credentials")
-}
