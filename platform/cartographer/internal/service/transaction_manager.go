@@ -242,8 +242,9 @@ func (tm *TransactionManager) ValidateActive(txID string) error {
 // max(state.ExpiresAt, now.Add(duration)).
 //
 // The ExpiresAt/AppliedTimeout mutation and the persist callback run under the
-// transaction's lifecycle lock, because lock(), the GC re-check, and HasActive
-// read those fields under lifecycle; tm.mu guards only the lookup and the
+// transaction's lifecycle lock, because lock(), the GC (both its first expiry
+// scan and its re-check), and HasActive read those fields under lifecycle;
+// tm.mu guards only the lookup and the
 // re-verification that the registered state is unchanged, so no lock-order
 // inversion (holding tm.mu while acquiring lifecycle) can occur. The caller
 // must NOT already hold the lifecycle lock (the RPC handler uses LockActive as
@@ -322,12 +323,25 @@ func (tm *TransactionManager) AddChangeLogEntry(txID string, entry gitstore.Chan
 }
 
 // HasActive returns true if any registered transaction has not timed out.
+// ExpiresAt is mutated by ExtendTimeout under the transaction's lifecycle
+// lock, so it is read here under the same lock: the registered states are
+// snapshotted under tm.mu and each state's expiry is then checked under its
+// own lifecycle lock. tm.mu is released before lifecycle is acquired,
+// preserving the documented lock order (no tm.mu-while-waiting-on-lifecycle
+// inversion).
 func (tm *TransactionManager) HasActive() bool {
 	now := tm.clock.Now()
 	tm.mu.RLock()
-	defer tm.mu.RUnlock()
+	states := make([]*TransactionState, 0, len(tm.active))
 	for _, state := range tm.active {
-		if !now.After(state.ExpiresAt) {
+		states = append(states, state)
+	}
+	tm.mu.RUnlock()
+	for _, state := range states {
+		state.lifecycle.Lock()
+		active := !now.After(state.ExpiresAt)
+		state.lifecycle.Unlock()
+		if active {
 			return true
 		}
 	}

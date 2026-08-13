@@ -689,14 +689,27 @@ func (s *CartographerServer) startGC() {
 func (s *CartographerServer) gcTick() {
 	ctx := context.Background()
 	now := s.txManager.clock.Now()
+	// The first scan only snapshots the registered states under tm.mu; each
+	// state's ExpiresAt is then read under its own lifecycle lock, because
+	// ExtendTimeout mutates ExpiresAt under lifecycle. tm.mu is released
+	// before lifecycle is acquired, preserving the documented lock order (no
+	// tm.mu-while-waiting-on-lifecycle inversion); the lifecycle re-check
+	// below re-validates each candidate after admission.
 	s.txManager.mu.RLock()
-	var expiredTxIDs []string
-	for id, state := range s.txManager.active {
-		if now.After(state.ExpiresAt.Add(30 * time.Second)) {
-			expiredTxIDs = append(expiredTxIDs, id)
-		}
+	states := make([]*TransactionState, 0, len(s.txManager.active))
+	for _, state := range s.txManager.active {
+		states = append(states, state)
 	}
 	s.txManager.mu.RUnlock()
+	var expiredTxIDs []string
+	for _, state := range states {
+		state.lifecycle.Lock()
+		expired := now.After(state.ExpiresAt.Add(30 * time.Second))
+		state.lifecycle.Unlock()
+		if expired {
+			expiredTxIDs = append(expiredTxIDs, state.ID)
+		}
+	}
 	if len(expiredTxIDs) == 0 {
 		return
 	}
