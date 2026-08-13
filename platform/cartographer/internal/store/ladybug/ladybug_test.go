@@ -1820,19 +1820,25 @@ func TestExecuteCypher_MutationRejected(t *testing.T) {
 }
 
 // TestExecuteCypher_MutationClausesClassified asserts that each mutation/DDL
-// clause the SPEC R7 §5 and error-table row 913 enumerate (CREATE, SET, DELETE,
-// MERGE, REMOVE, DROP, DDL index/constraint, and FOREACH-as-mutation) is REJECTED
-// by ExecuteCypher with ErrMutationCypher (mapped to PERMISSION_DENIED) — never
-// executed as read-only — not just the single CREATE clause the historical test
-// covered.
+// clause the SPEC R7 §5 and error-table row 976 enumerate (CREATE, SET, DELETE,
+// MERGE, REMOVE, DROP, DDL index/constraint, FOREACH-as-mutation, and CALL with
+// mutating procedures) is REJECTED by ExecuteCypher with ErrMutationCypher
+// (mapped to PERMISSION_DENIED) — never executed as read-only — not just the
+// single CREATE clause the historical test covered.
 //
 // LadybugDB v0.17.0's parser does not recognise the full Neo4j clause grammar:
-// forms like top-level FOREACH, `MATCH ... REMOVE ...`, and index/constraint DDL
-// fail at Prepare *before* the IsReadOnly guard runs. Such statements are still
-// mutations per SPEC:913 / SPEC:469-470, so they are classified by the
-// mutation-keyword fallback (isMutationCypher) and surface ErrMutationCypher
-// (PERMISSION_DENIED), not ErrInvalidCypher (INVALID_ARGUMENT). Genuinely
-// invalid read-only syntax (no mutation keyword) keeps ErrInvalidCypher.
+// forms like top-level FOREACH, `MATCH ... REMOVE ...`, index/constraint DDL,
+// and a mutating CALL whose procedure name carries a bare mutation keyword
+// (e.g. `CALL delete.mutations()`) fail at Prepare *before* the IsReadOnly
+// guard runs. Such statements are still mutations per SPEC:976 / SPEC:486-487,
+// so those whose text contains an enumerated mutation keyword in clause
+// position are classified by the mutation-keyword fallback (isMutationCypher)
+// and surface ErrMutationCypher (PERMISSION_DENIED), not ErrInvalidCypher
+// (INVALID_ARGUMENT). Genuinely invalid read-only syntax (no mutation keyword)
+// keeps ErrInvalidCypher; a mutating CALL the grammar cannot parse whose
+// mutation keyword is hidden behind a non-word character (CREATE_VECTOR_INDEX,
+// load.csv) follows the LOAD-CSV note model instead (SPEC:493-497) — pinned in
+// the "mutating CALLs grammar cannot parse" subtest below.
 func TestExecuteCypher_MutationClausesClassified(t *testing.T) {
 	s, err := OpenInMemory()
 	if err != nil {
@@ -1855,6 +1861,11 @@ func TestExecuteCypher_MutationClausesClassified(t *testing.T) {
 		{"ddl-index", "CREATE INDEX Component_name IF NOT EXISTS FOR (n:Component) ON (n.name)"},
 		{"ddl-constraint", "CREATE CONSTRAINT IF NOT EXISTS FOR (n:Component) REQUIRE n.id IS UNIQUE"},
 		{"foreach-as-mutation", "FOREACH (x IN ['aaa'] | CREATE (n:Component {id: x}))"},
+		// A mutating-procedure CALL whose procedure name carries a bare
+		// enumerated mutation keyword in clause position (SPEC R7 §5: "CALL
+		// with mutating procedures") is classified by the keyword fallback like
+		// any other grammar-unparseable mutation statement — PERMISSION_DENIED.
+		{"call-mutating-procedure-keyword", "CALL delete.mutations() RETURN *;"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1864,6 +1875,37 @@ func TestExecuteCypher_MutationClausesClassified(t *testing.T) {
 			}
 		})
 	}
+
+	// The rest of the "CALL with mutating procedures" clause class (SPEC:486)
+	// is grammar-unparseable: the LadybugDB index-DDL procedures
+	// (CREATE/DROP_VECTOR_INDEX, CREATE/DROP_FTS_INDEX) and the
+	// LOAD-CSV-style procedure `load.csv` fail at Prepare, and their mutation
+	// keywords are hidden behind non-word characters (CREATE_VECTOR_INDEX,
+	// load.csv), so the keyword fallback does not match. They are still
+	// rejected — never executed as read-only — but as ErrInvalidCypher
+	// (INVALID_ARGUMENT), never ErrMutationCypher (PERMISSION_DENIED),
+	// following the SPEC's LOAD-CSV note (SPEC:493-497): a statement the
+	// v0.17.0 grammar cannot parse surfaces the syntax error, never
+	// PERMISSION_DENIED.
+	t.Run("mutating-call-procedures-grammar-cannot-parse-invalid-argument", func(t *testing.T) {
+		cases := []string{
+			"CALL CREATE_VECTOR_INDEX('VectorType', 'VectorType_vec', 'embedding', metric := 'cosine');",
+			"CALL DROP_VECTOR_INDEX('VectorType', 'VectorType_vec');",
+			"CALL CREATE_FTS_INDEX('Document', 'Document_fts', ['title']);",
+			"CALL DROP_FTS_INDEX('Document', 'Document_fts');",
+			"CALL load.csv('file:///tmp/rows.csv') RETURN row;",
+		}
+		for _, cypher := range cases {
+			_, err := s.ExecuteCypher(context.Background(), cypher, nil, "")
+			if errors.Is(err, store.ErrMutationCypher) {
+				t.Errorf("a mutating CALL the grammar cannot parse must surface INVALID_ARGUMENT, "+
+					"never PERMISSION_DENIED (LOAD-CSV note, SPEC:493-497): %q got %v", cypher, err)
+			}
+			if !errors.Is(err, store.ErrInvalidCypher) {
+				t.Errorf("expected ErrInvalidCypher for %q, got %v", cypher, err)
+			}
+		}
+	})
 }
 
 // TestExecuteCypher_ReadOnlyClausesClassified asserts that each read-only
