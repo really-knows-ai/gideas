@@ -1719,6 +1719,64 @@ func TestNewReadSecretFnNotFoundPropagates(t *testing.T) {
 	}
 }
 
+// TestNewReadSecretFnRotationTakesEffect pins SPEC R1's rotation branch
+// (SPEC.md:103): the Cartographer reads the Secret via its pod's ServiceAccount
+// on each remote operation, so a rotated credential takes effect without
+// restart. The full production chain is exercised — newReadSecretFn
+// (main.go:1074-1088) over the fake clientset feeding buildResolveAuthFn's
+// resolver (main.go:737-836) — and the Secret is re-written between resolutions
+// to simulate a rotation. The test fails if either link caches: a reader that
+// snapshots the Secret at construction, or a resolver that memoizes the first
+// resolved auth, would both keep serving the pre-rotation password.
+func TestNewReadSecretFnRotationTakesEffect(t *testing.T) {
+	ctx := context.Background()
+	const (
+		namespace = "test-ns"
+		secretRef = "remote-auth"
+	)
+	cs := fake.NewSimpleClientset(&corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: secretRef, Namespace: namespace},
+		Data: map[string][]byte{
+			"username": []byte(tSecretUsername),
+			"password": []byte("old-pass"),
+		},
+	})
+	fn := buildResolveAuthFn(secretRef, newReadSecretFn(cs, namespace), "https://example.com/repo.git")
+
+	resolve := func(wantPassword string) {
+		t.Helper()
+		auth, err := fn()
+		if err != nil {
+			t.Fatalf("auth resolution failed: %v", err)
+		}
+		basic, ok := auth.(*gogithttp.BasicAuth)
+		if !ok {
+			t.Fatalf("expected *http.BasicAuth, got %T", auth)
+		}
+		if basic.Password != wantPassword {
+			t.Fatalf("resolved password = %q, want %q", basic.Password, wantPassword)
+		}
+	}
+
+	// First resolution: the pre-rotation credential.
+	resolve("old-pass")
+
+	// Rotate the Secret in place (the fake clientset models a k8s rotation via
+	// Update): the next resolution must pick up the new credential with no
+	// restart.
+	if _, err := cs.CoreV1().Secrets(namespace).Update(ctx, &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: secretRef, Namespace: namespace},
+		Data: map[string][]byte{
+			"username": []byte(tSecretUsername),
+			"password": []byte("rotated-pass"),
+		},
+	}, metav1.UpdateOptions{}); err != nil {
+		t.Fatalf("rotate Secret in fake clientset: %v", err)
+	}
+
+	resolve("rotated-pass")
+}
+
 // ---------------------------------------------------------------------------
 // Graceful shutdown path (SPEC CQs)
 // ---------------------------------------------------------------------------
