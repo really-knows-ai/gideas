@@ -10,7 +10,6 @@ import (
 
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/structpb"
 )
@@ -539,10 +538,15 @@ func (g *Graph) Sync() error {
 	if g.session == nil {
 		return fmt.Errorf("flow sdk: graph not initialised")
 	}
+	// No entity-type capability metadata is attached (SPEC R3): Sync is not
+	// among the entity-type-annotating RPCs — SPEC R3 names only
+	// CreateEdge/UpdateEntity/DeleteEntity (resolved type) and DeleteEdge
+	// (always wildcard) — and the Sidecar gates Sync on the fixed
+	// WRITE:graph/entity/* capability without reading entity_type.
 	return g.session.call(g.session.ctx, func(ctx context.Context) error {
 		_, err := g.session.Cartographer.Sync(ctx, &flowv1.SyncRequest{})
 		return err
-	}, "entity_type", "*")
+	}, "")
 }
 
 // ExportGraph starts a server-streaming export of the full graph.
@@ -578,14 +582,13 @@ func (g *Graph) ExportGraph(format string) (*ExportStream, error) {
 		establishCtx, establishCancel = context.WithTimeout(ctx, g.session.timeout)
 		streamCancel = establishCancel
 	}
-	// Annotate the READ:graph/entity/* wildcard capability (SPEC R3):
-	// ExportGraph requires the wildcard, and its request carries no
-	// entity-type field for the Sidecar to read from the body, so the SDK
-	// annotates the fixed wildcard — mirroring DeleteEdge's entity_type=*
-	// annotation for its fixed wildcard requirement. ExportGraph is
-	// server-streaming and bypasses session.call, so the metadata is
-	// appended directly to the stream-establishing context.
-	establishCtx = metadata.AppendToOutgoingContext(establishCtx, "entity_type", "*")
+	// No entity-type capability metadata is attached (SPEC R3): ExportGraph is
+	// not among the entity-type-annotating RPCs — SPEC R3 names only
+	// CreateEdge/UpdateEntity/DeleteEntity (resolved type) and DeleteEdge
+	// (always wildcard) — and the Sidecar gates ExportGraph on the fixed
+	// READ:graph/entity/* capability without reading entity_type. ExportGraph
+	// is server-streaming and bypasses session.call, so no annotation is
+	// appended to the stream-establishing context.
 	stream, err := g.session.Cartographer.ExportGraph(establishCtx, req)
 	if err != nil {
 		cancel()

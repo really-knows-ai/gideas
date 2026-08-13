@@ -1114,26 +1114,24 @@ func TestBeginTransaction(t *testing.T) {
 	}
 }
 
-// TestGraphExportGraph_AnnotatesWildcard pins SPEC R3's READ:graph/entity/*
-// requirement for ExportGraph at the SDK layer: the RPC requires the
-// wildcard capability and its request carries no entity-type field for the
-// Sidecar to read from the body, so the SDK must annotate the fixed
-// wildcard entity_type metadata on the stream-establishing call.
-func TestGraphExportGraph_AnnotatesWildcard(t *testing.T) {
-	var capturedKey, capturedValue string
+// TestGraphExportGraph_NoEntityTypeMetadata pins SPEC R3: ExportGraph is not
+// among the SDK's entity-type-annotating RPCs. SPEC R3 enumerates only
+// CreateEdge/UpdateEntity/DeleteEntity (resolved type, wildcard fallback) and
+// DeleteEdge (always wildcard) for entity-type capability metadata; the SDK
+// attaches no entity-type capability metadata for any other Cartographer RPC.
+// The Sidecar gates ExportGraph on the fixed READ:graph/entity/* capability
+// and never reads entity_type, so the stream-establishing context must carry
+// no entity_type metadata key.
+//
+//nolint:dupl // Sync and ExportGraph no-annotation metadata tests share structure.
+func TestGraphExportGraph_NoEntityTypeMetadata(t *testing.T) {
 	mock := &mockCartographerClient{
 		exportGraph: func(ctx context.Context, req *flowv1.ExportGraphRequest,
 		) (grpc.ServerStreamingClient[flowv1.ExportGraphResponse], error) {
-			md, ok := metadata.FromOutgoingContext(ctx)
-			if !ok {
-				t.Fatal("no outgoing metadata")
+			md, _ := metadata.FromOutgoingContext(ctx)
+			if vals := md.Get(metadataEntityTypeKey); len(vals) > 0 {
+				t.Errorf("expected no %s metadata on ExportGraph outgoing context, got %v", metadataEntityTypeKey, vals)
 			}
-			vals := md.Get(metadataEntityTypeKey)
-			if len(vals) == 0 {
-				t.Fatal("no entity_type metadata")
-			}
-			capturedKey = metadataEntityTypeKey
-			capturedValue = vals[0]
 			return &mockStream{chunks: []*flowv1.ExportGraphResponse{{Chunk: []byte("{}")}}}, nil
 		},
 	}
@@ -1143,12 +1141,6 @@ func TestGraphExportGraph_AnnotatesWildcard(t *testing.T) {
 		t.Fatalf("ExportGraph returned error: %v", err)
 	}
 	defer stream.Stop()
-	if capturedKey != metadataEntityTypeKey {
-		t.Errorf("expected metadata key entity_type, got %q", capturedKey)
-	}
-	if capturedValue != "*" {
-		t.Errorf("expected wildcard *, got %q", capturedValue)
-	}
 }
 
 func TestExportGraph_NilSession(t *testing.T) {
@@ -1159,28 +1151,25 @@ func TestExportGraph_NilSession(t *testing.T) {
 	}
 }
 
-// TestGraphSync_AnnotatesWildcard pins SPEC R3's WRITE:graph/entity/*
-// requirement for Sync at the SDK layer (SPEC R10: Sync requires
-// WRITE:graph/entity/*): the RPC requires the wildcard capability and its
-// request carries no entity-type field for the Sidecar to read from the body,
-// so the SDK must annotate the fixed wildcard entity_type metadata on the
-// call, mirroring DeleteEdge's and ExportGraph's fixed wildcard annotations.
-func TestGraphSync_AnnotatesWildcard(t *testing.T) {
+// TestGraphSync_NoEntityTypeMetadata pins SPEC R3: Sync is not among the SDK's
+// entity-type-annotating RPCs. SPEC R3 enumerates only
+// CreateEdge/UpdateEntity/DeleteEntity (resolved type, wildcard fallback) and
+// DeleteEdge (always wildcard) for entity-type capability metadata; the SDK
+// attaches no entity-type capability metadata for any other Cartographer RPC.
+// The Sidecar gates Sync on the fixed WRITE:graph/entity/* capability and
+// never reads entity_type, so the outgoing context must carry no entity_type
+// metadata key.
+//
+//nolint:dupl // Sync and ExportGraph no-annotation metadata tests share structure.
+func TestGraphSync_NoEntityTypeMetadata(t *testing.T) {
 	called := false
-	var capturedKey, capturedValue string
 	mock := &mockCartographerClient{
 		sync: func(ctx context.Context, req *flowv1.SyncRequest) (*flowv1.SyncResponse, error) {
 			called = true
-			md, ok := metadata.FromOutgoingContext(ctx)
-			if !ok {
-				t.Fatal("no outgoing metadata")
+			md, _ := metadata.FromOutgoingContext(ctx)
+			if vals := md.Get(metadataEntityTypeKey); len(vals) > 0 {
+				t.Errorf("expected no %s metadata on Sync outgoing context, got %v", metadataEntityTypeKey, vals)
 			}
-			vals := md.Get(metadataEntityTypeKey)
-			if len(vals) == 0 {
-				t.Fatal("no entity_type metadata")
-			}
-			capturedKey = metadataEntityTypeKey
-			capturedValue = vals[0]
 			return &flowv1.SyncResponse{}, nil
 		},
 	}
@@ -1190,12 +1179,6 @@ func TestGraphSync_AnnotatesWildcard(t *testing.T) {
 	}
 	if !called {
 		t.Fatal("expected Sync RPC to be invoked")
-	}
-	if capturedKey != metadataEntityTypeKey {
-		t.Errorf("expected metadata key entity_type, got %q", capturedKey)
-	}
-	if capturedValue != "*" {
-		t.Errorf("expected wildcard *, got %q", capturedValue)
 	}
 }
 
