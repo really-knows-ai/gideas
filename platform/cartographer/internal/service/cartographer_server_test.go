@@ -9,10 +9,12 @@ import (
 	"encoding/xml"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math"
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1804,6 +1806,126 @@ func TestCreateEntity_SingleTypeSpecificCapabilityPasses(t *testing.T) {
 	}
 	if resp.EntityId == "" {
 		t.Fatal("expected non-empty entity ID")
+	}
+}
+
+// TestUpdateEntity_SingleTypeSpecificCapabilityPasses pins SPEC R3
+// (SPEC:242): a caller holding only WRITE:graph/entity/<type> (plus
+// WRITE:graph/tx to begin the transaction) is authorised for an UpdateEntity
+// of that type through the Cartographer's authoritative per-type check. The
+// positive per-type branch is pinned for CreateEntity elsewhere; without this
+// test a handler regression that required the wildcard for UpdateEntity would
+// go undetected.
+func TestUpdateEntity_SingleTypeSpecificCapabilityPasses(t *testing.T) {
+	srv, _ := newTestServer(t)
+	ctx := narrowCtx("WRITE:graph/entity/Component", "WRITE:graph/tx")
+
+	applyTestSchema(ctx, t, srv.store)
+	txID := beginTestTx(t, srv, ctx)
+	ent, err := srv.store.CreateEntity(ctx, "Component", "", map[string]string{"name": "original"}, nil, txID)
+	if err != nil {
+		t.Fatalf("seed entity: %v", err)
+	}
+
+	resp, err := srv.UpdateEntity(ctx, &flowv1.UpdateEntityRequest{
+		Id:            ent.Id,
+		Properties:    map[string]string{"version": "2"},
+		TransactionId: txID,
+	})
+	if err != nil {
+		t.Fatalf("UpdateEntity with per-type capability failed: %v", err)
+	}
+	if resp.Properties["version"] != "2" {
+		t.Fatalf("expected version=2, got %q", resp.Properties["version"])
+	}
+}
+
+// TestDeleteEntity_SingleTypeSpecificCapabilityPasses pins SPEC R3
+// (SPEC:242): a caller holding only WRITE:graph/entity/<type> (plus
+// WRITE:graph/tx) is authorised for a DeleteEntity of that type through the
+// Cartographer's authoritative per-type check.
+func TestDeleteEntity_SingleTypeSpecificCapabilityPasses(t *testing.T) {
+	srv, _ := newTestServer(t)
+	ctx := narrowCtx("WRITE:graph/entity/Component", "WRITE:graph/tx")
+
+	applyTestSchema(ctx, t, srv.store)
+	txID := beginTestTx(t, srv, ctx)
+	ent, err := srv.store.CreateEntity(ctx, "Component", "", map[string]string{"name": "delete-me"}, nil, txID)
+	if err != nil {
+		t.Fatalf("seed entity: %v", err)
+	}
+
+	resp, err := srv.DeleteEntity(ctx, &flowv1.DeleteEntityRequest{Id: ent.Id, TransactionId: txID})
+	if err != nil {
+		t.Fatalf("DeleteEntity with per-type capability failed: %v", err)
+	}
+	if resp.EntityId != ent.Id {
+		t.Fatalf("expected deleted entity ID %q, got %q", ent.Id, resp.EntityId)
+	}
+}
+
+// TestCreateEdge_SingleTypeSpecificCapabilityPasses pins SPEC R3
+// (SPEC:249-250): a caller holding only WRITE:graph/entity/<source-type>
+// (plus WRITE:graph/tx) is authorised for a CreateEdge whose source entity is
+// of that type, through the Cartographer's authoritative per-type check.
+func TestCreateEdge_SingleTypeSpecificCapabilityPasses(t *testing.T) {
+	srv, _ := newTestServer(t)
+	ctx := narrowCtx("WRITE:graph/entity/Service", "WRITE:graph/tx")
+
+	applyTestSchema(ctx, t, srv.store)
+	txID := beginTestTx(t, srv, ctx)
+	svc, err := srv.store.CreateEntity(ctx, "Service", "", map[string]string{"name": "svc"}, nil, txID)
+	if err != nil {
+		t.Fatalf("seed source entity: %v", err)
+	}
+	comp, err := srv.store.CreateEntity(ctx, "Component", "", map[string]string{"name": "core"}, nil, txID)
+	if err != nil {
+		t.Fatalf("seed target entity: %v", err)
+	}
+
+	resp, err := srv.CreateEdge(ctx, &flowv1.CreateEdgeRequest{
+		EdgeType:      "DEPENDS_ON",
+		FromEntityId:  svc.Id,
+		ToEntityId:    comp.Id,
+		TransactionId: txID,
+	})
+	if err != nil {
+		t.Fatalf("CreateEdge with per-type capability failed: %v", err)
+	}
+	if resp.EdgeId == "" {
+		t.Fatal("expected non-empty edge ID")
+	}
+}
+
+// TestDeleteEdge_SingleTypeSpecificCapabilityPasses pins SPEC R3
+// (SPEC:249-250): a caller holding only WRITE:graph/entity/<source-type>
+// (plus WRITE:graph/tx) is authorised for a DeleteEdge whose source entity is
+// of that type, through the Cartographer's authoritative per-type check.
+func TestDeleteEdge_SingleTypeSpecificCapabilityPasses(t *testing.T) {
+	srv, _ := newTestServer(t)
+	ctx := narrowCtx("WRITE:graph/entity/Service", "WRITE:graph/tx")
+
+	applyTestSchema(ctx, t, srv.store)
+	txID := beginTestTx(t, srv, ctx)
+	svc, err := srv.store.CreateEntity(ctx, "Service", "", map[string]string{"name": "svc"}, nil, txID)
+	if err != nil {
+		t.Fatalf("seed source entity: %v", err)
+	}
+	comp, err := srv.store.CreateEntity(ctx, "Component", "", map[string]string{"name": "core"}, nil, txID)
+	if err != nil {
+		t.Fatalf("seed target entity: %v", err)
+	}
+	edge, err := srv.store.CreateEdge(ctx, "DEPENDS_ON", svc.Id, comp.Id, nil, txID)
+	if err != nil {
+		t.Fatalf("seed edge: %v", err)
+	}
+
+	resp, err := srv.DeleteEdge(ctx, &flowv1.DeleteEdgeRequest{Id: edge.Id, TransactionId: txID})
+	if err != nil {
+		t.Fatalf("DeleteEdge with per-type capability failed: %v", err)
+	}
+	if resp.EdgeId != edge.Id {
+		t.Fatalf("expected deleted edge ID %q, got %q", edge.Id, resp.EdgeId)
 	}
 }
 
@@ -4093,6 +4215,24 @@ func TestSync_MissingWriteCapability(t *testing.T) {
 	_, err := srv.Sync(ctx, &flowv1.SyncRequest{})
 	if status.Code(err) != codes.PermissionDenied {
 		t.Fatalf("expected PermissionDenied, got %v (%v)", status.Code(err), err)
+	}
+}
+
+// TestSync_PerTypeWriteCapabilityDenied pins the SPEC R3 negative branch
+// (SPEC:243: only WRITE:graph/entity/* "Authorises ... plus Sync()"): a caller
+// holding only a per-type WRITE grant (e.g. WRITE:graph/entity/Component) must
+// be denied Sync. TestSync_MissingWriteCapability uses a no-WRITE-at-all
+// holder; if the wildcard gate regressed to accept per-type grants, only this
+// test fails.
+func TestSync_PerTypeWriteCapabilityDenied(t *testing.T) {
+	srv, _ := newTestServer(t)
+	srv.remoteURL = "https://example.com/repo.git"
+	ctx := narrowCtx("WRITE:graph/entity/Component") // per-type only, no wildcard
+
+	_, err := srv.Sync(ctx, &flowv1.SyncRequest{})
+	if status.Code(err) != codes.PermissionDenied ||
+		status.Convert(err).Message() != "capability denied: WRITE:graph/entity/*" {
+		t.Fatalf("expected per-type-only PermissionDenied for Sync, got %v", err)
 	}
 }
 
@@ -10043,6 +10183,38 @@ func TestExportGraph_MissingReadCapability(t *testing.T) {
 	}
 }
 
+// TestExportGraph_PerTypeReadCapabilityDenied pins the SPEC R3 negative branch
+// (SPEC:241: only READ:graph/entity/* "Authorises the above plus
+// ExportGraph(format)"): a caller holding only a per-type READ grant (e.g.
+// READ:graph/entity/Component) must be denied ExportGraph.
+// TestExportGraph_MissingReadCapability uses a WRITE-only holder; if the
+// wildcard gate regressed to accept per-type grants, only this test fails.
+func TestExportGraph_PerTypeReadCapabilityDenied(t *testing.T) {
+	opPub, _ := generateTestKey()
+	scPub, scPriv := generateTestKey()
+	st, _ := ladybug.OpenInMemory()
+	t.Cleanup(func() { _ = st.Close() })
+	gs, _ := gitstore.New(t.TempDir())
+	srv := NewCartographerServer(st, gs, opPub, scPub, nil, "",
+		30*time.Second, "test-ns", 30*time.Minute, 100000)
+	srv.MarkDBReady()
+
+	// Only a per-type READ capability, no READ:graph/entity/*.
+	ctx := capabilityContext("READ:graph/entity/Component", scPriv, "sidecar")
+	stream := &mockExportStream{ctx: ctx}
+
+	handlerInvoked, err := invokeExportGraph(
+		srv, &flowv1.ExportGraphRequest{Format: "json"}, stream,
+	)
+	if !handlerInvoked {
+		t.Fatal("stream interceptor did not invoke ExportGraph")
+	}
+	if status.Code(err) != codes.PermissionDenied ||
+		status.Convert(err).Message() != "capability denied: READ:graph/entity/*" {
+		t.Fatalf("expected per-type-only PermissionDenied for ExportGraph, got %v", err)
+	}
+}
+
 // TestCapability_WildcardFallback verifies that Mode 2 wildcard fallback works:
 // a capability "READ:graph/entity/*" should allow reading any entity type even
 // without a specific "READ:graph/entity/Component" capability.
@@ -11539,15 +11711,18 @@ func (s *swapRecordingStore) CloseBranchDB(ctx context.Context, txID string) err
 
 // TestRefreshTransaction_SwapClosesTempBranchBeforeRename pins the
 // RefreshTransaction branch-DB swap's crash-window fix (SPEC R9 refresh): the
-// replacement branch must be closed — its write-ahead log checkpointed into
-// its .lbug file — before its files are renamed onto the transaction's
-// canonical names. The old swap renamed <temp>.lbug → <txID>.lbug while the
-// temp connection was still open; a crash in that window left the swapped-in
-// branch DB missing rows still held in the orphaned <temp>.lbug.wal, and
-// RecoverOpenTransactions classified the absent entities as suspected
-// deletions that the recovered commit re-applied to main's committed data. The
-// swap must therefore call CloseBranchDB(temp) between dropping the old branch
-// and releasing the temp key after the rename.
+// old branch's in-memory handle must be evicted and the replacement branch must
+// be closed — its write-ahead log checkpointed into its .lbug file — before
+// its files are renamed onto the transaction's canonical names. The old swap
+// dropped the old branch (removing its files before the rename) and renamed
+// <temp>.lbug → <txID>.lbug while the temp connection was still open; a crash
+// in those windows left the durable branch DB absent or missing rows still held
+// in the orphaned <temp>.lbug.wal, and RecoverOpenTransactions rolled the
+// transaction back or classified the absent entities as suspected deletions
+// that the recovered commit re-applied to main's committed data. The swap must
+// therefore close the old branch (evicting the handle while keeping its files
+// until the atomic rename overwrites them), close the temp replacement, then
+// release the temp key after the rename.
 func TestRefreshTransaction_SwapClosesTempBranchBeforeRename(t *testing.T) {
 	ctx := testCtx()
 	dataPath := t.TempDir()
@@ -11593,16 +11768,17 @@ func TestRefreshTransaction_SwapClosesTempBranchBeforeRename(t *testing.T) {
 	recording.mu.Lock()
 	ops := append([]string(nil), recording.ops...)
 	recording.mu.Unlock()
-	// The swap must be: drop the old tx branch, close the temp replacement
-	// (checkpointing its WAL), then release the temp key after the rename. A
-	// swap that dropped the old branch and released the temp key without a
-	// close would leave the renamed file at risk in the rename-to-close crash
-	// window.
+	// The swap must be: close the old tx branch handle, close the temp
+	// replacement (checkpointing its WAL), then release the temp key after the
+	// rename. A swap that dropped the old branch (deleting its files) before
+	// the rename, or that released the temp key without a close, would leave a
+	// crash window in which the durable branch DB is absent or the renamed file
+	// is missing un-checkpointed rows.
 	if len(ops) != 3 {
-		t.Fatalf("expected swap ops [drop:%s close:<temp> drop:<temp>], got %v", begin.TransactionId, ops)
+		t.Fatalf("expected swap ops [close:%s close:<temp> drop:<temp>], got %v", begin.TransactionId, ops)
 	}
-	if ops[0] != "drop:"+begin.TransactionId {
-		t.Fatalf("swap must drop the old branch first, got %q", ops[0])
+	if ops[0] != "close:"+begin.TransactionId {
+		t.Fatalf("swap must close (evict) the old branch handle first, got %q", ops[0])
 	}
 	if !strings.HasPrefix(ops[1], "close:") {
 		t.Fatalf("swap must close the temp branch before the rename, got %q", ops[1])
@@ -11744,6 +11920,294 @@ func TestRecoverOpenTransactionsMissingStateRollsBack(t *testing.T) {
 	// Startup continues: a fresh transaction begins normally.
 	if _, err := restarted.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{}); err != nil {
 		t.Fatalf("BeginTransaction after missing-state recovery: %v", err)
+	}
+}
+
+// refreshTailPersistFailingStore simulates a crash at the tail of a
+// RefreshTransaction: it fails the third SaveBranchTransactionState for the
+// transaction's own key — BeginTransaction's persist, the refresh's pre-swap
+// in-progress marker, then the refresh's final persist — leaving the durable
+// branch DB swapped in with the re-applied changes and the in-progress marker
+// still set. This is exactly the crash state that previously produced silent
+// data loss: the swap replaced the durable branch DB (the only durable record
+// of the transaction's mutations) with a clean copy of main and the change log
+// existed only in memory.
+type refreshTailPersistFailingStore struct {
+	store.Store
+	txID    string
+	txSaves int
+}
+
+func (s *refreshTailPersistFailingStore) SaveBranchTransactionState(
+	ctx context.Context, txID string, state store.BranchTransactionState,
+) error {
+	if txID == s.txID {
+		s.txSaves++
+		if s.txSaves == 3 {
+			return errors.New("simulated crash at refresh tail")
+		}
+	}
+	return s.Store.SaveBranchTransactionState(ctx, txID, state)
+}
+
+// TestRefreshTransaction_MidRefreshCrashPreservesMutations pins the SPEC R9
+// change-log-recovery guarantee across the RefreshTransaction branch-DB swap
+// (the swap-to-reapply crash window): the swap re-applies the transaction's
+// changes onto the replacement branch before the swap, and evicts the old
+// branch handle without deleting its files until the atomic rename installs
+// the fully re-applied replacement. A crash at any point in the refresh — here
+// simulated by failing the final state persist after the swap — leaves the
+// durable branch DB carrying the complete change set and the BranchRefreshInProgress
+// marker set, so RecoverOpenTransactions reconstructs the FULL change log
+// instead of misclassifying the transaction as already committed and deleting
+// it (or, in the partial-reapply sub-window, reconstructing a truncated log).
+func TestRefreshTransaction_MidRefreshCrashPreservesMutations(t *testing.T) {
+	ctx := testCtx()
+	dataPath := t.TempDir()
+	opPub, _ := generateTestKey()
+
+	base, err := ladybug.Open(dataPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	failing := &refreshTailPersistFailingStore{Store: base}
+	gs, err := gitstore.New(dataPath)
+	if err != nil {
+		t.Fatalf("open git store: %v", err)
+	}
+	srv := NewCartographerServer(
+		failing, gs, opPub, initTestKey(), nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000,
+		WithLadybugPath(dataPath),
+	)
+	srv.MarkDBReady()
+	applyTestSchema(ctx, t, base)
+	begin, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
+	if err != nil {
+		t.Fatalf("BeginTransaction: %v", err)
+	}
+	// BeginTransaction already wrote the durable record (the first txID save);
+	// the next two txID saves are the refresh's pre-swap in-progress marker and
+	// its final persist. Account for the first so the failure fires on the
+	// final persist.
+	failing.txID = begin.TransactionId
+	failing.txSaves = 1
+	first, err := srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
+		EntityType: "Component", Properties: map[string]string{"name": "tx-one"}, TransactionId: begin.TransactionId,
+	})
+	if err != nil {
+		t.Fatalf("CreateEntity tx-one: %v", err)
+	}
+	second, err := srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
+		EntityType: "Component", Properties: map[string]string{"name": "tx-two"}, TransactionId: begin.TransactionId,
+	})
+	if err != nil {
+		t.Fatalf("CreateEntity tx-two: %v", err)
+	}
+	// Main advances while the transaction is open, forcing a real refresh.
+	mainEntity, err := base.CreateEntity(ctx, "Component", "", map[string]string{"name": "main"}, nil, "main")
+	if err != nil {
+		t.Fatalf("create main entity: %v", err)
+	}
+	commitGitEntity(ctx, t, gs, mainEntity.Id, "main")
+
+	// The refresh completes its branch-DB swap (re-applying both transaction
+	// changes onto the replacement) and then "crashes" at the final state
+	// persist: the durable record keeps the in-progress marker and the
+	// swapped-in branch DB carries the full change set.
+	if _, err := srv.RefreshTransaction(ctx, &flowv1.RefreshTransactionRequest{
+		TransactionId: begin.TransactionId,
+	}); err == nil || !strings.Contains(err.Error(), "simulated crash at refresh tail") {
+		t.Fatalf("expected refresh tail persist failure, got %v", err)
+	}
+	// The durable marker distinguishes this mid-refresh crash from a
+	// post-merge crash.
+	durable, err := base.LoadBranchTransactionState(ctx, begin.TransactionId)
+	if err != nil {
+		t.Fatalf("load durable state after refresh crash: %v", err)
+	}
+	if !durable.BranchRefreshInProgress {
+		t.Fatal("mid-refresh crash left no BranchRefreshInProgress marker")
+	}
+	if err := base.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+
+	// Restart: the transaction's uncommitted mutations must be recovered, not
+	// misclassified as already committed and deleted.
+	reopened, err := ladybug.Open(dataPath)
+	if err != nil {
+		t.Fatalf("reopen store: %v", err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	reopenedGit, err := gitstore.New(dataPath)
+	if err != nil {
+		t.Fatalf("reopen git store: %v", err)
+	}
+	restarted := NewCartographerServer(
+		reopened, reopenedGit, opPub, initTestKey(), nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000,
+		WithLadybugPath(dataPath),
+	)
+	restarted.MarkDBReady()
+	if err := restarted.RecoverOpenTransactions(ctx); err != nil {
+		t.Fatalf("RecoverOpenTransactions: %v", err)
+	}
+	state, err := restarted.txManager.Lookup(begin.TransactionId)
+	if err != nil {
+		t.Fatalf("mid-refresh-crash transaction was not recovered (deleted?): %v", err)
+	}
+	if !state.BranchRefreshInProgress {
+		t.Fatal("recovered mid-refresh transaction lost its in-progress marker")
+	}
+	diff, err := restarted.GetTransactionDiff(ctx, &flowv1.GetTransactionDiffRequest{TransactionId: begin.TransactionId})
+	if err != nil {
+		t.Fatalf("get recovered diff: %v", err)
+	}
+	if len(diff.AddedEntities) != 2 {
+		t.Fatalf("expected both transaction mutations recovered, got %+v", diff.AddedEntities)
+	}
+	got := map[string]bool{}
+	for _, e := range diff.AddedEntities {
+		got[e.Id] = true
+	}
+	if !got[first.EntityId] || !got[second.EntityId] {
+		t.Fatalf("recovered diff missing transaction mutations: %+v", got)
+	}
+	if _, err := os.Stat(filepath.Join(dataPath, "branches", begin.TransactionId+".lbug")); err != nil {
+		t.Fatalf("recovered transaction branch DB missing: %v", err)
+	}
+}
+
+// captureLogHandler collects slog records so a test can assert on recovery
+// log output.
+type captureLogHandler struct {
+	mu       sync.Mutex
+	messages []string
+}
+
+func (h *captureLogHandler) Enabled(context.Context, slog.Level) bool { return true }
+func (h *captureLogHandler) Handle(_ context.Context, r slog.Record) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.messages = append(h.messages, r.Message)
+	return nil
+}
+func (h *captureLogHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *captureLogHandler) WithGroup(string) slog.Handler      { return h }
+
+// TestRecoverOpenTransactionsMidRefreshEmptyDiffRollsBack pins the
+// BranchRefreshInProgress guard in RecoverOpenTransactions' empty-diff branch
+// (SPEC R9 change-log recovery step 5): a transaction whose durable record
+// carries the refresh-in-progress marker AND whose branch DB diff is empty is a
+// mid-refresh crash — the branch DB was swapped to a clean copy of main and the
+// transaction's changes existed only in the in-memory change log — NOT an
+// already-committed transaction. Recovery must roll the branch back loudly
+// instead of silently reporting the transaction as committed.
+func TestRecoverOpenTransactionsMidRefreshEmptyDiffRollsBack(t *testing.T) {
+	ctx := testCtx()
+	dataPath := t.TempDir()
+	opPub, _ := generateTestKey()
+
+	st, err := ladybug.Open(dataPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	gs, err := gitstore.New(dataPath)
+	if err != nil {
+		t.Fatalf("open git store: %v", err)
+	}
+	srv := NewCartographerServer(
+		st, gs, opPub, initTestKey(), nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000,
+		WithLadybugPath(dataPath),
+	)
+	srv.MarkDBReady()
+	applyTestSchema(ctx, t, st)
+	mainEntity, err := st.CreateEntity(ctx, "Component", "", map[string]string{"name": "main"}, nil, "main")
+	if err != nil {
+		t.Fatalf("create main entity: %v", err)
+	}
+	commitGitEntity(ctx, t, gs, mainEntity.Id, "main")
+	begin, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
+	if err != nil {
+		t.Fatalf("BeginTransaction: %v", err)
+	}
+	if _, err := srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
+		EntityType: "Component", Properties: map[string]string{"name": "lost"},
+		TransactionId: begin.TransactionId,
+	}); err != nil {
+		t.Fatalf("CreateEntity: %v", err)
+	}
+
+	// Construct the old swap-to-reapply crash state: the branch DB has been
+	// replaced by a clean copy of main (the transaction's change existed only
+	// in the in-memory change log, lost at the crash) and the durable record
+	// carries the refresh-in-progress marker.
+	state, err := st.LoadBranchTransactionState(ctx, begin.TransactionId)
+	if err != nil {
+		t.Fatalf("load branch state: %v", err)
+	}
+	state.BranchRefreshInProgress = true
+	if err := st.SaveBranchTransactionState(ctx, begin.TransactionId, state); err != nil {
+		t.Fatalf("persist marker: %v", err)
+	}
+	if err := st.CloseBranchDB(ctx, begin.TransactionId); err != nil {
+		t.Fatalf("close branch handle: %v", err)
+	}
+	branchesDir := filepath.Join(dataPath, "branches")
+	for _, f := range []string{begin.TransactionId + ".lbug", begin.TransactionId + ".schema.json"} {
+		if err := os.Remove(filepath.Join(branchesDir, f)); err != nil && !os.IsNotExist(err) {
+			t.Fatalf("remove branch file %s: %v", f, err)
+		}
+	}
+	if err := st.CreateBranchDB(ctx, begin.TransactionId); err != nil {
+		t.Fatalf("recreate branch DB: %v", err)
+	}
+	if err := st.ReplicateSchemaToBranch(ctx, begin.TransactionId); err != nil {
+		t.Fatalf("replicate schema: %v", err)
+	}
+	entitiesDir, edgesDir := gs.HydrationDirs()
+	if err := st.HydrateBranchFromFiles(ctx, begin.TransactionId, entitiesDir, edgesDir); err != nil {
+		t.Fatalf("hydrate clean branch: %v", err)
+	}
+
+	oldLogger := slog.Default()
+	defer slog.SetDefault(oldLogger)
+	captured := &captureLogHandler{}
+	slog.SetDefault(slog.New(captured))
+
+	if err := st.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+	reopened, err := ladybug.Open(dataPath)
+	if err != nil {
+		t.Fatalf("reopen store: %v", err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	reopenedGit, err := gitstore.New(dataPath)
+	if err != nil {
+		t.Fatalf("reopen git store: %v", err)
+	}
+	restarted := NewCartographerServer(
+		reopened, reopenedGit, opPub, initTestKey(), nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000,
+		WithLadybugPath(dataPath),
+	)
+	restarted.MarkDBReady()
+	if err := restarted.RecoverOpenTransactions(ctx); err != nil {
+		t.Fatalf("RecoverOpenTransactions: %v", err)
+	}
+	// The transaction must not be re-registered as active (there is nothing to
+	// recover — its changes were never durable) and its branch must be rolled
+	// back.
+	if _, err := restarted.txManager.Lookup(begin.TransactionId); err == nil {
+		t.Fatal("mid-refresh-crash transaction was recovered as active despite an empty branch diff")
+	}
+	if _, err := os.Stat(filepath.Join(branchesDir, begin.TransactionId+".lbug")); !os.IsNotExist(err) {
+		t.Fatalf("mid-refresh-crash branch DB was not rolled back: %v", err)
+	}
+	// The empty-diff classification must be the loud mid-refresh rollback, not
+	// the silent "already committed" claim.
+	if !slices.Contains(captured.messages,
+		"RecoverOpenTransactions: rolled back transaction interrupted by a mid-refresh crash (never committed)") {
+		t.Fatalf("expected loud mid-refresh-crash rollback log, got %v", captured.messages)
 	}
 }
 

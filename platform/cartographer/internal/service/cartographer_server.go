@@ -268,15 +268,16 @@ func (s *CartographerServer) rejectFullChangeLog(ctx context.Context, txID strin
 
 func durableTransactionState(state *TransactionState) store.BranchTransactionState {
 	return store.BranchTransactionState{
-		MainHeadAtLastSync: state.MainHeadAtLastSync,
-		AppliedTimeout:     state.AppliedTimeout,
-		SchemaHash:         state.SchemaHash,
-		CommitStarted:      state.CommitStarted,
-		CommitCreated:      state.CommitCreated,
-		CommitHydrated:     state.CommitHydrated,
-		MainRehydrated:     state.MainRehydrated,
-		MergeCompleted:     state.MergeCompleted,
-		RollbackOnly:       state.RollbackOnly,
+		MainHeadAtLastSync:      state.MainHeadAtLastSync,
+		AppliedTimeout:          state.AppliedTimeout,
+		SchemaHash:              state.SchemaHash,
+		CommitStarted:           state.CommitStarted,
+		CommitCreated:           state.CommitCreated,
+		CommitHydrated:          state.CommitHydrated,
+		MainRehydrated:          state.MainRehydrated,
+		MergeCompleted:          state.MergeCompleted,
+		RollbackOnly:            state.RollbackOnly,
+		BranchRefreshInProgress: state.BranchRefreshInProgress,
 	}
 }
 
@@ -414,7 +415,29 @@ func (s *CartographerServer) RecoverOpenTransactions(ctx context.Context) error 
 
 		// SPEC recovery step 5: If the diff is empty (branch DB identical to main),
 		// the transaction was already committed — clean up and do not recover.
+		// The BranchRefreshInProgress marker (set by RefreshTransaction before
+		// its branch-DB swap, cleared only by the refresh's final state persist)
+		// distinguishes that case from a mid-refresh crash: a refresh can leave
+		// the branch DB as a clean copy of main (after the swap, before the
+		// changes were re-applied), and an empty diff there means the refresh
+		// was interrupted — the transaction never committed — not that a merge
+		// landed. The swap reorders the re-apply ahead of the rename so a
+		// mutation-bearing transaction's branch DB is never a clean copy of main
+		// at a crash point (its changes are always durable), which makes this
+		// branch reachable only for a zero-mutation transaction; either way the
+		// transaction must be rolled back loudly, never silently reported as
+		// already committed (its changes never landed on main).
 		if !entityChanged && !edgeChanged {
+			if durableState.BranchRefreshInProgress && !durableState.MergeCompleted {
+				if err := s.cleanupIdenticalRecoveryBranch(ctx, txID); err != nil {
+					return fmt.Errorf("roll back mid-refresh transaction %q: %w", txID, err)
+				}
+				slog.Warn(
+					"RecoverOpenTransactions: rolled back transaction interrupted by a mid-refresh crash (never committed)",
+					"tx_id", txID,
+				)
+				continue
+			}
 			if err := s.cleanupIdenticalRecoveryBranch(ctx, txID); err != nil {
 				return fmt.Errorf("clean already-committed transaction %q: %w", txID, err)
 			}
@@ -458,6 +481,10 @@ func (s *CartographerServer) RecoverOpenTransactions(ctx context.Context) error 
 		state.CommitHydrated = false
 		state.MainRehydrated = durableState.MainRehydrated
 		state.MergeCompleted = durableState.MergeCompleted
+		// Carry the refresh-in-progress marker: a transaction recovered from a
+		// mid-refresh crash stays marked until a later refresh completes or the
+		// transaction commits, so recovery never reclassifies it.
+		state.BranchRefreshInProgress = durableState.BranchRefreshInProgress
 		slog.Info("RecoverOpenTransactions: recovered", "tx_id", txID)
 	}
 	return nil
@@ -1020,6 +1047,21 @@ func (s *CartographerServer) SearchNeighbors(
 	}
 	proto := make([]*flowv1.SearchNeighborResult, 0, len(results))
 	for _, r := range results {
+		// ponytail: SearchNeighborResult.score (proto/flow/v1/cartographer.proto)
+		// carries the raw LadybugDB cosine *distance* — lower is more similar,
+		// and the store sorts ascending by distance (store.SearchNeighbors) —
+		// yet the wire field is named `score` and the SDK surfaces it as
+		// SearchResult.Similarity (sdk/go/graph.go), which by name implies
+		// higher-is-better similarity. A consumer ordering results by
+		// `Similarity` descending would invert the actual similarity ordering.
+		// The distance-vs-score mapping is documented only in the store layer
+		// and nowhere on the wire or in the SDK. Upgrade path: rename the wire
+		// field to `distance` (and the SDK field to `Distance`) across
+		// proto/flow/v1/cartographer.proto, the generated SDK, and the service
+		// mapping, or invert to a true similarity score (1/(1+distance) or
+		// 1-distance). Ceiling: the field name is wire-format stability —
+		// renaming breaks existing consumers, so the mismatch is preserved as
+		// long as the name stays.
 		proto = append(proto, &flowv1.SearchNeighborResult{
 			EntityId: r.Entity.Id, EntityType: r.Entity.Type,
 			Properties: r.Entity.Properties, Score: r.Distance,
@@ -2188,10 +2230,13 @@ func (s *CartographerServer) validateRefresh(
 // transaction's change log from the branch DB on restart, so the branch DB is
 // the only durable record of the transaction's mutations — the in-memory
 // change log is lost at a crash and the working tree was reset to main. The
-// rebuild therefore builds the replacement branch DB (under a temporary key)
-// and swaps it in only after it is fully hydrated, so a crash at any point
-// before the swap leaves the previous branch DB (and hence the transaction's
-// mutations) intact.
+// rebuild therefore builds the replacement branch DB (under a temporary key),
+// re-applies the transaction's changes onto it, and swaps it in only once it
+// is fully built and re-applied, so at every crash point in this sequence the
+// durable branch DB — the only durable record of the transaction's mutations —
+// holds the complete change set and recovery never sees a clean copy of main
+// for a transaction whose changes were still being re-applied (see
+// RecoverOpenTransactions' BranchRefreshInProgress guard).
 func (s *CartographerServer) resetBranchStoreFromWorkingTree(ctx context.Context, txID string) error {
 	if s.ladybugPath == "" {
 		return status.Error(codes.FailedPrecondition, "refresh requires LADYBUG_DB_PATH")
@@ -2205,12 +2250,26 @@ func (s *CartographerServer) resetBranchStoreFromWorkingTree(ctx context.Context
 		if err := s.store.DropBranchDB(ctx, txID); err != nil {
 			return mapStoreError(err)
 		}
-		return s.buildBranchStoreFromWorkingTree(ctx, txID)
+		if err := s.buildBranchStoreFromWorkingTree(ctx, txID); err != nil {
+			return err
+		}
+		state, lookupErr := s.txManager.Lookup(txID)
+		if lookupErr != nil {
+			return errTransactionNotFound(txID)
+		}
+		if err := s.reapplyTransactionChanges(ctx, txID, state.ChangeLog); err != nil {
+			if restoreErr := s.restoreCleanBranchStore(ctx, txID); restoreErr != nil {
+				return fmt.Errorf("reapply transaction: %v; restore clean refreshed branch: %w", err, restoreErr)
+			}
+			return err
+		}
+		return nil
 	}
 
 	// File-backed branch: build the replacement under a temporary key, then
 	// swap. The replacement must be fully built (schema replicated + hydrated)
-	// before the existing branch DB is dropped.
+	// and carry the re-applied transaction changes before the existing branch
+	// DB is evicted.
 	tempID := s.newIDFn()
 	if err := s.buildBranchStoreFromWorkingTree(ctx, tempID); err != nil {
 		_ = s.store.DropBranchDB(ctx, tempID)
@@ -2221,6 +2280,18 @@ func (s *CartographerServer) resetBranchStoreFromWorkingTree(ctx context.Context
 		_ = s.store.DropBranchDB(ctx, tempID)
 		return errTransactionNotFound(txID)
 	}
+	// Mark the refresh in progress and make the marker durable before the
+	// swap: the flag is persisted on the transaction's own record now and on
+	// the temporary key's mirror below, so from the moment the swap renames
+	// the mirror onto the canonical state record — and for any crash in this
+	// refresh — recovery can tell a mid-refresh crash from a genuine
+	// post-merge crash (see RecoverOpenTransactions). It is cleared only by
+	// RefreshTransaction's final state persist.
+	state.BranchRefreshInProgress = true
+	if err := s.persistTransactionState(ctx, state); err != nil {
+		_ = s.store.DropBranchDB(ctx, tempID)
+		return mapStoreError(err)
+	}
 	// Mirror the transaction's durable lifecycle record under the temporary
 	// key so the swap never leaves the branch without a state record (the
 	// final persist in RefreshTransaction rewrites it with the refreshed
@@ -2229,11 +2300,31 @@ func (s *CartographerServer) resetBranchStoreFromWorkingTree(ctx context.Context
 		_ = s.store.DropBranchDB(ctx, tempID)
 		return mapStoreError(err)
 	}
-	// Drop the old branch DB (the store's in-memory handle must be released so
-	// the next operation reopens the replacement from the swapped-in files),
-	// then close the replacement and move its files onto the transaction's
-	// canonical names.
-	if err := s.store.DropBranchDB(ctx, txID); err != nil {
+	// Re-apply the transaction's changes onto the replacement branch before the
+	// swap, so the branch DB that replaces the old one already carries the full
+	// transaction state; the old branch DB (which holds the previous state of
+	// the transaction's mutations) is left intact until then, so a crash while
+	// re-applying still leaves the durable record of the mutations recoverable.
+	// On a conflict (errRefreshConflict / store error) the replacement is
+	// discarded and the branch is restored to the SPEC R9 refresh step-4 clean
+	// state (re-hydrated from main, no transaction changes applied), matching
+	// the pre-refactor behaviour where the post-swap reapply failure triggered a
+	// second reset.
+	if err := s.reapplyTransactionChanges(ctx, tempID, state.ChangeLog); err != nil {
+		_ = s.store.DropBranchDB(ctx, tempID)
+		if restoreErr := s.restoreCleanBranchStore(ctx, txID); restoreErr != nil {
+			return fmt.Errorf("reapply transaction: %v; restore clean refreshed branch: %w", err, restoreErr)
+		}
+		return err
+	}
+	// Evict the old branch's in-memory handle without deleting its files (the
+	// store's in-memory handle must be released so the next operation reopens
+	// the replacement from the swapped-in files), then close the replacement
+	// and move its files onto the transaction's canonical names. Keeping the
+	// old files until the atomic rename overwrites them closes the crash
+	// window between the eviction and the rename: the durable record of the
+	// transaction's mutations is never absent on disk.
+	if err := s.store.CloseBranchDB(ctx, txID); err != nil {
 		_ = s.store.DropBranchDB(ctx, tempID)
 		return mapStoreError(err)
 	}
@@ -2269,6 +2360,30 @@ func (s *CartographerServer) resetBranchStoreFromWorkingTree(ctx context.Context
 	// Release the temporary key's in-memory registration (its files were
 	// renamed onto the transaction's canonical names above).
 	return mapStoreError(s.store.DropBranchDB(ctx, tempID))
+}
+
+// restoreCleanBranchStore re-hydrates a transaction's branch DB to a clean
+// copy of the current working tree (SPEC R9 refresh step 4: after an ABORTED
+// refresh the branch DB remains at the step-2 re-hydrated state, with no
+// transaction changes applied). The durable state record is preserved — with
+// the refresh-in-progress marker still set — so recovery distinguishes this
+// mid-refresh state from an already-committed transaction.
+func (s *CartographerServer) restoreCleanBranchStore(ctx context.Context, txID string) error {
+	if err := s.store.CloseBranchDB(ctx, txID); err != nil {
+		return mapStoreError(err)
+	}
+	if s.ladybugPath != "" {
+		branchesDir := filepath.Join(s.ladybugPath, "branches")
+		for _, f := range []string{txID + ".lbug", txID + ".schema.json"} {
+			if err := os.Remove(filepath.Join(branchesDir, f)); err != nil && !os.IsNotExist(err) {
+				return fmt.Errorf("restore clean refreshed branch %q: %w", txID, err)
+			}
+		}
+	}
+	if err := s.buildBranchStoreFromWorkingTree(ctx, txID); err != nil {
+		return err
+	}
+	return nil
 }
 
 // buildBranchStoreFromWorkingTree creates a fresh branch DB for key and
@@ -2358,16 +2473,19 @@ func (s *CartographerServer) RefreshTransaction(
 			return err
 		}
 		if err := s.validateRefresh(ctx, state, before, current); err != nil {
-			return err
-		}
-		if err := s.reapplyTransactionChanges(ctx, req.TransactionId, state.ChangeLog); err != nil {
-			if resetErr := s.resetBranchStoreFromWorkingTree(ctx, req.TransactionId); resetErr != nil {
-				return fmt.Errorf("reapply transaction: %v; restore refreshed branch: %w", err, resetErr)
+			// SPEC R9 refresh step 4: on a conflict the branch LadybugDB must
+			// remain at the step-2 state (re-hydrated from main, no transaction
+			// changes applied). resetBranchStoreFromWorkingTree already
+			// re-applied the changes onto the swapped-in branch, so restore the
+			// clean state before surfacing the ABORTED conflict.
+			if restoreErr := s.restoreCleanBranchStore(ctx, req.TransactionId); restoreErr != nil {
+				return fmt.Errorf("validate refresh: %v; restore clean refreshed branch: %w", err, restoreErr)
 			}
 			return err
 		}
 		oldMainHead := state.MainHeadAtLastSync
 		oldSchemaHash := state.SchemaHash
+		oldRefreshMarker := state.BranchRefreshInProgress
 		state.MainHeadAtLastSync = mainHash
 		// The branch DB has been reset and re-hydrated from latest main, so the
 		// schema baseline is refreshed to the current schema: a refreshed
@@ -2376,9 +2494,14 @@ func (s *CartographerServer) RefreshTransaction(
 		// commit-time compatibility check, and a destructive change would be
 		// re-detected against the refreshed baseline).
 		state.SchemaHash = computeSchemaHash(s.store)
+		// The refresh completed — clear the in-progress marker so the durable
+		// record no longer distinguishes this transaction from a normal open
+		// transaction (RecoverOpenTransactions' empty-diff branch).
+		state.BranchRefreshInProgress = false
 		if err := s.persistTransactionState(ctx, state); err != nil {
 			state.MainHeadAtLastSync = oldMainHead
 			state.SchemaHash = oldSchemaHash
+			state.BranchRefreshInProgress = oldRefreshMarker
 			return fmt.Errorf("persist refreshed transaction: %w", err)
 		}
 		return nil
