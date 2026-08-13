@@ -404,19 +404,35 @@ func (p *CartographerProxy) ExportGraph(
 	if err != nil {
 		return err
 	}
+	var sentAny bool
 	for {
 		resp, err := upstream.Recv()
 		if errors.Is(err, io.EOF) {
 			return nil
 		}
 		if err != nil {
-			// SPEC error table: "ExportGraph mid-stream failure → INTERNAL". Any failure
-			// after the stream has started — a transport-level break (Unavailable), a
-			// non-conforming upstream status, or a raw error — is a mid-stream failure
-			// (partial data may already have been sent), so surface it as INTERNAL rather
-			// than the raw upstream status, matching the operator proxy.
+			// SPEC error table: "Unsupported export format" → INVALID_ARGUMENT and
+			// "ExportGraph buffer allocation failure" → RESOURCE_EXHAUSTED are
+			// pre-stream rejections ("no data sent"): the Cartographer returns them
+			// BEFORE any chunk, so they arrive at the relay's first Recv with no
+			// chunk forwarded. Pass them through verbatim — preserving the upstream
+			// status code and message — so an SDK caller (graph.ExportGraph("bogus"),
+			// which performs no local format validation) receives the documented
+			// error, matching the operator proxy. Once at least one chunk has been
+			// forwarded, any failure — a transport-level break (Unavailable), a
+			// non-conforming upstream status, or a raw error — is a genuine
+			// mid-stream failure (partial data may already have been sent), so
+			// surface it as INTERNAL rather than the raw upstream status.
+			if !sentAny {
+				if st, ok := status.FromError(err); ok {
+					if c := st.Code(); c == codes.InvalidArgument || c == codes.ResourceExhausted {
+						return err
+					}
+				}
+			}
 			return status.Errorf(codes.Internal, "export stream failed: %v", err)
 		}
+		sentAny = true
 		if err := stream.Send(resp); err != nil {
 			// SPEC error table: a downstream stream break during export is the same
 			// mid-stream failure (partial data may already have been sent) → INTERNAL,

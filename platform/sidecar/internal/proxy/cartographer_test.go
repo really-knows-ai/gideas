@@ -654,18 +654,49 @@ func (mockExportClientStream) CloseSend() error     { return nil }
 func (mockExportClientStream) SendMsg(any) error    { return nil }
 func (mockExportClientStream) RecvMsg(any) error    { return nil }
 
+// mockExportClientChunkThenErr is a flowv1.CartographerService_ExportGraphClient
+// that yields a single chunk and then returns the configured error from the
+// next Recv — pinning the relay's mid-stream upstream branch (at least one
+// response already forwarded) when the upstream breaks after streaming started.
+type mockExportClientChunkThenErr struct {
+	err   error
+	calls int
+}
+
+func (m *mockExportClientChunkThenErr) Recv() (*flowv1.ExportGraphResponse, error) {
+	m.calls++
+	if m.calls == 1 {
+		return &flowv1.ExportGraphResponse{Chunk: []byte("chunk")}, nil
+	}
+	return nil, m.err
+}
+
+func (mockExportClientChunkThenErr) Context() context.Context { return context.Background() }
+func (mockExportClientChunkThenErr) Header() (metadata.MD, error) {
+	return nil, nil
+}
+func (mockExportClientChunkThenErr) Trailer() metadata.MD { return nil }
+func (mockExportClientChunkThenErr) CloseSend() error     { return nil }
+func (mockExportClientChunkThenErr) SendMsg(any) error    { return nil }
+func (mockExportClientChunkThenErr) RecvMsg(any) error    { return nil }
+
 // mockCartographerClientExport is a flowv1.CartographerServiceClient that
-// answers ExportGraph with a fake client stream (failErr propagated from the
-// first Recv when set). The embedded interface satisfies the remaining client
-// methods, which the relay never calls.
+// answers ExportGraph with a fake client stream. err is returned from the
+// first Recv (a pre-stream failure when set); chunkErr is returned from the
+// second Recv, after one chunk (a mid-stream failure when set). The embedded
+// interface satisfies the remaining client methods, which the relay never calls.
 type mockCartographerClientExport struct {
 	flowv1.CartographerServiceClient
-	err error
+	err      error
+	chunkErr error
 }
 
 func (m *mockCartographerClientExport) ExportGraph(
 	ctx context.Context, in *flowv1.ExportGraphRequest, opts ...grpc.CallOption,
 ) (flowv1.CartographerService_ExportGraphClient, error) {
+	if m.chunkErr != nil {
+		return &mockExportClientChunkThenErr{err: m.chunkErr}, nil
+	}
 	return &mockExportClientStream{failErr: m.err}, nil
 }
 
@@ -729,6 +760,63 @@ func TestCartographerProxy_ExportGraph_MidStreamFailureIsInternal(t *testing.T) 
 		}
 		if stream.sent == 0 {
 			t.Fatal("expected Send to have been exercised before failing")
+		}
+	})
+}
+
+// TestCartographerProxy_ExportGraph_PreStreamRejectionPassesThrough pins the
+// SPEC error-table rows "Unsupported export format" → INVALID_ARGUMENT and
+// "ExportGraph buffer allocation failure" → RESOURCE_EXHAUSTED (both "no data
+// sent") at the Sidecar relay, matching the operator proxy
+// (foundrygraph_proxyserver.go / TestExportGraphPreStreamRejectionPassesThrough):
+// a status the Cartographer returns BEFORE sending any chunk must surface
+// through the relay verbatim — preserving the upstream status code and message —
+// rather than being flattened to INTERNAL, so an SDK caller
+// (graph.ExportGraph("bogus"), which performs no local format validation)
+// receives the documented error code. Once at least one chunk has been
+// forwarded, the same upstream status is a genuine mid-stream failure (partial
+// data may already have been sent) and maps to INTERNAL per the SPEC error
+// table row "ExportGraph mid-stream failure".
+func TestCartographerProxy_ExportGraph_PreStreamRejectionPassesThrough(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		code codes.Code
+	}{
+		{"unsupported format", codes.InvalidArgument},
+		{"buffer allocation failure", codes.ResourceExhausted},
+	} {
+		t.Run("prestream_"+tc.name, func(t *testing.T) {
+			p := &CartographerProxy{client: &mockCartographerClientExport{
+				err: status.Error(tc.code, "rejected before any chunk was sent"),
+			}}
+			stream := &mockExportServerStream{}
+			err := p.ExportGraph(&flowv1.ExportGraphRequest{Format: "bogus"}, stream)
+			if err == nil {
+				t.Fatal("expected an error on a pre-stream rejection")
+			}
+			if st := status.Code(err); st != tc.code {
+				t.Fatalf("expected %v to pass through verbatim, got %v (%v)", tc.code, st, err)
+			}
+			if stream.sent != 0 {
+				t.Error("expected no chunks forwarded for a pre-stream rejection")
+			}
+		})
+	}
+
+	t.Run("midstream_after_chunk_is_internal", func(t *testing.T) {
+		// A chunk was already forwarded when the upstream breaks with a
+		// pre-stream rejection code: the sentAny guard flips it to the SPEC's
+		// mid-stream INTERNAL, not a verbatim pass-through.
+		p := &CartographerProxy{client: &mockCartographerClientExport{
+			chunkErr: status.Error(codes.InvalidArgument, "rejected after one chunk"),
+		}}
+		stream := &mockExportServerStream{}
+		err := p.ExportGraph(&flowv1.ExportGraphRequest{Format: "json"}, stream)
+		if st := status.Code(err); st != codes.Internal {
+			t.Fatalf("expected INTERNAL for a mid-stream failure, got %v (%v)", st, err)
+		}
+		if stream.sent == 0 {
+			t.Fatal("expected at least one chunk forwarded before the mid-stream failure")
 		}
 	})
 }
