@@ -558,46 +558,6 @@ func TestChangeLogRejectsNilSnapshot(t *testing.T) {
 	}
 }
 
-func TestChangeLogClear(t *testing.T) {
-	cl := NewChangeLog()
-	_ = cl.Add(ChangeLogEntry{
-		Kind: ChangeAddEntity, ID: "e1", Type: testComponentType,
-		Entity: &EntityEntry{ID: "e1", Type: testComponentType},
-	})
-	_ = cl.Add(ChangeLogEntry{
-		Kind: ChangeAddEntity, ID: "e2", Type: testComponentType,
-		Entity: &EntityEntry{ID: "e2", Type: testComponentType},
-	})
-	_ = cl.Add(ChangeLogEntry{
-		Kind: ChangeAddEdge, ID: "e3", Type: "DEPENDS_ON",
-		Edge: &EdgeEntry{ID: "e3", Type: "DEPENDS_ON", FromEntityID: "a", ToEntityID: "b"},
-	})
-
-	if cl.Len() != 3 {
-		t.Fatalf("expected Len()=3, got %d", cl.Len())
-	}
-
-	cl.Clear()
-	if cl.Len() != 0 {
-		t.Fatalf("expected Len()=0 after Clear, got %d", cl.Len())
-	}
-	if len(cl.AddedEntities) != 0 {
-		t.Fatal("expected empty AddedEntities after Clear")
-	}
-	if len(cl.ModifiedEntities) != 0 {
-		t.Fatal("expected empty ModifiedEntities after Clear")
-	}
-	if len(cl.DeletedEntities) != 0 {
-		t.Fatal("expected empty DeletedEntities after Clear")
-	}
-	if len(cl.AddedEdges) != 0 {
-		t.Fatal("expected empty AddedEdges after Clear")
-	}
-	if len(cl.DeletedEdges) != 0 {
-		t.Fatal("expected empty DeletedEdges after Clear")
-	}
-}
-
 func TestChangeLogConcurrent(t *testing.T) {
 	cl := NewChangeLog()
 	var wg sync.WaitGroup

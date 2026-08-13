@@ -52,105 +52,35 @@ func (g *gitStore) RemoveEntityFiles(ctx context.Context, entityType string, ids
 // schema.Validate on ApplySchema) so the type directory stays under entities/;
 // a type name containing a path separator would escape the tree.
 func (g *gitStore) ReadAllEntityFiles(ctx context.Context, entityType string) ([]EntityFile, error) {
-	dir := filepath.Join("entities", entityType)
-	entries, err := g.fs.ReadDir(dir)
-	if err != nil {
-		if isNotExist(err) {
-			return []EntityFile{}, nil
-		}
-		return nil, fmt.Errorf("read entity dir %s: %w", dir, err)
-	}
-
-	var files []EntityFile
-	for _, fi := range entries {
-		if fi.IsDir() || !strings.HasSuffix(fi.Name(), ".json") {
-			continue
-		}
-		ef, err := func() (EntityFile, error) {
-			f, err := g.fs.Open(filepath.Join(dir, fi.Name()))
-			if err != nil {
-				return EntityFile{}, fmt.Errorf("open entity file %s: %w", fi.Name(), err)
-			}
-			// Read the entire file and unmarshal it as a single document.
-			// json.Unmarshal rejects trailing content after the top-level value,
-			// whereas a streaming Decoder.Decode would silently consume only the
-			// first of two concatenated documents — a corrupted file must fail
-			// loudly like every sibling corruption guard (SPEC R8), not
-			// truncate.
-			data, err := io.ReadAll(f)
-			if err != nil {
-				_ = f.Close()
-				return EntityFile{}, fmt.Errorf("read entity file %s: %w", fi.Name(), err)
-			}
-			// A Close error signals an I/O problem reading the file; propagating it
-			// prevents a clean-but-corrupt read from silently passing.
-			if err := f.Close(); err != nil {
-				return EntityFile{}, fmt.Errorf("close entity file %s: %w", fi.Name(), err)
-			}
-			var ej EntityJSON
-			if err := json.Unmarshal(data, &ej); err != nil {
-				return EntityFile{}, fmt.Errorf("decode entity file %s: %w", fi.Name(), err)
-			}
-			// Guard against the embedded id conflicting with the filename. A
-			// well-formed file writes <id>.json whose embedded id equals the
-			// filename base (writeEntityFile); a file whose embedded id differs
-			// (external corruption) would otherwise be loaded under an id that
-			// was never written to that path, hiding the intended-UUID file
-			// during R8 re-hydration. The raw filename base must equal the
-			// canonical spelling (ej.ID.String()): comparing parsed UUIDs would
-			// normalise case and admit an uppercase-spelled <id>.json coexisting
-			// with the canonical file for one UUID — the two-files-one-UUID
-			// hazard SPEC:162/:944 prevent on the write path, so a case-variant
-			// file is corruption.
-			if base := strings.TrimSuffix(fi.Name(), ".json"); base != ej.ID.String() {
-				return EntityFile{}, fmt.Errorf("entity file %s embedded id %s conflicts with filename", fi.Name(), ej.ID)
-			}
-			// Guard against a zero, non-v4, or non-RFC4122-variant embedded
-			// id. writeEntityFile rejects these (ErrInvalidUUID), and recovery
-			// reconstruction and refresh snapshots consume this path — a file
-			// whose embedded id is uuid.Nil, not version 4, or not an RFC4122
-			// variant (external corruption) must surface the same sentinel
-			// rather than load an entity under a never-valid UUID. Version() is
-			// 0 for uuid.Nil, so the version check covers zero; the variant
-			// check matches uuidutil.Validate, which gates the write path on
-			// both dimensions.
-			if ej.ID.Version() != 4 || ej.ID.Variant() != uuid.RFC4122 {
-				return EntityFile{}, fmt.Errorf(
-					"%w: entity file %s embedded id %s is not a valid UUID v4",
-					ErrInvalidUUID, fi.Name(), ej.ID)
-			}
+	return readAllElementFiles(g, "entities", "entity", entityType,
+		func(elemType, name string, ej *EntityJSON) (uuid.UUID, error) {
 			// Guard against the embedded type conflicting with the directory it
 			// is read from. writeEntityFile rejects this mismatch
 			// (ErrEntityTypeMismatch), and re-hydration enumerates files per
 			// type via the directory — a file whose embedded type disagrees
 			// with its directory (external corruption) must surface the same
 			// sentinel rather than load under a never-written type.
-			if entityType != ej.Type {
-				return EntityFile{}, fmt.Errorf("%w: %q != %q", ErrEntityTypeMismatch, entityType, ej.Type)
+			if elemType != ej.Type {
+				return uuid.Nil, fmt.Errorf("%w: %q != %q", ErrEntityTypeMismatch, elemType, ej.Type)
 			}
+			return ej.ID, nil
+		},
+		func(elemType, name, dir string, ej *EntityJSON) (EntityFile, error) {
 			ef := EntityFile{
 				ID:         ej.ID.String(),
 				Type:       ej.Type,
 				Properties: ej.Properties,
 				CreatedAt:  ej.CreatedAt,
 				UpdatedAt:  ej.UpdatedAt,
-				Path:       filepath.Join(dir, fi.Name()),
+				Path:       filepath.Join(dir, name),
 			}
 			if ej.Embedding != nil {
 				ef.Embedding = *ej.Embedding
 			}
 			return ef, nil
-		}()
-		if err != nil {
-			return nil, err
-		}
-		files = append(files, ef)
-	}
-
-	sort.Slice(files, func(i, j int) bool {
-		return files[i].Path < files[j].Path
-	})
-	return files, nil
+		},
+		func(a, b EntityFile) bool { return a.Path < b.Path },
+	)
 }
 
 // ListEntityTypes lists entity type directory names under entities/ that
@@ -164,8 +94,8 @@ func (g *gitStore) ListEntityTypes(ctx context.Context) ([]string, error) {
 // writeEntityFile writes a single entity file. It parses the entity's ID as
 // a canonical RFC4122 §3 UUID v4 (rejecting the non-canonical spellings that
 // uuid.Parse alone would accept — the ID is persisted verbatim as <id>.json),
-// creates the directory if needed, and marshals the entity to indented JSON.
-// The entityType must match [a-zA-Z_][a-zA-Z0-9_]* (see WriteEntityFiles).
+// and delegates the Create→Write→Close sequence to writeJSONFile. The
+// entityType must match [a-zA-Z_][a-zA-Z0-9_]* (see WriteEntityFiles).
 func (g *gitStore) writeEntityFile(entityType string, ent Entity) error {
 	if entityType != ent.Type {
 		return fmt.Errorf("%w: %q != %q", ErrEntityTypeMismatch, entityType, ent.Type)
@@ -198,51 +128,13 @@ func (g *gitStore) writeEntityFile(entityType string, ent Entity) error {
 		ej.Embedding = &emb
 	}
 
-	dir := filepath.Join("entities", entityType)
-	if err := g.fs.MkdirAll(dir, 0755); err != nil {
-		return fmt.Errorf("mkdir entity dir %s: %w", dir, err)
-	}
-
-	path := filepath.Join(dir, ent.ID+".json")
-	data, err := json.MarshalIndent(ej, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal entity %s: %w", ent.ID, err)
-	}
-
-	f, err := g.fs.Create(path)
-	if err != nil {
-		return fmt.Errorf("create entity file %s: %w", path, err)
-	}
-
-	if _, err := f.Write(data); err != nil {
-		_ = f.Close()
-		return fmt.Errorf("write entity file %s: %w", path, err)
-	}
-	if _, err := f.Write([]byte("\n")); err != nil {
-		_ = f.Close()
-		return fmt.Errorf("write newline %s: %w", path, err)
-	}
-	// Closing the file is the point at which a buffered flush failure (and thus
-	// data loss) becomes observable, so its error must be propagated, not
-	// silently discarded. go-billy's File has no Sync(); Close is the deepest
-	// durability boundary the interface exposes.
-	if err := f.Close(); err != nil {
-		return fmt.Errorf("close entity file %s: %w", path, err)
-	}
-	return nil
+	return g.writeJSONFile("entities", "entity", entityType, ent.ID, ej)
 }
 
 // removeEntityFile deletes a single entity file. If the file does not
 // exist, it returns nil (idempotent).
 func (g *gitStore) removeEntityFile(entityType string, id string) error {
-	path := filepath.Join("entities", entityType, id+".json")
-	if err := g.fs.Remove(path); err != nil {
-		if isNotExist(err) {
-			return nil
-		}
-		return fmt.Errorf("remove entity file %s: %w", path, err)
-	}
-	return nil
+	return g.removeJSONFile("entities", "entity", entityType, id)
 }
 
 // listTypesWithJSON is a helper that reads subdirectories under baseDir
@@ -291,4 +183,173 @@ func listTypesWithJSON(fs billy.Filesystem, baseDir string) ([]string, error) {
 // guard to match it.
 func isNotExist(err error) bool {
 	return os.IsNotExist(err)
+}
+
+// ============================================================================
+// Shared entity/edge file-I/O helpers
+//
+// The entity and edge serialisation layers differ only in their element types
+// (JSON form, domain form, file form), so the Create→Write→Write("\n")→Close
+// sequence (writeJSONFile), the idempotent Remove (removeJSONFile), and the
+// directory read + corruption guards (readAllElementFiles) live here once
+// instead of being duplicated in entity.go and edge.go.
+// ============================================================================
+
+// validUUIDv4 reports whether u is a version-4 RFC4122-variant UUID — the
+// read-path corruption guard matching uuidutil.Validate, which gates the
+// write path on both dimensions. Version() is 0 for uuid.Nil, so the version
+// check covers zero.
+func validUUIDv4(u uuid.UUID) bool {
+	return u.Version() == 4 && u.Variant() == uuid.RFC4122
+}
+
+// writeJSONFile marshals an element's JSON form to <root>/<elemType>/<id>.json
+// and writes it with the Create→Write→Write("\n")→Close sequence shared by
+// entities and edges. kind names the element in error messages
+// ("entity"/"edge").
+func (g *gitStore) writeJSONFile(root, kind, elemType, id string, ej any) error {
+	dir := filepath.Join(root, elemType)
+	if err := g.fs.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("mkdir %s dir %s: %w", kind, dir, err)
+	}
+
+	path := filepath.Join(dir, id+".json")
+	data, err := json.MarshalIndent(ej, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal %s %s: %w", kind, id, err)
+	}
+
+	f, err := g.fs.Create(path)
+	if err != nil {
+		return fmt.Errorf("create %s file %s: %w", kind, path, err)
+	}
+
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("write %s file %s: %w", kind, path, err)
+	}
+	if _, err := f.Write([]byte("\n")); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("write newline %s: %w", path, err)
+	}
+	// Closing the file is the point at which a buffered flush failure (and thus
+	// data loss) becomes observable, so its error must be propagated, not
+	// silently discarded. go-billy's File has no Sync(); Close is the deepest
+	// durability boundary the interface exposes.
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("close %s file %s: %w", kind, path, err)
+	}
+	return nil
+}
+
+// removeJSONFile deletes <root>/<elemType>/<id>.json. If the file does not
+// exist, it returns nil (idempotent). kind names the element in error
+// messages ("entity"/"edge").
+func (g *gitStore) removeJSONFile(root, kind, elemType, id string) error {
+	path := filepath.Join(root, elemType, id+".json")
+	if err := g.fs.Remove(path); err != nil {
+		if isNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("remove %s file %s: %w", kind, path, err)
+	}
+	return nil
+}
+
+// readAllElementFiles is the shared entity/edge directory read: enumerate
+// <root>/<elemType>/*.json, decode each as the JSON form J, apply the shared
+// corruption guards (embedded id vs filename, UUID v4 version/variant), run
+// the per-kind validate (type-vs-directory and, for edges, endpoint
+// validation) and convert callbacks, and return the results ordered by path.
+// kind names the element in error messages ("entity"/"edge"). Returns an
+// empty slice (not nil) when the directory does not exist or is empty.
+func readAllElementFiles[J, F any](
+	g *gitStore,
+	root, kind, elemType string,
+	validate func(elemType, name string, ej *J) (uuid.UUID, error),
+	convert func(elemType, name, dir string, ej *J) (F, error),
+	less func(a, b F) bool,
+) ([]F, error) {
+	dir := filepath.Join(root, elemType)
+	entries, err := g.fs.ReadDir(dir)
+	if err != nil {
+		if isNotExist(err) {
+			return []F{}, nil
+		}
+		return nil, fmt.Errorf("read %s dir %s: %w", kind, dir, err)
+	}
+
+	var files []F
+	for _, fi := range entries {
+		if fi.IsDir() || !strings.HasSuffix(fi.Name(), ".json") {
+			continue
+		}
+		ef, err := func() (F, error) {
+			f, err := g.fs.Open(filepath.Join(dir, fi.Name()))
+			if err != nil {
+				return *new(F), fmt.Errorf("open %s file %s: %w", kind, fi.Name(), err)
+			}
+			// Read the entire file and unmarshal it as a single document.
+			// json.Unmarshal rejects trailing content after the top-level value,
+			// whereas a streaming Decoder.Decode would silently consume only the
+			// first of two concatenated documents — a corrupted file must fail
+			// loudly like every sibling corruption guard (SPEC R8), not
+			// truncate.
+			data, err := io.ReadAll(f)
+			if err != nil {
+				_ = f.Close()
+				return *new(F), fmt.Errorf("read %s file %s: %w", kind, fi.Name(), err)
+			}
+			// A Close error signals an I/O problem reading the file; propagating
+			// it prevents a clean-but-corrupt read from silently passing.
+			if err := f.Close(); err != nil {
+				return *new(F), fmt.Errorf("close %s file %s: %w", kind, fi.Name(), err)
+			}
+			var ej J
+			if err := json.Unmarshal(data, &ej); err != nil {
+				return *new(F), fmt.Errorf("decode %s file %s: %w", kind, fi.Name(), err)
+			}
+			// Per-kind validation (type-vs-directory, edge endpoints) returns
+			// the embedded id the shared guards below check.
+			id, err := validate(elemType, fi.Name(), &ej)
+			if err != nil {
+				return *new(F), err
+			}
+			// Guard against the embedded id conflicting with the filename. A
+			// well-formed file writes <id>.json whose embedded id equals the
+			// filename base (the write path); a file whose embedded id differs
+			// (external corruption) would otherwise be loaded under an id that
+			// was never written to that path, hiding the intended-UUID file
+			// during R8 re-hydration. The raw filename base must equal the
+			// canonical spelling (id.String()): comparing parsed UUIDs would
+			// normalise case and admit an uppercase-spelled <id>.json coexisting
+			// with the canonical file for one UUID — the two-files-one-UUID
+			// hazard SPEC:162/:944 prevent on the write path, so a case-variant
+			// file is corruption.
+			if base := strings.TrimSuffix(fi.Name(), ".json"); base != id.String() {
+				return *new(F), fmt.Errorf("%s file %s embedded id %s conflicts with filename", kind, fi.Name(), id)
+			}
+			// Guard against a zero, non-v4, or non-RFC4122-variant embedded
+			// id. The write path rejects these (ErrInvalidUUID), and recovery
+			// reconstruction and refresh snapshots consume this path — a file
+			// whose embedded id is uuid.Nil, not version 4, or not an RFC4122
+			// variant (external corruption) must surface the same sentinel
+			// rather than load an element under a never-valid UUID.
+			if !validUUIDv4(id) {
+				return *new(F), fmt.Errorf(
+					"%w: %s file %s embedded id %s is not a valid UUID v4",
+					ErrInvalidUUID, kind, fi.Name(), id)
+			}
+			return convert(elemType, fi.Name(), dir, &ej)
+		}()
+		if err != nil {
+			return nil, err
+		}
+		files = append(files, ef)
+	}
+
+	sort.Slice(files, func(i, j int) bool {
+		return less(files[i], files[j])
+	})
+	return files, nil
 }

@@ -287,21 +287,6 @@ func (cl *ChangeLog) Entries() []ChangeLogEntry {
 	return entries
 }
 
-// Clear resets all maps and resets count to zero.
-// Acquires cl.mu for safe concurrent access.
-func (cl *ChangeLog) Clear() {
-	cl.mu.Lock()
-	defer cl.mu.Unlock()
-
-	cl.AddedEntities = make(map[string]*EntityEntry)
-	cl.ModifiedEntities = make(map[string]*EntityEntry)
-	cl.DeletedEntities = make(map[string]*DeletionInfo)
-	cl.AddedEdges = make(map[string]*EdgeEntry)
-	cl.ModifiedEdges = make(map[string]*EdgeEntry)
-	cl.DeletedEdges = make(map[string]*DeletionInfo)
-	cl.count = 0
-}
-
 // Len returns the number of distinct entities/edges touched by the
 // transaction — the metric the 100K cap counts (SPEC:968).
 // Acquires cl.mu for safe concurrent access.

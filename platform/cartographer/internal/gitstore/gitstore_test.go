@@ -322,6 +322,78 @@ func TestInitNonDirectoryGit(t *testing.T) {
 	}
 }
 
+// TestNewRepairsCrashedInit pins the crash-window recovery for New's init
+// sequence (gitstore.go): a process that dies between PlainInitWithOptions and
+// the initial commit leaves .git present with an unborn HEAD and no
+// refs/heads/main. New must re-run the init commit in that window (gated on
+// the main ref, not on whether .git was just created) so the repo is usable —
+// IsEmpty's main-ref lookup succeeds, and BeginTransaction's branch-from-main
+// (CreateBranch) can resolve main (SPEC durability/recovery).
+func TestNewRepairsCrashedInit(t *testing.T) {
+	basePath := t.TempDir()
+	repoPath := filepath.Join(basePath, "graph-repo")
+	if _, err := git.PlainInitWithOptions(repoPath, &git.PlainInitOptions{
+		InitOptions: git.InitOptions{
+			DefaultBranch: plumbing.ReferenceName("refs/heads/main"),
+		},
+	}); err != nil {
+		t.Fatalf("simulate crashed init (PlainInitWithOptions): %v", err)
+	}
+	// The simulated crash window: .git is present but the init commit never
+	// landed (no refs/heads/main).
+	if info, err := os.Stat(filepath.Join(repoPath, ".git")); err != nil || !info.IsDir() {
+		t.Fatalf("expected .git directory from crashed init: %v", err)
+	}
+
+	gs, err := New(basePath)
+	if err != nil {
+		t.Fatalf("New after crashed init: %v", err)
+	}
+
+	gsImpl, ok := gs.(*gitStore)
+	if !ok {
+		t.Fatalf("expected *gitStore, got %T", gs)
+	}
+	err = gs.WithGitLock(func() error {
+		// The repair must leave refs/heads/main present and resolvable.
+		mainRef, err := gsImpl.repo.Reference(plumbing.ReferenceName("refs/heads/main"), true)
+		if err != nil {
+			return fmt.Errorf("main ref missing after repair: %w", err)
+		}
+		commit, err := gsImpl.repo.CommitObject(mainRef.Hash())
+		if err != nil {
+			return fmt.Errorf("resolve repaired init commit: %w", err)
+		}
+		if !isInitCommit(commit) {
+			return fmt.Errorf("expected cartographer init commit, got message=%q author=%q", commit.Message, commit.Author.Name)
+		}
+		// The repaired repo reports empty (only the init commit), so the SPEC
+		// R10 clone-vs-pull decision sees a fresh repo rather than an error.
+		empty, err := gsImpl.IsEmpty(ctx())
+		if err != nil {
+			return err
+		}
+		if !empty {
+			return fmt.Errorf("expected repaired repo to be init-only (empty), got non-empty")
+		}
+		// The init commit carries the entities/ and edges/ directories.
+		tree, err := commit.Tree()
+		if err != nil {
+			return err
+		}
+		if _, err := tree.File("entities/.gitkeep"); err != nil {
+			return fmt.Errorf("entities/.gitkeep missing from repaired init commit: %w", err)
+		}
+		if _, err := tree.File("edges/.gitkeep"); err != nil {
+			return fmt.Errorf("edges/.gitkeep missing from repaired init commit: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("repaired init check: %v", err)
+	}
+}
+
 // ============================================================================
 // T2: Entity file operations
 // ============================================================================

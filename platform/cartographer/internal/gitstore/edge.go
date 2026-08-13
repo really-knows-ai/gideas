@@ -2,12 +2,8 @@ package gitstore
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
 	"path/filepath"
-	"sort"
-	"strings"
 
 	"github.com/foundry/flow/cartographer/internal/uuidutil"
 	"github.com/google/uuid"
@@ -51,81 +47,16 @@ func (g *gitStore) RemoveEdgeFiles(ctx context.Context, edgeType string, ids []s
 // schema.Validate on ApplySchema) so the type directory stays under edges/; a
 // type name containing a path separator would escape the tree.
 func (g *gitStore) ReadAllEdgeFiles(ctx context.Context, edgeType string) ([]EdgeFile, error) {
-	dir := filepath.Join("edges", edgeType)
-	entries, err := g.fs.ReadDir(dir)
-	if err != nil {
-		if isNotExist(err) {
-			return []EdgeFile{}, nil
-		}
-		return nil, fmt.Errorf("read edge dir %s: %w", dir, err)
-	}
-
-	var files []EdgeFile
-	for _, fi := range entries {
-		if fi.IsDir() || !strings.HasSuffix(fi.Name(), ".json") {
-			continue
-		}
-		ef, err := func() (EdgeFile, error) {
-			f, err := g.fs.Open(filepath.Join(dir, fi.Name()))
-			if err != nil {
-				return EdgeFile{}, fmt.Errorf("open edge file %s: %w", fi.Name(), err)
-			}
-			// Read the entire file and unmarshal it as a single document.
-			// json.Unmarshal rejects trailing content after the top-level value,
-			// whereas a streaming Decoder.Decode would silently consume only the
-			// first of two concatenated documents — a corrupted file must fail
-			// loudly like every sibling corruption guard (SPEC R8), not
-			// truncate.
-			data, err := io.ReadAll(f)
-			if err != nil {
-				_ = f.Close()
-				return EdgeFile{}, fmt.Errorf("read edge file %s: %w", fi.Name(), err)
-			}
-			// A Close error signals an I/O problem reading the file; propagating it
-			// prevents a clean-but-corrupt read from silently passing.
-			if err := f.Close(); err != nil {
-				return EdgeFile{}, fmt.Errorf("close edge file %s: %w", fi.Name(), err)
-			}
-			var ej EdgeJSON
-			if err := json.Unmarshal(data, &ej); err != nil {
-				return EdgeFile{}, fmt.Errorf("decode edge file %s: %w", fi.Name(), err)
-			}
-			// Guard against the embedded id conflicting with the filename. A
-			// well-formed file writes <id>.json whose embedded id equals the
-			// filename base (writeEdgeFile); a file whose embedded id differs
-			// (external corruption) would otherwise be loaded under an id that
-			// was never written to that path, hiding the intended-UUID file
-			// during R8 re-hydration. The raw filename base must equal the
-			// canonical spelling (ej.ID.String()): comparing parsed UUIDs would
-			// normalise case and admit an uppercase-spelled <id>.json coexisting
-			// with the canonical file for one UUID — the two-files-one-UUID
-			// hazard SPEC:162/:944 prevent on the write path, so a case-variant
-			// file is corruption.
-			if base := strings.TrimSuffix(fi.Name(), ".json"); base != ej.ID.String() {
-				return EdgeFile{}, fmt.Errorf("edge file %s embedded id %s conflicts with filename", fi.Name(), ej.ID)
-			}
-			// Guard against a zero, non-v4, or non-RFC4122-variant embedded
-			// id. writeEdgeFile rejects these (ErrInvalidUUID), and recovery
-			// reconstruction and refresh snapshots consume this path — a file
-			// whose embedded id is uuid.Nil, not version 4, or not an RFC4122
-			// variant (external corruption) must surface the same sentinel
-			// rather than load an edge under a never-valid UUID. Version() is 0
-			// for uuid.Nil, so the version check covers zero; the variant
-			// check matches uuidutil.Validate, which gates the write path on
-			// both dimensions.
-			if ej.ID.Version() != 4 || ej.ID.Variant() != uuid.RFC4122 {
-				return EdgeFile{}, fmt.Errorf(
-					"%w: edge file %s embedded id %s is not a valid UUID v4",
-					ErrInvalidUUID, fi.Name(), ej.ID)
-			}
+	return readAllElementFiles(g, "edges", "edge", edgeType,
+		func(elemType, name string, ej *EdgeJSON) (uuid.UUID, error) {
 			// Guard against the embedded type conflicting with the directory it
 			// is read from. writeEdgeFile rejects this mismatch
 			// (ErrEdgeTypeMismatch), and re-hydration enumerates files per type
 			// via the directory — a file whose embedded type disagrees with its
 			// directory (external corruption) must surface the same sentinel
 			// rather than load under a never-written type.
-			if edgeType != ej.Type {
-				return EdgeFile{}, fmt.Errorf("%w: %q != %q", ErrEdgeTypeMismatch, edgeType, ej.Type)
+			if elemType != ej.Type {
+				return uuid.Nil, fmt.Errorf("%w: %q != %q", ErrEdgeTypeMismatch, elemType, ej.Type)
 			}
 			// Guard against a zero, non-v4, or non-RFC4122-variant from/to
 			// endpoint. writeEdgeFile rejects these (ErrInvalidUUID), and
@@ -133,20 +64,21 @@ func (g *gitStore) ReadAllEdgeFiles(ctx context.Context, edgeType string) ([]Edg
 			// — a file whose embedded endpoint is uuid.Nil, not version 4, or
 			// not an RFC4122 variant (external corruption) must surface the
 			// same sentinel rather than load an edge pointing at a never-valid
-			// UUID. Version() is 0 for uuid.Nil, so the version check covers
-			// zero; the variant check matches uuidutil.Validate, which gates
-			// the write path on both dimensions.
-			if ej.FromEntityID.Version() != 4 || ej.FromEntityID.Variant() != uuid.RFC4122 {
-				return EdgeFile{}, fmt.Errorf(
+			// UUID.
+			if !validUUIDv4(ej.FromEntityID) {
+				return uuid.Nil, fmt.Errorf(
 					"%w: edge file %s embedded from %s is not a valid UUID v4",
-					ErrInvalidUUID, fi.Name(), ej.FromEntityID)
+					ErrInvalidUUID, name, ej.FromEntityID)
 			}
-			if ej.ToEntityID.Version() != 4 || ej.ToEntityID.Variant() != uuid.RFC4122 {
-				return EdgeFile{}, fmt.Errorf(
+			if !validUUIDv4(ej.ToEntityID) {
+				return uuid.Nil, fmt.Errorf(
 					"%w: edge file %s embedded to %s is not a valid UUID v4",
-					ErrInvalidUUID, fi.Name(), ej.ToEntityID)
+					ErrInvalidUUID, name, ej.ToEntityID)
 			}
-			ef := EdgeFile{
+			return ej.ID, nil
+		},
+		func(elemType, name, dir string, ej *EdgeJSON) (EdgeFile, error) {
+			return EdgeFile{
 				ID:           ej.ID.String(),
 				Type:         ej.Type,
 				FromEntityID: ej.FromEntityID.String(),
@@ -154,20 +86,11 @@ func (g *gitStore) ReadAllEdgeFiles(ctx context.Context, edgeType string) ([]Edg
 				Properties:   ej.Properties,
 				CreatedAt:    ej.CreatedAt,
 				UpdatedAt:    ej.UpdatedAt,
-				Path:         filepath.Join(dir, fi.Name()),
-			}
-			return ef, nil
-		}()
-		if err != nil {
-			return nil, err
-		}
-		files = append(files, ef)
-	}
-
-	sort.Slice(files, func(i, j int) bool {
-		return files[i].Path < files[j].Path
-	})
-	return files, nil
+				Path:         filepath.Join(dir, name),
+			}, nil
+		},
+		func(a, b EdgeFile) bool { return a.Path < b.Path },
+	)
 }
 
 // ListEdgeTypes lists edge type directory names under edges/ that contain
@@ -181,8 +104,8 @@ func (g *gitStore) ListEdgeTypes(ctx context.Context) ([]string, error) {
 // writeEdgeFile writes a single edge file. It parses the edge's ID,
 // FromEntityID, and ToEntityID as canonical RFC4122 §3 UUID v4 (rejecting the
 // non-canonical spellings that uuid.Parse alone would accept — the ID is
-// persisted verbatim as <id>.json), creates the directory if needed, and
-// marshals the edge to indented JSON. The edgeType must match
+// persisted verbatim as <id>.json), and delegates the Create→Write→Close
+// sequence to writeJSONFile. The edgeType must match
 // [a-zA-Z_][a-zA-Z0-9_]* (see WriteEdgeFiles).
 func (g *gitStore) writeEdgeFile(edgeType string, edge Edge) error {
 	if edgeType != edge.Type {
@@ -218,49 +141,11 @@ func (g *gitStore) writeEdgeFile(edgeType string, edge Edge) error {
 		UpdatedAt:    edge.UpdatedAt,
 	}
 
-	dir := filepath.Join("edges", edgeType)
-	if err := g.fs.MkdirAll(dir, 0755); err != nil {
-		return fmt.Errorf("mkdir edge dir %s: %w", dir, err)
-	}
-
-	path := filepath.Join(dir, edge.ID+".json")
-	data, err := json.MarshalIndent(ej, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal edge %s: %w", edge.ID, err)
-	}
-
-	f, err := g.fs.Create(path)
-	if err != nil {
-		return fmt.Errorf("create edge file %s: %w", path, err)
-	}
-
-	if _, err := f.Write(data); err != nil {
-		_ = f.Close()
-		return fmt.Errorf("write edge file %s: %w", path, err)
-	}
-	if _, err := f.Write([]byte("\n")); err != nil {
-		_ = f.Close()
-		return fmt.Errorf("write newline %s: %w", path, err)
-	}
-	// Closing the file is the point at which a buffered flush failure (and thus
-	// data loss) becomes observable, so its error must be propagated, not
-	// silently discarded. go-billy's File has no Sync(); Close is the deepest
-	// durability boundary the interface exposes.
-	if err := f.Close(); err != nil {
-		return fmt.Errorf("close edge file %s: %w", path, err)
-	}
-	return nil
+	return g.writeJSONFile("edges", "edge", edgeType, edge.ID, ej)
 }
 
 // removeEdgeFile deletes a single edge file. If the file does not exist,
 // it returns nil (idempotent).
 func (g *gitStore) removeEdgeFile(edgeType string, id string) error {
-	path := filepath.Join("edges", edgeType, id+".json")
-	if err := g.fs.Remove(path); err != nil {
-		if isNotExist(err) {
-			return nil
-		}
-		return fmt.Errorf("remove edge file %s: %w", path, err)
-	}
-	return nil
+	return g.removeJSONFile("edges", "edge", edgeType, id)
 }

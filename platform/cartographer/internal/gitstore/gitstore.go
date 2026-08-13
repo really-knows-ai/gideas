@@ -5,6 +5,7 @@ package gitstore
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -132,7 +133,6 @@ func New(basePath string) (GitStore, error) {
 	repoPath := filepath.Join(basePath, "graph-repo")
 	gitPath := filepath.Join(repoPath, ".git")
 
-	var isNew bool
 	var repo *git.Repository
 	var err error
 
@@ -143,7 +143,6 @@ func New(basePath string) (GitStore, error) {
 		if err != nil {
 			return nil, fmt.Errorf("open existing repo: %w", err)
 		}
-		isNew = false
 	case os.IsNotExist(statErr):
 		repo, err = git.PlainInitWithOptions(repoPath, &git.PlainInitOptions{
 			InitOptions: git.InitOptions{
@@ -153,7 +152,6 @@ func New(basePath string) (GitStore, error) {
 		if err != nil {
 			return nil, fmt.Errorf("init repo: %w", err)
 		}
-		isNew = true
 	case statErr != nil:
 		return nil, fmt.Errorf("stat .git: %w", statErr)
 	default:
@@ -182,24 +180,38 @@ func New(basePath string) (GitStore, error) {
 		backend:  repo.Storer,
 	}
 
-	if isNew {
-		if err := initDir(wt, fs, "entities"); err != nil {
-			return nil, fmt.Errorf("init entities dir: %w", err)
-		}
-		if err := initDir(wt, fs, "edges"); err != nil {
-			return nil, fmt.Errorf("init edges dir: %w", err)
-		}
-		if _, err := wt.Commit("init", &git.CommitOptions{
-			Author: &object.Signature{
-				Name:  "cartographer",
-				Email: "cartographer@foundry.flow",
-			},
-			Committer: &object.Signature{
-				Name:  "cartographer",
-				Email: "cartographer@foundry.flow",
-			},
-		}); err != nil {
-			return nil, fmt.Errorf("initial commit: %w", err)
+	// The init commit is gated on the presence of refs/heads/main, not on
+	// whether .git was just created (the old isNew flag): a crash between
+	// PlainInitWithOptions and the initial commit leaves .git present, so a
+	// reopen takes the PlainOpen branch and isNew=false while the repo still
+	// has an unborn HEAD and no main ref — stranding the repo with no recovery
+	// (IsEmpty cannot find a main ref, BeginTransaction's BranchHEAD/CreateBranch
+	// fail INTERNAL forever, and only a pullOnInit=true run would replace the
+	// repo). Re-running the init sequence whenever the main ref is absent
+	// repairs that crash window idempotently, per the SPEC durability/recovery
+	// requirement.
+	if _, err := repo.Reference(plumbing.ReferenceName("refs/heads/main"), false); err != nil {
+		if errors.Is(err, plumbing.ErrReferenceNotFound) {
+			if err := initDir(wt, fs, "entities"); err != nil {
+				return nil, fmt.Errorf("init entities dir: %w", err)
+			}
+			if err := initDir(wt, fs, "edges"); err != nil {
+				return nil, fmt.Errorf("init edges dir: %w", err)
+			}
+			if _, err := wt.Commit("init", &git.CommitOptions{
+				Author: &object.Signature{
+					Name:  "cartographer",
+					Email: "cartographer@foundry.flow",
+				},
+				Committer: &object.Signature{
+					Name:  "cartographer",
+					Email: "cartographer@foundry.flow",
+				},
+			}); err != nil {
+				return nil, fmt.Errorf("initial commit: %w", err)
+			}
+		} else {
+			return nil, fmt.Errorf("check main ref: %w", err)
 		}
 	}
 
