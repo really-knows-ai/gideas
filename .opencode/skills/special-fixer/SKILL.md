@@ -134,6 +134,23 @@ clashing on the shared working tree.
 **Read-only context files** (read for context, do not edit):
 <comma-separated list of secondary files referenced by items in this group>
 
+**Codebase graph (use it before and while you fix):**
+The LadybugDB code graph at `db.lbug` is available via `ladybug_query`
+(read-only Cypher) and `ladybug_scan` (rebuilds the graph).  Before editing,
+check the graph is populated:
+`MATCH (s:Struct) RETURN count(*)` — if zero, run `ladybug_scan` first.
+Read `.opencode/agents/codebase-navigator.md` for the schema and query
+patterns (fully-qualified module-prefixed FQNs, backticked reserved words,
+`;`-terminated queries).  Use the graph to:
+- Find every caller of a function you touch
+  (`MATCH (caller)-[:Calls]->(t {fqn: "..."}) RETURN caller.fqn`) so you fix
+  the shared function once and catch sibling callers, not just the path the
+  item names.
+- Verify the file/line an item references actually names real code before
+  you edit, so you do not fix a path the reviewer guessed wrong.
+- Trace callers/callees to confirm the scope of a change.
+The graph supplements read/glob/grep — use whichever is fastest.
+
 **Isolated worktree setup:**
 1. Create your worktree and branch off <BASE>:
    `git worktree add -b <BRANCH> <WORKTREE-PATH> <BASE>`
@@ -243,6 +260,23 @@ not tracked).
 **Your file:** <FILE>
 **Read-only context files** (read for context, do not edit):
 <comma-separated list of secondary files referenced by items in this group>
+
+**Codebase graph (use it before and while you fix):**
+The LadybugDB code graph at `db.lbug` is available via `ladybug_query`
+(read-only Cypher) and `ladybug_scan` (rebuilds the graph).  Before editing,
+check the graph is populated:
+`MATCH (s:Struct) RETURN count(*)` — if zero, run `ladybug_scan` first.
+Read `.opencode/agents/codebase-navigator.md` for the schema and query
+patterns (fully-qualified module-prefixed FQNs, backticked reserved words,
+`;`-terminated queries).  Use the graph to:
+- Find every caller of a function you touch
+  (`MATCH (caller)-[:Calls]->(t {fqn: "..."}) RETURN caller.fqn`) so you fix
+  the shared function once and catch sibling callers, not just the path the
+  item names.
+- Verify the file/line an item references actually names real code before
+  you edit, so you do not fix a path the reviewer guessed wrong.
+- Trace callers/callees to confirm the scope of a change.
+The graph supplements read/glob/grep — use whichever is fastest.
 
 **Handle these items in order:**
 

@@ -118,6 +118,15 @@ Verify whether the following prior review item(s) still hold against the
 current code.  This is not a fresh review of the whole file — you are only
 checking whether the specific claim(s) below remain valid.
 
+**Codebase graph (use it to locate and verify the code):**
+The LadybugDB code graph at `db.lbug` is available read-only via
+`ladybug_query`.  Check it is populated (`MATCH (s:Struct) RETURN count(*)`)
+and read `.opencode/agents/codebase-navigator.md` for the schema and query
+patterns.  Use it to locate the struct/function an item references by FQN,
+and to trace its callers/callees, so your verification checks the real code
+— not a guessed path.  If the graph is empty or stale, fall back to the
+read/glob/grep tools.
+
 **Target files to read:**
 [list of files referenced by the item(s)]
 
@@ -307,6 +316,20 @@ list.
 **Target files to review (the full head of main — every file in scope, never
 a pre-limited subset):**
 [list of file paths]
+
+**Codebase graph (use it to understand and verify the code you review):**
+The LadybugDB code graph at `db.lbug` is available read-only via
+`ladybug_query`.  Check it is populated (`MATCH (s:Struct) RETURN count(*)`)
+and read `.opencode/agents/codebase-navigator.md` for the schema and query
+patterns (fully-qualified module-prefixed FQNs, backticked reserved words,
+`;`-terminated queries).  Use it to:
+- Trace callers/callees of a function you flag
+  (`MATCH (caller)-[:Calls]->(t {fqn: "..."}) RETURN caller.fqn`) so a
+  finding about one call site does not miss its siblings.
+- Verify a finding's file/line reference names real code, and that the
+  divergence is where you claim it is.
+- Confirm the package/dependency layout around the code under review.
+If the graph is empty or stale, fall back to read/glob/grep.
 
 **Criteria document (read, do not inline):**
 [path, e.g. "plans/cartographer/SPEC.md"]
