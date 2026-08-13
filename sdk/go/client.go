@@ -47,7 +47,6 @@ type clientConfig struct {
 	eventBusAddr string
 	workitemID   string
 	timeout      time.Duration
-	maxRetries   int
 }
 
 // WithSidecarAddress overrides the default Sidecar gRPC address.
@@ -79,14 +78,6 @@ func WithWorkitemID(id string) ClientOption {
 func WithRequestTimeout(d time.Duration) ClientOption {
 	return func(c *clientConfig) {
 		c.timeout = d
-	}
-}
-
-// WithRetry sets the maximum number of retry attempts for transient gRPC
-// errors. If not set, no retries are performed.
-func WithRetry(maxAttempts int) ClientOption {
-	return func(c *clientConfig) {
-		c.maxRetries = maxAttempts
 	}
 }
 
