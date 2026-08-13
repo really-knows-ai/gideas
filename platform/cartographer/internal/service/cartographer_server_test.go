@@ -914,6 +914,46 @@ func TestCapability_ValidSignature(t *testing.T) {
 	}
 }
 
+// TestCapability_ValidOperatorSignature is the positive pin for the
+// operator-signer branch of the capability chain: verify() selects
+// v.operatorKey when signedBy == "operator" (capability.go:135-137). Every
+// other service-layer capability test signs with the sidecar private key
+// (TestCapability_ValidSignature, testCtx, narrowCtx), and the only
+// operator-signed test (TestCapability_InvalidSignature) deliberately uses a
+// wrong key to pin denial — so a regression that broke operator-key selection
+// would fail no test. This test signs a capability payload with the OPERATOR
+// private key, routes it through the Cartographer's verifier, and asserts it
+// is ACCEPTED and stored: if the operator branch stopped selecting
+// v.operatorKey (or selected nothing), the Ed25519 verify would fail and this
+// test would fail.
+func TestCapability_ValidOperatorSignature(t *testing.T) {
+	opPub, opPriv := generateTestKey()
+	scPub, _ := generateTestKey()
+	st, _ := ladybug.OpenInMemory()
+	t.Cleanup(func() { _ = st.Close() })
+	gs, _ := gitstore.New(t.TempDir())
+	srv := NewCartographerServer(st, gs, opPub, scPub, nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000)
+
+	ctx := capabilityContext("READ:graph/entity/Component", opPriv, "operator")
+	ctx, err := srv.verifier.verify(ctx)
+	if err != nil {
+		t.Fatalf("verify failed for operator-signed capabilities: %v", err)
+	}
+	caps, err := ExtractCapabilities(ctx)
+	if err != nil {
+		t.Fatalf("ExtractCapabilities failed: %v", err)
+	}
+	if caps == nil {
+		t.Fatal("expected non-nil capabilities")
+	}
+	if caps.SignedBy != "operator" {
+		t.Fatalf("expected SignedBy operator, got %q", caps.SignedBy)
+	}
+	if err := srv.verifier.CheckSpecificType(caps, "READ", "Component"); err != nil {
+		t.Fatalf("CheckSpecificType failed: %v", err)
+	}
+}
+
 func TestCapability_InvalidSignature(t *testing.T) {
 	opPub, _ := generateTestKey()
 	scPub, _ := generateTestKey()
@@ -4531,6 +4571,51 @@ func TestTransaction_InvalidTxID(t *testing.T) {
 	if status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("expected InvalidArgument, got %v", status.Code(err))
 	}
+}
+
+// TestTransaction_NonCanonicalTxIDRejected pins the non-canonical-but-parseable
+// branch of the SPEC error-table row "Invalid transaction ID format"
+// (SPEC:990): spellings that google/uuid parses but that are not the canonical
+// RFC4122 §3 lowercase dashed form — uppercase hex, 32-char no-hyphen, braced
+// {...}, and urn:uuid: — must be rejected with INVALID_ARGUMENT because IDs are
+// persisted verbatim (SPEC:162; uuidutil.Validate's canonical check). The
+// existing tests (TestTransaction_InvalidTxID, TestReadPathTransactionID_Rejected,
+// TestMutationTransactionID_Rejected) all send "not-a-uuid" and pin only the
+// unparseable branch; this test exercises the shared canonical-check branch
+// (validateTxID / LockActive → isValidUUID → uuidutil.Validate) from both the
+// read path (GetTransactionDiff) and the mutation path (CreateEntity →
+// lockTransactionMutation → LockActive).
+func TestTransaction_NonCanonicalTxIDRejected(t *testing.T) {
+	nonCanonical := []string{
+		"550E8400-E29B-41D4-A716-446655440000",          // uppercase hex
+		"550e8400e29b41d4a716446655440000",              // no-hyphen 32-char
+		"{550e8400-e29b-41d4-a716-446655440000}",        // braced
+		"urn:uuid:550e8400-e29b-41d4-a716-446655440000", // urn prefix
+	}
+
+	t.Run("read path GetTransactionDiff", func(t *testing.T) {
+		srv, _ := newTestServer(t)
+		ctx := testCtx()
+		for _, txID := range nonCanonical {
+			_, err := srv.GetTransactionDiff(ctx, &flowv1.GetTransactionDiffRequest{TransactionId: txID})
+			if status.Code(err) != codes.InvalidArgument {
+				t.Fatalf("expected InvalidArgument for %q, got %v", txID, status.Code(err))
+			}
+		}
+	})
+
+	t.Run("mutation path CreateEntity", func(t *testing.T) {
+		srv, _ := newTestServer(t)
+		ctx := testCtx()
+		for _, txID := range nonCanonical {
+			_, err := srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
+				EntityType: "Component", Properties: map[string]string{"name": "x"}, TransactionId: txID,
+			})
+			if status.Code(err) != codes.InvalidArgument {
+				t.Fatalf("expected InvalidArgument for %q, got %v", txID, status.Code(err))
+			}
+		}
+	})
 }
 
 func TestTransaction_NotFound(t *testing.T) {
