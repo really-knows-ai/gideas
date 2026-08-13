@@ -275,7 +275,7 @@ func (r *FoundryGraphReconciler) deploymentEnvVars(fg *flowv1.FoundryGraph) []co
 		},
 		{
 			Name: "TRANSACTION_TIMEOUT",
-			// ponytail: the "30m" fallback here is one of four copies of the
+			// ponytail: the "30m" fallback here is one of five copies of the
 			// transaction-timeout default that must stay in sync: (1) this
 			// Operator-rendered Deployment env fallback, (2) the cartographer
 			// main.go getEnv("TRANSACTION_TIMEOUT", "30m") fallback
@@ -344,7 +344,7 @@ func (r *FoundryGraphReconciler) deploymentEnvVars(fg *flowv1.FoundryGraph) []co
 		env = append(env, corev1.EnvVar{Name: "EVENT_BUS_ADDRESS", Value: addr})
 	}
 	// CAPABILITY_STALENESS_WINDOW
-	// ponytail: the "30s" fallback here is one of four copies of the capability
+	// ponytail: the "30s" fallback here is one of five copies of the capability
 	// staleness-window default that must stay in sync: (1) this Operator-rendered
 	// Deployment env fallback, (2) the Operator binary's own default in cmd/main.go
 	// (`capabilityStalenessWindow = "30s"`), (3) the cartographer main.go
