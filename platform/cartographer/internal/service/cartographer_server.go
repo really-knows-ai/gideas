@@ -192,9 +192,17 @@ func (s *CartographerServer) lockTransactionMutation(txID string) (func(), error
 	if err != nil {
 		return nil, err
 	}
+	// A transaction whose commit has started is closed for mutations (its
+	// branch files are being serialised onto the working tree): from the write
+	// surface the handle no longer references a usable active transaction,
+	// matching the SPEC error-table row "Transaction not found" ("was already
+	// committed/rolled back" → NOT_FOUND). FAILED_PRECONDITION is not used
+	// here — no SPEC error-table row justifies it for a mutation against a
+	// mid-commit transaction, so returning it would be a reverse-map
+	// divergence.
 	if state.CommitStarted {
 		unlock()
-		return nil, status.Error(codes.FailedPrecondition, "transaction commit is already in progress")
+		return nil, errTransactionNotFound(txID)
 	}
 	return unlock, nil
 }
@@ -298,9 +306,8 @@ func (s *CartographerServer) cleanupTransactionGitLocked(ctx context.Context, st
 				"cannot restore main store after partial commit without LADYBUG_DB_PATH")
 		}
 		s.lockMainStore()
-		err := s.store.RehydrateMainFromFiles(ctx,
-			filepath.Join(s.ladybugPath, "graph-repo/entities"),
-			filepath.Join(s.ladybugPath, "graph-repo/edges"))
+		entitiesDir, edgesDir := s.gitstore.HydrationDirs()
+		err := s.store.RehydrateMainFromFiles(ctx, entitiesDir, edgesDir)
 		s.writeLock.Unlock()
 		if err != nil {
 			return fmt.Errorf("restore main store: %w", err)
@@ -1557,6 +1564,7 @@ func (s *CartographerServer) BeginTransaction(
 	}
 	var mainHead string
 	var branchStoreErr error
+	var schemaHash string
 	if err := s.withGitLock(func() error {
 		var err error
 		mainHead, err = s.gitstore.BranchHEAD(ctx, "main")
@@ -1574,9 +1582,8 @@ func (s *CartographerServer) BeginTransaction(
 		} else if err := s.store.ReplicateSchemaToBranch(ctx, txID); err != nil {
 			branchStoreErr = fmt.Errorf("replicate branch schema: %w", err)
 		} else if s.ladybugPath != "" {
-			branchStoreErr = s.store.HydrateBranchFromFiles(ctx, txID,
-				filepath.Join(s.ladybugPath, "graph-repo/entities"),
-				filepath.Join(s.ladybugPath, "graph-repo/edges"))
+			entitiesDir, edgesDir := s.gitstore.HydrationDirs()
+			branchStoreErr = s.store.HydrateBranchFromFiles(ctx, txID, entitiesDir, edgesDir)
 		}
 		if branchStoreErr != nil {
 			var cleanups []string
@@ -1597,6 +1604,15 @@ func (s *CartographerServer) BeginTransaction(
 					branchStoreErr, strings.Join(cleanups, "; "))
 			}
 		}
+		// Snapshot the schema hash while holding the git lock: the store's
+		// re-hydration (RehydrateMainFromFiles) promotes vector-enabled flags
+		// on the shared defs in place (ensureEmbeddingLoadSchema) under the
+		// same git lock, so reading them outside the lock would race a
+		// concurrent re-hydration and persist a nondeterministic SchemaHash
+		// into branch state. The git lock is the mutual-exclusion seam for
+		// every re-hydration call site (mirrors RefreshTransaction's hash
+		// computation, which runs inside the git lock).
+		schemaHash = computeSchemaHash(s.store)
 		return nil
 	}); err != nil {
 		// Git branch-creation failures (CreateBranch/HardResetToBranch) map to
@@ -1644,7 +1660,7 @@ func (s *CartographerServer) BeginTransaction(
 		}
 		return nil, errBeginTransactionResourceExhausted(msg)
 	}
-	state.SchemaHash = computeSchemaHash(s.store)
+	state.SchemaHash = schemaHash
 	if err := s.persistTransactionState(ctx, state); err != nil {
 		cleanupErr := s.cleanupTransaction(ctx, state)
 		if cleanupErr != nil {
@@ -1875,9 +1891,8 @@ func (s *CartographerServer) CommitTransaction(
 				return nil
 			}
 			if s.ladybugPath != "" {
-				err = s.store.RehydrateMainFromFiles(ctx,
-					filepath.Join(s.ladybugPath, "graph-repo/entities"),
-					filepath.Join(s.ladybugPath, "graph-repo/edges"))
+				entitiesDir, edgesDir := s.gitstore.HydrationDirs()
+				err = s.store.RehydrateMainFromFiles(ctx, entitiesDir, edgesDir)
 			} else {
 				err = s.store.RehydrateFromBranch(ctx, req.TransactionId)
 			}
@@ -2003,9 +2018,14 @@ func (s *CartographerServer) RollbackTransaction(
 		return nil, err
 	}
 	defer unlockTx()
+	// The merge has already landed on main, so the transaction is effectively
+	// committed — the SPEC error-table row "Transaction not found" defines the
+	// contract for operations on an already-committed transaction ("was already
+	// committed/rolled back" → NOT_FOUND). FAILED_PRECONDITION would
+	// contradict that mapping. The caller finishes the remaining cleanup by
+	// retrying CommitTransaction (MergeCompleted path).
 	if state.MergeCompleted {
-		return nil, status.Error(codes.FailedPrecondition,
-			"transaction is already committed; retry CommitTransaction to finish cleanup")
+		return nil, errTransactionNotFound(req.TransactionId)
 	}
 	if err := s.cleanupTransaction(ctx, state); err != nil {
 		return nil, mapGitError(err)
@@ -2211,25 +2231,28 @@ func (s *CartographerServer) resetBranchStoreFromWorkingTree(ctx context.Context
 	}
 	// Drop the old branch DB (the store's in-memory handle must be released so
 	// the next operation reopens the replacement from the swapped-in files),
-	// then move the replacement files onto the transaction's canonical names.
+	// then close the replacement and move its files onto the transaction's
+	// canonical names.
 	if err := s.store.DropBranchDB(ctx, txID); err != nil {
+		_ = s.store.DropBranchDB(ctx, tempID)
+		return mapStoreError(err)
+	}
+	// Close the replacement branch before renaming its files: the engine's
+	// write-ahead-log companion (`<temp>.lbug.wal`) is path-based, and the
+	// connection's close is what checkpoints the WAL into `<temp>.lbug`.
+	// Renaming an open database file first would leave a crash window in which
+	// the swapped-in `<txID>.lbug` is missing the un-checkpointed rows still
+	// held in the orphaned WAL; RecoverOpenTransactions would classify those
+	// absent entities as suspected deletions and the recovered commit would
+	// re-apply them as real deletions of main's committed data. Closing before
+	// the rename materialises the file completely, so a crash after the
+	// rename cannot lose data.
+	if err := s.store.CloseBranchDB(ctx, tempID); err != nil {
 		_ = s.store.DropBranchDB(ctx, tempID)
 		return mapStoreError(err)
 	}
 	branchesDir := filepath.Join(s.ladybugPath, "branches")
 	// Move the replacement files onto the transaction's canonical names.
-	// ponytail: the engine's write-ahead-log companion (`<temp>.lbug.wal`) is
-	// deliberately NOT renamed. Renaming it alongside the open database file
-	// makes the engine's re-open of the swapped-in DB crash (the engine does
-	// path-based WAL recovery); leaving it behind means the swapped-in `.lbug`
-	// holds the full data only after the temp connection's close (the
-	// DropBranchDB below) checkpoints the WAL into it. Residual window: a
-	// crash between the `.lbug` rename and that close can lose the few
-	// un-checkpointed rows still in the orphaned WAL — a narrower version of
-	// the pre-existing refresh crash-window data loss, and the branch DB file
-	// itself is never absent (SPEC R9 change-log recovery). Upgrade path: a
-	// store primitive that atomically replaces a branch DB (close-and-rename
-	// in one step) would close even this window.
 	for _, pair := range [][2]string{
 		{tempID + ".lbug", txID + ".lbug"},
 		{tempID + ".schema.json", txID + ".schema.json"},
@@ -2258,9 +2281,8 @@ func (s *CartographerServer) buildBranchStoreFromWorkingTree(ctx context.Context
 	if err := s.store.ReplicateSchemaToBranch(ctx, key); err != nil {
 		return mapStoreError(err)
 	}
-	if err := s.store.HydrateBranchFromFiles(ctx, key,
-		filepath.Join(s.ladybugPath, "graph-repo/entities"),
-		filepath.Join(s.ladybugPath, "graph-repo/edges")); err != nil {
+	entitiesDir, edgesDir := s.gitstore.HydrationDirs()
+	if err := s.store.HydrateBranchFromFiles(ctx, key, entitiesDir, edgesDir); err != nil {
 		return mapStoreError(err)
 	}
 	return nil
@@ -2281,8 +2303,15 @@ func (s *CartographerServer) RefreshTransaction(
 		return nil, err
 	}
 	defer unlockTx()
+	// A transaction whose commit has started is closed for refresh (its branch
+	// files are being serialised): from the refresh surface the handle no
+	// longer references a usable active transaction, matching the SPEC
+	// error-table row "Transaction not found" ("was already committed/rolled
+	// back" → NOT_FOUND). FAILED_PRECONDITION is not used here — no SPEC
+	// error-table row justifies it for a refresh against a mid-commit
+	// transaction.
 	if state.CommitStarted {
-		return nil, status.Error(codes.FailedPrecondition, "transaction commit is already in progress")
+		return nil, errTransactionNotFound(req.TransactionId)
 	}
 
 	// SPEC R9 Refresh flow applies to every refresh, empty or not: the branch is
@@ -2492,6 +2521,17 @@ func (s *CartographerServer) WipeGraph(
 		if err := s.gitstore.Commit(ctx, "wipe"); err != nil {
 			wipeErr = err
 			return nil
+		}
+		// The wipe commit is a mutation-making commit on main, so it must be
+		// flagged for remote push (SPEC R10: "backing up every committed
+		// change"). Without the flag the remote backup retains the pre-wipe
+		// graph indefinitely, and a manual reprovision from the remote (R10
+		// Init clone) would resurrect exactly the data the destructive change
+		// deleted. The flag is set while holding the git lock (SetPushNeeded
+		// is a non-blocking atomic store), so it covers the git-side success
+		// path even when the store-side wipe subsequently fails mid-way.
+		if s.syncWorker != nil {
+			s.syncWorker.SetPushNeeded()
 		}
 		if err := s.gitstore.CleanUntracked(ctx); err != nil {
 			wipeErr = fmt.Errorf("clean untracked: %w", err)

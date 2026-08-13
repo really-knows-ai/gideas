@@ -15,6 +15,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -4750,13 +4751,18 @@ func TestCommitTransaction_RetryAfterCommitCreatedDoesNotDuplicateCommit(t *test
 	if lookupErr != nil || !state.CommitCreated || state.MergeCompleted {
 		t.Fatalf("unexpected retry state: state=%+v error=%v", state, lookupErr)
 	}
+	// A mutation and a refresh against a transaction whose commit has started
+	// are rejected with NOT_FOUND (SPEC error-table row "Transaction not
+	// found": "was already committed/rolled back" — the commit-in-progress
+	// handle no longer references a usable active transaction from the write
+	// surface). FAILED_PRECONDITION would be an un-justified code.
 	if _, err = srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
 		EntityType: "Component", Properties: map[string]string{"name": "late"}, TransactionId: begin.TransactionId,
-	}); status.Code(err) != codes.FailedPrecondition {
+	}); status.Code(err) != codes.NotFound {
 		t.Fatalf("expected mutation rejection after commit creation, got %v", err)
 	}
 	_, err = srv.RefreshTransaction(ctx, &flowv1.RefreshTransactionRequest{TransactionId: begin.TransactionId})
-	if status.Code(err) != codes.FailedPrecondition {
+	if status.Code(err) != codes.NotFound {
 		t.Fatalf("expected refresh rejection after commit creation, got %v", err)
 	}
 	_, err = srv.CommitTransaction(ctx, &flowv1.CommitTransactionRequest{TransactionId: begin.TransactionId})
@@ -4883,15 +4889,19 @@ func TestCommitTransaction_ErrorAfterCommitRetainsResumableState(t *testing.T) {
 	if lookupErr != nil || !state.CommitStarted || !state.CommitCreated {
 		t.Fatalf("created commit was not retained: state=%+v error=%v", state, lookupErr)
 	}
+	// A mutation and a refresh against the recovered mid-commit transaction are
+	// rejected with NOT_FOUND (SPEC error-table row "Transaction not found":
+	// the commit-in-progress handle no longer references a usable active
+	// transaction from the write surface).
 	if _, err = restarted.CreateEntity(ctx, &flowv1.CreateEntityRequest{
 		EntityType: "Component", Properties: map[string]string{"name": "late"},
 		TransactionId: begin.TransactionId,
-	}); status.Code(err) != codes.FailedPrecondition {
+	}); status.Code(err) != codes.NotFound {
 		t.Fatalf("expected mutation rejection after commit creation, got %v", err)
 	}
 	if _, err = restarted.RefreshTransaction(ctx, &flowv1.RefreshTransactionRequest{
 		TransactionId: begin.TransactionId,
-	}); status.Code(err) != codes.FailedPrecondition {
+	}); status.Code(err) != codes.NotFound {
 		t.Fatalf("expected refresh rejection after commit creation, got %v", err)
 	}
 	if _, err = restarted.CommitTransaction(ctx, &flowv1.CommitTransactionRequest{
@@ -5040,7 +5050,10 @@ func TestCommitTransaction_StateWriteFailureRemainsDiscoverableAndRetryable(t *t
 			_, refreshErr := srv.RefreshTransaction(ctx, &flowv1.RefreshTransactionRequest{
 				TransactionId: begin.TransactionId,
 			})
-			if tc.commitCreated && status.Code(refreshErr) != codes.FailedPrecondition {
+			// A refresh against a transaction whose commit has started is
+			// rejected with NOT_FOUND (SPEC error-table row "Transaction not
+			// found"), matching the other commit-in-progress refresh guards.
+			if tc.commitCreated && status.Code(refreshErr) != codes.NotFound {
 				t.Fatalf("refresh after created commit error=%v", refreshErr)
 			}
 			if !tc.commitCreated && refreshErr != nil {
@@ -5298,8 +5311,11 @@ func TestCommitTransaction_RetryAfterMergeCompletedOnlyCleansUp(t *testing.T) {
 	if lookupErr != nil || !state.MergeCompleted {
 		t.Fatalf("merge completion was not retained: state=%+v error=%v", state, lookupErr)
 	}
+	// A rollback against an already-committed transaction (the merge landed on
+	// main) is rejected with NOT_FOUND (SPEC error-table row "Transaction not
+	// found": "was already committed/rolled back"), not FAILED_PRECONDITION.
 	_, err = srv.RollbackTransaction(ctx, &flowv1.RollbackTransactionRequest{TransactionId: begin.TransactionId})
-	if status.Code(err) != codes.FailedPrecondition {
+	if status.Code(err) != codes.NotFound {
 		t.Fatalf("expected rollback rejection after merge, got %v", err)
 	}
 	if _, err = base.GetEntity(ctx, created.EntityId, "main"); err != nil {
@@ -7478,6 +7494,80 @@ func TestWipeGraph_Clean(t *testing.T) {
 	}
 }
 
+// TestWipeGraph_CommitsDeletionWithMessageWipe pins the SPEC R2 WipeGraph
+// contract "commits the deletion with message \"wipe\"" (SPEC:207): the git
+// wipe commit must carry the exact "wipe" message. A regression that changed
+// or dropped the wipe commit message (or skipped the commit entirely) would
+// fail this test.
+func TestWipeGraph_CommitsDeletionWithMessageWipe(t *testing.T) {
+	opPub, _ := generateTestKey()
+	scPub, _ := generateTestKey()
+	st, err := ladybug.OpenInMemory()
+	if err != nil {
+		t.Fatalf("OpenInMemory: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	gs, err := gitstore.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("gitstore.New: %v", err)
+	}
+	srv := NewCartographerServer(st, gs, opPub, scPub, nil, "",
+		30*time.Second, "test-ns", 30*time.Minute, 100000)
+	srv.MarkDBReady()
+	ctx := context.Background()
+	applyTestSchema(ctx, t, st)
+	// Establish a non-empty git main so the wipe has content to delete.
+	commitGitEntity(ctx, t, gs, testMutationEntityID, "pre-wipe")
+
+	if _, err := srv.WipeGraph(ctx, &flowv1.WipeGraphRequest{}); err != nil {
+		t.Fatalf("WipeGraph: %v", err)
+	}
+	logs, err := gs.GitLogOneline(ctx, "wipe")
+	if err != nil {
+		t.Fatalf("GitLogOneline: %v", err)
+	}
+	if len(logs) != 1 {
+		t.Fatalf("expected exactly one wipe commit, got %d: %v", len(logs), logs)
+	}
+	if !strings.Contains(logs[0], "wipe") {
+		t.Fatalf("wipe commit does not carry the SPEC \"wipe\" message: %q", logs[0])
+	}
+}
+
+// TestWipeGraph_SetsPushNeeded pins the SPEC R10 push contract for WipeGraph's
+// wipe commit: the wipe is a mutation-making commit on main ("backing up every
+// committed change", SPEC R10), so it must set the sync worker's push-needed
+// flag. Without the flag the remote backup retains the pre-wipe graph
+// indefinitely, and a manual reprovision from the remote (R10 Init clone)
+// would resurrect exactly the data the destructive change deleted.
+func TestWipeGraph_SetsPushNeeded(t *testing.T) {
+	gs, err := gitstore.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("gitstore.New: %v", err)
+	}
+	syncGit := &syncMockGitStore{GitStore: gs}
+	srv, fc := newSyncServer(t, syncGit)
+	waitFor(t, func() bool { return fc.tickers() >= 1 }, "startup cycle")
+
+	ctx := context.Background()
+	applyTestSchema(ctx, t, srv.store)
+	if _, err := srv.WipeGraph(ctx, &flowv1.WipeGraphRequest{}); err != nil {
+		t.Fatalf("WipeGraph: %v", err)
+	}
+	if !srv.syncWorker.pushNeeded.Load() {
+		t.Fatal("push flag not set after WipeGraph's wipe commit")
+	}
+	// The next timer cycle must deliver the push and clear the flag.
+	fc.FireTicker()
+	waitFor(t, func() bool { return !srv.syncWorker.pushNeeded.Load() }, "push flag cleared after cycle")
+	syncGit.mu.Lock()
+	pushCalls := syncGit.pushCalls
+	syncGit.mu.Unlock()
+	if pushCalls != 1 {
+		t.Fatalf("expected exactly 1 push after the wipe, got %d", pushCalls)
+	}
+}
+
 func TestWipeGraph_WaitsForBeginSetupAndSeesRegisteredTransaction(t *testing.T) {
 	base, err := ladybug.OpenInMemory()
 	if err != nil {
@@ -8350,6 +8440,100 @@ func TestBeginTransaction_PersistStateFailure_CleanupFails(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "cleanup") {
 		t.Fatalf("error should contain cleanup failure when cleanup fails, got: %v", err)
+	}
+}
+
+// lockObservationGitStore tracks when WithGitLock's closure runs so a test can
+// assert the schema hash is computed while the git lock is held.
+type lockObservationGitStore struct {
+	gitstore.GitStore
+	lockHeld *atomic.Bool
+}
+
+func (g *lockObservationGitStore) WithGitLock(fn func() error) error {
+	g.lockHeld.Store(true)
+	defer g.lockHeld.Store(false)
+	return g.GitStore.WithGitLock(fn)
+}
+
+// lockObservationStore records whether the store's schema lookups (which
+// computeSchemaHash performs) happen while the git lock is held.
+type lockObservationStore struct {
+	store.Store
+	lockHeld *atomic.Bool
+	mu       sync.Mutex
+	locked   int
+	unlocked int
+}
+
+func (s *lockObservationStore) EntityType(name string) (*store.EntityTypeDef, bool) {
+	s.record()
+	return s.Store.EntityType(name)
+}
+
+func (s *lockObservationStore) EdgeType(name string) (*store.EdgeTypeDef, bool) {
+	s.record()
+	return s.Store.EdgeType(name)
+}
+
+func (s *lockObservationStore) record() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.lockHeld.Load() {
+		s.locked++
+	} else {
+		s.unlocked++
+	}
+}
+
+// TestBeginTransaction_SchemaHashCapturedUnderGitLock pins the fix for the
+// BeginTransaction schema-hash data race: the persisted SchemaHash must be
+// computed while holding the git lock, because re-hydration
+// (RehydrateMainFromFiles) promotes vector-enabled flags on the store's shared
+// schema defs in place (ensureEmbeddingLoadSchema) under the same git lock.
+// Computing the hash outside the lock races that in-place mutation and
+// persists a nondeterministic SchemaHash into branch state. The BeginTransaction
+// flow's only schema-def reads come from computeSchemaHash, so the observation
+// wrapper can assert they all happen under the git lock.
+func TestBeginTransaction_SchemaHashCapturedUnderGitLock(t *testing.T) {
+	st, err := ladybug.OpenInMemory()
+	if err != nil {
+		t.Fatalf("OpenInMemory: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	gs, err := gitstore.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("gitstore.New: %v", err)
+	}
+	lockHeld := &atomic.Bool{}
+	observedStore := &lockObservationStore{Store: st, lockHeld: lockHeld}
+	observedGit := &lockObservationGitStore{GitStore: gs, lockHeld: lockHeld}
+	opPub, _ := generateTestKey()
+	srv := NewCartographerServer(observedStore, observedGit, opPub, initTestKey(), nil, "",
+		30*time.Second, "test-ns", 30*time.Minute, 100000)
+	srv.MarkDBReady()
+	ctx := testCtx()
+	applyTestSchema(ctx, t, st)
+	begin, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
+	if err != nil {
+		t.Fatalf("BeginTransaction: %v", err)
+	}
+	observedStore.mu.Lock()
+	locked, unlocked := observedStore.locked, observedStore.unlocked
+	observedStore.mu.Unlock()
+	if unlocked != 0 {
+		t.Fatalf("schema defs read outside the git lock: locked=%d unlocked=%d", locked, unlocked)
+	}
+	if locked == 0 {
+		t.Fatal("schema defs never read under the git lock")
+	}
+	// The persisted SchemaHash must equal the hash of the current schema.
+	state, lookupErr := srv.txManager.Lookup(begin.TransactionId)
+	if lookupErr != nil {
+		t.Fatalf("lookup transaction: %v", lookupErr)
+	}
+	if want := computeSchemaHash(st); state.SchemaHash != want {
+		t.Fatalf("persisted SchemaHash %q does not match the current schema hash %q", state.SchemaHash, want)
 	}
 }
 
@@ -11168,6 +11352,163 @@ func TestRefreshTransaction_FileBackedCrashSafeSwap(t *testing.T) {
 		if ent.Properties["name"] != probe.want {
 			t.Fatalf("entity %s on main has name %q, want %q", probe.id, ent.Properties["name"], probe.want)
 		}
+	}
+}
+
+// swapRecordingStore records the branch-lifecycle store calls the refresh
+// branch-DB swap makes so a test can assert their order.
+type swapRecordingStore struct {
+	store.Store
+	mu  sync.Mutex
+	ops []string
+}
+
+func (s *swapRecordingStore) record(op string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ops = append(s.ops, op)
+}
+
+func (s *swapRecordingStore) DropBranchDB(ctx context.Context, txID string) error {
+	s.record("drop:" + txID)
+	return s.Store.DropBranchDB(ctx, txID)
+}
+
+func (s *swapRecordingStore) CloseBranchDB(ctx context.Context, txID string) error {
+	s.record("close:" + txID)
+	return s.Store.CloseBranchDB(ctx, txID)
+}
+
+// TestRefreshTransaction_SwapClosesTempBranchBeforeRename pins the
+// RefreshTransaction branch-DB swap's crash-window fix (SPEC R9 refresh): the
+// replacement branch must be closed — its write-ahead log checkpointed into
+// its .lbug file — before its files are renamed onto the transaction's
+// canonical names. The old swap renamed <temp>.lbug → <txID>.lbug while the
+// temp connection was still open; a crash in that window left the swapped-in
+// branch DB missing rows still held in the orphaned <temp>.lbug.wal, and
+// RecoverOpenTransactions classified the absent entities as suspected
+// deletions that the recovered commit re-applied to main's committed data. The
+// swap must therefore call CloseBranchDB(temp) between dropping the old branch
+// and releasing the temp key after the rename.
+func TestRefreshTransaction_SwapClosesTempBranchBeforeRename(t *testing.T) {
+	ctx := testCtx()
+	dataPath := t.TempDir()
+	st, err := ladybug.Open(dataPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	recording := &swapRecordingStore{Store: st}
+	gs, err := gitstore.New(dataPath)
+	if err != nil {
+		t.Fatalf("open git store: %v", err)
+	}
+	opPub, _ := generateTestKey()
+	srv := NewCartographerServer(
+		recording, gs, opPub, initTestKey(), nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000,
+		WithLadybugPath(dataPath),
+	)
+	srv.MarkDBReady()
+	applyTestSchema(ctx, t, st)
+	begin, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
+	if err != nil {
+		t.Fatalf("BeginTransaction: %v", err)
+	}
+	if _, err := srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
+		EntityType: "Component", Properties: map[string]string{"name": "tx"}, TransactionId: begin.TransactionId,
+	}); err != nil {
+		t.Fatalf("CreateEntity: %v", err)
+	}
+	// Main advances while the transaction is open so the refresh re-hydrates.
+	interim, err := st.CreateEntity(ctx, "Component", "", map[string]string{"name": "interim"}, nil, "main")
+	if err != nil {
+		t.Fatalf("create interim entity: %v", err)
+	}
+	commitGitEntity(ctx, t, gs, interim.Id, "interim")
+
+	if _, err := srv.RefreshTransaction(ctx, &flowv1.RefreshTransactionRequest{
+		TransactionId: begin.TransactionId,
+	}); err != nil {
+		t.Fatalf("RefreshTransaction: %v", err)
+	}
+
+	recording.mu.Lock()
+	ops := append([]string(nil), recording.ops...)
+	recording.mu.Unlock()
+	// The swap must be: drop the old tx branch, close the temp replacement
+	// (checkpointing its WAL), then release the temp key after the rename. A
+	// swap that dropped the old branch and released the temp key without a
+	// close would leave the renamed file at risk in the rename-to-close crash
+	// window.
+	if len(ops) != 3 {
+		t.Fatalf("expected swap ops [drop:%s close:<temp> drop:<temp>], got %v", begin.TransactionId, ops)
+	}
+	if ops[0] != "drop:"+begin.TransactionId {
+		t.Fatalf("swap must drop the old branch first, got %q", ops[0])
+	}
+	if !strings.HasPrefix(ops[1], "close:") {
+		t.Fatalf("swap must close the temp branch before the rename, got %q", ops[1])
+	}
+	if ops[2] != "drop:"+strings.TrimPrefix(ops[1], "close:") {
+		t.Fatalf("swap must release the temp key after the close, got %q (close %q)", ops[2], ops[1])
+	}
+}
+
+// TestStoreCloseBranchDB_CheckpointsDataBeforeFileRename pins the store
+// primitive RefreshTransaction's swap relies on: closing a file-backed branch
+// must checkpoint its write-ahead log into the .lbug file (so a renamed .lbug
+// is complete) and must not delete the persisted branch files. After the
+// close, moving the .lbug to a new name without its WAL companion — exactly
+// what a crash between the refresh swap's rename and the (old) close did —
+// must still yield every row from the file alone.
+func TestStoreCloseBranchDB_CheckpointsDataBeforeFileRename(t *testing.T) {
+	dataPath := t.TempDir()
+	st, err := ladybug.Open(dataPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	ctx := context.Background()
+	applyTestSchema(ctx, t, st)
+	const txID = "11111111-1111-4111-8111-111111111111"
+	if err := st.CreateBranchDB(ctx, txID); err != nil {
+		t.Fatalf("CreateBranchDB: %v", err)
+	}
+	if err := st.ReplicateSchemaToBranch(ctx, txID); err != nil {
+		t.Fatalf("ReplicateSchemaToBranch: %v", err)
+	}
+	ent, err := st.CreateEntity(ctx, "Component", "", map[string]string{"name": "kept"}, nil, txID)
+	if err != nil {
+		t.Fatalf("CreateEntity on branch: %v", err)
+	}
+	// Close the branch: this must checkpoint the WAL into the .lbug and must
+	// not remove the persisted files.
+	if err := st.CloseBranchDB(ctx, txID); err != nil {
+		t.Fatalf("CloseBranchDB: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dataPath, "branches", txID+".lbug")); err != nil {
+		t.Fatalf("CloseBranchDB deleted the branch file: %v", err)
+	}
+	// Simulate the refresh swap's crash: rename the branch's files onto a new
+	// name WITHOUT the .lbug.wal WAL companion — the engine's path-based WAL
+	// recovery cannot find the orphaned <old>.wal, so only data checkpointed
+	// into the .lbug before the rename survives.
+	const moved = "22222222-2222-4222-8222-222222222222"
+	for _, suffix := range []string{".lbug", ".schema.json", ".state.json"} {
+		src := filepath.Join(dataPath, "branches", txID+suffix)
+		if _, err := os.Stat(src); err != nil {
+			continue // no such file (e.g. no state record saved yet)
+		}
+		if err := os.Rename(src, filepath.Join(dataPath, "branches", moved+suffix)); err != nil {
+			t.Fatalf("rename branch file %s: %v", suffix, err)
+		}
+	}
+	got, err := st.GetEntity(ctx, ent.Id, moved)
+	if err != nil {
+		t.Fatalf("entity lost after close+rename (WAL not checkpointed): %v", err)
+	}
+	if got.Properties["name"] != "kept" {
+		t.Fatalf("entity content = %+v, want name=kept", got.Properties)
 	}
 }
 

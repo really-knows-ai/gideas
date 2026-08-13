@@ -124,6 +124,35 @@ func (db *ladybugDB) DropBranchDB(_ context.Context, txID string) error {
 	return nil
 }
 
+// CloseBranchDB closes and deregisters a branch database without removing its
+// persisted files. The connection close checkpoints the engine's write-ahead
+// log into the branch's `.lbug` file, so the file is fully materialised before
+// the service renames it onto a transaction's canonical name (the
+// RefreshTransaction branch-DB swap, SPEC R9) — closing the crash window in
+// which the swapped-in `.lbug` was missing un-checkpointed rows still held in
+// the orphaned WAL. Idempotent: closing an unregistered branch is a no-op.
+func (db *ladybugDB) CloseBranchDB(_ context.Context, txID string) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	if filepath.Base(txID) != txID || txID == "." || txID == ".." {
+		return fmt.Errorf("invalid branch ID %q", txID)
+	}
+	br, ok := db.branches[txID]
+	if !ok {
+		return nil
+	}
+	br.mu.Lock()
+	if br.conn != nil {
+		br.conn.Close()
+	}
+	if br.db != nil {
+		br.db.Close()
+	}
+	br.mu.Unlock()
+	delete(db.branches, txID)
+	return nil
+}
+
 func (db *ladybugDB) branchPath(txID string) string {
 	return filepath.Join(db.path, "branches", txID+".lbug")
 }

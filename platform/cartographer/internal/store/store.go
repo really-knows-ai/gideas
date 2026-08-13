@@ -104,6 +104,13 @@ type Store interface {
 	// Transaction (branch DB management)
 	CreateBranchDB(ctx context.Context, txID string) error
 	DropBranchDB(ctx context.Context, txID string) error
+	// CloseBranchDB closes a branch database (checkpointing its write-ahead
+	// log into the branch's .lbug file) without removing the persisted branch
+	// files. Used by the service's RefreshTransaction branch-DB swap to
+	// materialise the replacement before renaming it onto the transaction's
+	// canonical names, closing the crash window between the rename and the
+	// WAL checkpoint.
+	CloseBranchDB(ctx context.Context, txID string) error
 	SaveBranchTransactionState(ctx context.Context, txID string, state BranchTransactionState) error
 	LoadBranchTransactionState(ctx context.Context, txID string) (BranchTransactionState, error)
 	InvalidateBranchState(ctx context.Context, txID string) error
