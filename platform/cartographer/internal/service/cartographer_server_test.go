@@ -4202,6 +4202,52 @@ func TestCommitTransaction_WithSyncWorker_AckPushFailureSurfacesMappedError(t *t
 	}
 }
 
+// TestCommitTransaction_WithSyncWorker_AckPushRetriesExhaustedSurfacesUnavailable
+// pins the SPEC error-table row "Remote unreachable" (UNAVAILABLE) through the
+// ack-error mapping branch of the CommitTransaction sync-worker wiring (SPEC
+// R10, SPEC:620-621: "If the cycle ends with the flag still set (permanent
+// failure, or retries exhausted), the call returns an error with the worker's
+// last push error"): a push whose retries exhaust against an unreachable remote
+// (DNS failure, connection refused, or transport timeout — ErrRemoteUnreachable
+// is classified recoverable and retried within the cycle) surfaces through
+// mapGitError as UNAVAILABLE, not a raw INTERNAL error, and the push flag stays
+// set for the next cycle.
+func TestCommitTransaction_WithSyncWorker_AckPushRetriesExhaustedSurfacesUnavailable(t *testing.T) {
+	gs, err := gitstore.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("gitstore.New: %v", err)
+	}
+	syncGit := &syncMockGitStore{GitStore: gs, pushErr: gitstore.ErrRemoteUnreachable}
+	srv, fc := newSyncServer(t, syncGit)
+	srv.syncWorker.backoffFn = func(int) time.Duration { return 0 }
+	waitFor(t, func() bool { return fc.tickers() >= 1 }, "startup cycle")
+
+	ctx := testCtx()
+	applyTestSchema(ctx, t, srv.store)
+	begin, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
+	if err != nil {
+		t.Fatalf("BeginTransaction: %v", err)
+	}
+	if _, err := srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
+		EntityType: "Component", Properties: map[string]string{"name": "unreachable"}, TransactionId: begin.TransactionId,
+	}); err != nil {
+		t.Fatalf("CreateEntity: %v", err)
+	}
+
+	_, err = srv.CommitTransaction(ctx, &flowv1.CommitTransactionRequest{
+		TransactionId: begin.TransactionId, Ack: true,
+	})
+	if err == nil {
+		t.Fatal("expected the acked commit to surface the exhausted-push error")
+	}
+	if status.Code(err) != codes.Unavailable {
+		t.Fatalf("expected Unavailable for an unreachable remote, got %v (%v)", status.Code(err), err)
+	}
+	if !srv.syncWorker.pushNeeded.Load() {
+		t.Fatal("push flag cleared despite the unreachable remote")
+	}
+}
+
 // TestCommitTransaction_WithSyncWorker_AckCallerDeadlineSurfacesDeadlineExceeded
 // pins the caller-deadline branch of the CommitTransaction sync-worker wiring
 // (SPEC R10, SPEC:621-622: "A caller that hits the context deadline receives
