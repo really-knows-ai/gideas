@@ -397,6 +397,68 @@ func TestCartographerProxy_NodeCapabilities_NilPassThrough(t *testing.T) {
 	}
 }
 
+// TestCartographerProxy_CheckCapability_ExactOrLiteralWildcard pins the matching
+// semantics the Sidecar's mode-1/fixed gates share with the Cartographer's
+// authoritative CheckSpecificType/CheckWildcard exact-string gates (SPEC R3 /
+// Capability Authorisation Chain): a held grant satisfies the requirement only
+// when it is exactly equal, or is the literal full-segment
+// "<verb>:graph/entity/*" wildcard satisfying a type-specific requirement.
+// Filepath metacharacters — partial-segment "*" ("Comp*"), "?", or "[a-z]" —
+// are literal strings, never wildcards: a non-SPEC grant such as
+// "WRITE:graph/entity/Comp*" must NOT pass a mode-1 check for Component, so it
+// is blocked at the Sidecar exactly as the Cartographer would deny it, instead
+// of being forwarded only to be denied with PERMISSION_DENIED at ingress.
+func TestCartographerProxy_CheckCapability_ExactOrLiteralWildcard(t *testing.T) {
+	nodeCtx := func(caps string) context.Context {
+		return metadata.NewIncomingContext(context.Background(),
+			metadata.Pairs(
+				service.MetadataKeyNodeID, "wire-node",
+				service.MetadataKeyCapabilities, caps,
+			))
+	}
+	p := &CartographerProxy{}
+
+	tests := []struct {
+		name     string
+		caps     string
+		verb     string
+		resource string
+		wantDeny bool
+	}{
+		// Exact grant satisfies the same specific-type requirement.
+		{"exact specific type", "WRITE:graph/entity/Component", "WRITE", "graph/entity/Component", false},
+		// Literal full-segment wildcard satisfies a type-specific requirement
+		// (SPEC R3:241-242: WRITE:graph/entity/* authorises all types).
+		{"literal wildcard satisfies specific type", "WRITE:graph/entity/*", "WRITE", "graph/entity/Component", false},
+		// Partial-segment / character-class wildcards are literal strings,
+		// never wildcards — the Cartographer's exact-string gate denies them.
+		{"partial wildcard does not match", "WRITE:graph/entity/Comp*", "WRITE", "graph/entity/Component", true},
+		{"question mark does not match", "WRITE:graph/entity/Compon?nt", "WRITE", "graph/entity/Component", true},
+		{"char class does not match", "WRITE:graph/entity/Compon[a-z]t", "WRITE", "graph/entity/Component", true},
+		// A per-type grant cannot authorise an all-types requirement
+		// (SPEC R3:262).
+		{"specific type does not satisfy wildcard", "WRITE:graph/entity/Component", "WRITE", "graph/entity/*", true},
+		{"literal wildcard satisfies wildcard", "WRITE:graph/entity/*", "WRITE", "graph/entity/*", false},
+		// Verb mismatch denies.
+		{"wrong verb", "READ:graph/entity/*", "WRITE", "graph/entity/Component", true},
+		// Fixed tx gates remain exact.
+		{"exact tx grant", "WRITE:graph/tx", "WRITE", "graph/tx", false},
+		{"missing tx grant", "READ:graph/tx", "WRITE", "graph/tx", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := p.checkCapability(nodeCtx(tt.caps), tt.verb, tt.resource, true)
+			if tt.wantDeny {
+				if st := status.Code(err); st != codes.PermissionDenied {
+					t.Fatalf("expected PermissionDenied, got %v", err)
+				}
+			} else if err != nil {
+				t.Fatalf("expected the grant to pass, got %v", err)
+			}
+		})
+	}
+}
+
 // TestCartographerProxy_E2E_ExecuteCypher exercises the full read-path wire
 // chain: the SDK's ExecuteCypher (no entity-type metadata — SPEC R3) reaches
 // the fake Cartographer through the Sidecar proxy carrying a capability
@@ -730,15 +792,18 @@ func (m *mockExportServerStream) RecvMsg(any) error { return nil }
 // error-table row "ExportGraph mid-stream failure → INTERNAL" (SPEC R11) at the
 // Sidecar relay, matching the operator proxy (foundrygraph_proxyserver.go) and
 // the Cartographer service handler (errExportGraphMidStream): an upstream Recv
-// break after the stream has started — a transport-level Unavailable or a raw
+// break AFTER the stream has started — a transport-level Unavailable or a raw
 // error — and a downstream Send failure must each surface as INTERNAL, never the
-// raw (non-INTERNAL) status.
+// raw (non-INTERNAL) status. A pre-chunk (stream-establishment) Unavailable is
+// the sibling UNAVAILABLE case, pinned separately by
+// TestCartographerProxy_ExportGraph_StreamEstablishmentUnavailable.
 func TestCartographerProxy_ExportGraph_MidStreamFailureIsInternal(t *testing.T) {
+	// A raw (non-status) Recv error — a non-conforming upstream — is a genuine
+	// mid-stream failure even at the first Recv: surface INTERNAL.
 	upstreamBreaks := []struct {
 		name string
 		err  error
 	}{
-		{"unavailable", status.Error(codes.Unavailable, "connection reset mid-stream")},
 		{"raw", errors.New("malformed stream chunk")},
 	}
 	for _, tc := range upstreamBreaks {
@@ -751,6 +816,20 @@ func TestCartographerProxy_ExportGraph_MidStreamFailureIsInternal(t *testing.T) 
 		})
 	}
 
+	t.Run("recv_midstream_unavailable", func(t *testing.T) {
+		// A transport-level break AFTER at least one chunk has been forwarded
+		// is a genuine mid-stream failure (partial data may already have been
+		// sent) → INTERNAL, distinct from the pre-chunk stream-establishment
+		// Unavailable.
+		p := &CartographerProxy{client: &mockCartographerClientExport{
+			chunkErr: status.Error(codes.Unavailable, "connection reset mid-stream"),
+		}}
+		err := p.ExportGraph(&flowv1.ExportGraphRequest{Format: "json"}, &mockExportServerStream{})
+		if st := status.Code(err); st != codes.Internal {
+			t.Fatalf("expected INTERNAL for a mid-stream Unavailable, got %v", err)
+		}
+	})
+
 	t.Run("send", func(t *testing.T) {
 		p := &CartographerProxy{client: &mockCartographerClientExport{}}
 		stream := &mockExportServerStream{err: errors.New("client stream write failed")}
@@ -762,6 +841,30 @@ func TestCartographerProxy_ExportGraph_MidStreamFailureIsInternal(t *testing.T) 
 			t.Fatal("expected Send to have been exercised before failing")
 		}
 	})
+}
+
+// TestCartographerProxy_ExportGraph_StreamEstablishmentUnavailable pins the
+// stream-establishment transport failure at the Sidecar relay, matching the
+// operator proxy's "cannot start export stream" → UNAVAILABLE mapping
+// (foundrygraph_proxyserver.go / TestExportGraphCannotStartStreamIsUnavailable):
+// an upstream Unavailable received at the first Recv with no chunk forwarded —
+// the Cartographer could not be reached — must surface as UNAVAILABLE, not
+// INTERNAL (which is reserved for a genuine mid-stream failure after data has
+// been sent). The Sidecar's lazy grpc.NewClient dial delivers connection
+// failures on the first Recv rather than on the stream call itself, so this is
+// the Sidecar's equivalent of the operator's client-call Unavailable.
+func TestCartographerProxy_ExportGraph_StreamEstablishmentUnavailable(t *testing.T) {
+	p := &CartographerProxy{client: &mockCartographerClientExport{
+		err: status.Error(codes.Unavailable, "connection refused"),
+	}}
+	stream := &mockExportServerStream{}
+	err := p.ExportGraph(&flowv1.ExportGraphRequest{Format: "json"}, stream)
+	if st := status.Code(err); st != codes.Unavailable {
+		t.Fatalf("expected UNAVAILABLE for a stream-establishment transport failure, got %v (%v)", st, err)
+	}
+	if stream.sent != 0 {
+		t.Error("expected no chunks forwarded for a stream-establishment failure")
+	}
 }
 
 // TestCartographerProxy_ExportGraph_PreStreamRejectionPassesThrough pins the

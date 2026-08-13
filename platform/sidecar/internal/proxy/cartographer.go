@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
-	flow "github.com/foundry/flow/sdk/go"
 	"github.com/foundry/flow/sidecar/internal/service"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -114,8 +113,12 @@ func entityTypeFromMetadata(ctx context.Context) string {
 // "graph/entity/*", or "graph/tx").
 //
 // block=true implements mode 1 or a fixed exact requirement: the caller must
-// hold <verb>:<resource> (a wildcard grant matches via flow.MatchCapability)
-// or the request is rejected with PERMISSION_DENIED.
+// hold <verb>:<resource> or the request is rejected with PERMISSION_DENIED.
+// Matching follows the Cartographer's authoritative exact-string semantics
+// (grantMatches): a grant equals the requirement exactly, or is the literal
+// "<verb>:graph/entity/*" wildcard satisfying a type-specific requirement —
+// filepath metacharacters such as "Comp*" or "Compon?nt" are literal, never
+// wildcards.
 // block=false implements mode 2: the wildcard grant is matched best-effort
 // and the outcome logged, but the request always passes through — the
 // Cartographer is the authoritative per-type enforcer.
@@ -128,7 +131,7 @@ func (p *CartographerProxy) checkCapability(ctx context.Context, verb, resource 
 	}
 	required := verb + ":" + resource
 	for _, c := range caps {
-		if flow.MatchCapability(c, required) {
+		if grantMatches(c, required) {
 			slog.Debug("Sidecar: Cartographer capability granted",
 				"capability", c, "required", required)
 			return nil
@@ -146,11 +149,33 @@ func (p *CartographerProxy) checkCapability(ctx context.Context, verb, resource 
 		"CAPABILITY_DENIED: missing required capability %q", required)
 }
 
+// grantMatches reports whether the held capability grant satisfies the
+// required capability under the Cartographer's authoritative exact-string
+// semantics (SPEC R3 / Capability Authorisation Chain): a grant matches only
+// when it equals the requirement exactly, or is the literal wildcard
+// "<verb>:graph/entity/*" while the requirement is a type-specific
+// "<verb>:graph/entity/<type>" (SPEC R3:241-242 — the wildcard authorises all
+// types). Only a full-segment literal "*" is a wildcard: a grant such as
+// "WRITE:graph/entity/Comp*" or "WRITE:graph/entity/Compon?nt" is treated as
+// a literal string and never matches, mirroring the Cartographer's
+// CheckSpecificType/CheckWildcard slices.Contains gates so the two gates of
+// the chain can never silently disagree on the same grant.
+func grantMatches(held, required string) bool {
+	if held == required {
+		return true
+	}
+	prefix, entityType, ok := strings.Cut(required, ":graph/entity/")
+	if !ok || entityType == "*" {
+		return false
+	}
+	return held == prefix+":graph/entity/*"
+}
+
 // checkReadByType enforces the READ gate for read RPCs whose entity type is
 // known from the request body (SPEC R3:262): a specific type is a mode-1
 // check against <verb>:graph/entity/<type>; an omitted type is an all-types
 // search and is also a mode-1 check against <verb>:graph/entity/* — a per-type
-// grant cannot authorise it (a wildcard grant matches via flow.MatchCapability).
+// grant cannot authorise it (a wildcard grant matches via grantMatches).
 func (p *CartographerProxy) checkReadByType(ctx context.Context, entityType string) error {
 	if entityType != "" {
 		return p.checkCapability(ctx, "READ", "graph/entity/"+entityType, true)
@@ -415,17 +440,22 @@ func (p *CartographerProxy) ExportGraph(
 			// "ExportGraph buffer allocation failure" → RESOURCE_EXHAUSTED are
 			// pre-stream rejections ("no data sent"): the Cartographer returns them
 			// BEFORE any chunk, so they arrive at the relay's first Recv with no
-			// chunk forwarded. Pass them through verbatim — preserving the upstream
-			// status code and message — so an SDK caller (graph.ExportGraph("bogus"),
-			// which performs no local format validation) receives the documented
-			// error, matching the operator proxy. Once at least one chunk has been
+			// chunk forwarded. An upstream transport Unavailable with no chunk
+			// forwarded is the same no-data-sent, stream-establishment condition —
+			// the Cartographer could not be reached — which the operator proxy
+			// surfaces as UNAVAILABLE ("cannot start export stream"); the lazy
+			// grpc.NewClient dial delivers it on the first Recv instead. Pass all
+			// three through verbatim — preserving the upstream status code and
+			// message — so an SDK caller (graph.ExportGraph("bogus"), which
+			// performs no local format validation) receives the documented error,
+			// matching the operator proxy. Once at least one chunk has been
 			// forwarded, any failure — a transport-level break (Unavailable), a
 			// non-conforming upstream status, or a raw error — is a genuine
 			// mid-stream failure (partial data may already have been sent), so
 			// surface it as INTERNAL rather than the raw upstream status.
 			if !sentAny {
 				if st, ok := status.FromError(err); ok {
-					if c := st.Code(); c == codes.InvalidArgument || c == codes.ResourceExhausted {
+					if c := st.Code(); c == codes.InvalidArgument || c == codes.ResourceExhausted || c == codes.Unavailable {
 						return err
 					}
 				}
