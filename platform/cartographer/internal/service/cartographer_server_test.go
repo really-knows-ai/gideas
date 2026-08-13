@@ -916,6 +916,45 @@ func TestCapability_ValidSignature(t *testing.T) {
 	}
 }
 
+// TestCapability_WhitespaceEntriesTrimmed pins the capability-string
+// normalization that must match the sibling capability gates (SPEC R3 /
+// Capability Authorisation Chain): each comma-separated entry in
+// x-flow-capabilities is trimmed and empty entries dropped. The Sidecar proxy
+// (nodeCapabilities) and Operator (checkCapability) trim every entry before
+// matching, so the Cartographer's authoritative exact-match gates must do the
+// same — otherwise a capability entry with leading/trailing whitespace is
+// granted by the Sidecar and Operator gates but denied here, a divergent
+// authorization between sibling implementations of the same contract.
+func TestCapability_WhitespaceEntriesTrimmed(t *testing.T) {
+	opPub, _ := generateTestKey()
+	scPub, scPriv := generateTestKey()
+	st, _ := ladybug.OpenInMemory()
+	t.Cleanup(func() { _ = st.Close() })
+	gs, _ := gitstore.New(t.TempDir())
+	srv := NewCartographerServer(st, gs, opPub, scPub, nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000)
+
+	// Entries padded with whitespace and an all-whitespace trailing entry, as
+	// a node operator might write in FoundryNode.spec.capabilities.
+	ctx := capabilityContext(" READ:graph/entity/Component , WRITE:graph/entity/* , ", scPriv, "sidecar")
+	ctx, err := srv.verifier.verify(ctx)
+	if err != nil {
+		t.Fatalf("verify failed: %v", err)
+	}
+	caps, err := ExtractCapabilities(ctx)
+	if err != nil {
+		t.Fatalf("ExtractCapabilities failed: %v", err)
+	}
+	if caps == nil {
+		t.Fatal("expected non-nil capabilities")
+	}
+	if err := srv.verifier.CheckSpecificType(caps, "READ", "Component"); err != nil {
+		t.Fatalf("whitespace-padded capability must be trimmed before the authoritative exact match, got: %v", err)
+	}
+	if err := srv.verifier.CheckWildcard(caps, "WRITE"); err != nil {
+		t.Fatalf("whitespace-padded wildcard capability must be trimmed before the authoritative exact match, got: %v", err)
+	}
+}
+
 // TestCapability_ValidOperatorSignature is the positive pin for the
 // operator-signer branch of the capability chain: verify() selects
 // v.operatorKey when signedBy == "operator" (capability.go:135-137). Every

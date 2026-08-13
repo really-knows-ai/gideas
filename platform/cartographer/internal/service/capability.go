@@ -167,9 +167,19 @@ func (v *CapabilityVerifier) verify(ctx context.Context) (context.Context, error
 		}
 	}
 
-	// Store verified capabilities in context.
+	// Store verified capabilities in context. Each comma-separated entry is
+	// trimmed and empty entries dropped, matching the sibling capability gates
+	// (Sidecar nodeCapabilities and Operator checkCapability) so the
+	// authoritative exact-match checks here agree with those gates on the same
+	// capability string (SPEC R3 / Capability Authorisation Chain).
+	var capEntries []string
+	for cap := range strings.SplitSeq(capsStr, ",") {
+		if cap = strings.TrimSpace(cap); cap != "" {
+			capEntries = append(capEntries, cap)
+		}
+	}
 	caps := &Capabilities{
-		Caps:     strings.Split(capsStr, ","),
+		Caps:     capEntries,
 		SignedBy: signedBy,
 	}
 	ctx = StoreCapabilitiesInContext(ctx, caps)
