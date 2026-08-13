@@ -107,4 +107,12 @@ type BranchTransactionState struct {
 	MainRehydrated     bool          `json:"main_rehydrated"`
 	MergeCompleted     bool          `json:"merge_completed"`
 	RollbackOnly       bool          `json:"rollback_only"`
+	// BranchRefreshInProgress marks that a RefreshTransaction branch-DB swap is
+	// in flight: the durable record is written with the flag set before the
+	// swap and cleared only when the refresh's final state persist completes.
+	// Recovery consults it to distinguish a mid-refresh crash (empty diff on a
+	// branch whose changes were still being re-applied) from a genuine
+	// post-merge crash, so it never misclassifies the former as an
+	// already-committed transaction (SPEC R9 change-log recovery).
+	BranchRefreshInProgress bool `json:"branch_refresh_in_progress"`
 }

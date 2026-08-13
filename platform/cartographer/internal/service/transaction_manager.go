@@ -60,6 +60,11 @@ type TransactionState struct {
 	CommitHydrated     bool   // main rehydration completed successfully for this commit
 	MergeCompleted     bool   // transaction commit has reached main; only cleanup remains
 	RollbackOnly       bool   // admission failed; only rollback/GC cleanup may proceed
+	// BranchRefreshInProgress marks that a RefreshTransaction branch-DB swap is
+	// in flight (mirrors store.BranchTransactionState.BranchRefreshInProgress;
+	// see durableTransactionState). Set before the swap, cleared by the
+	// refresh's final state persist.
+	BranchRefreshInProgress bool
 }
 
 // LockActive admits an operation on txID and serialises it with lifecycle
