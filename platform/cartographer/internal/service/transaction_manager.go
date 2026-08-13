@@ -100,9 +100,16 @@ func (tm *TransactionManager) lock(txID string, cleanup bool) (*TransactionState
 		state.lifecycle.Unlock()
 		return nil, nil, errTransactionNotFound(txID)
 	}
+	// A rollback-only transaction has been rolled back by the change-log
+	// capacity rejection (SPEC error table row "Transaction change log exceeds
+	// capacity" — the transaction is "rolled back"), so subsequent operations
+	// surface NOT_FOUND ("Transaction not found": "was already committed/rolled
+	// back") rather than a FAILED_PRECONDITION rollback-only state the SPEC
+	// error table does not define. Only RollbackTransaction (LockCleanup) and
+	// the GC may still act on it.
 	if !cleanup && state.RollbackOnly {
 		state.lifecycle.Unlock()
-		return nil, nil, errTransactionRollbackOnly(txID)
+		return nil, nil, errTransactionNotFound(txID)
 	}
 	if !cleanup && tm.clock.Now().After(state.ExpiresAt) {
 		state.lifecycle.Unlock()
@@ -233,11 +240,14 @@ func (tm *TransactionManager) ValidateActive(txID string) error {
 // timer"), but the name "ExtendTimeout" is misleading. If max(oldExpiry,
 // now+duration) semantics are desired, change the assignment to
 // max(state.ExpiresAt, now.Add(duration)).
-// ponytail: acquires the write lock for the entire operation to prevent a TOCTOU
-// race between Lookup (RLock) and modification (Lock). The upgrade path is to
-// split into a RLock-protected read phase followed by a Lock-protected write
-// phase with re-verification, but the write-lock-held duration is negligible so
-// this simpler approach is preferred.
+//
+// The ExpiresAt/AppliedTimeout mutation and the persist callback run under the
+// transaction's lifecycle lock, because lock(), the GC re-check, and HasActive
+// read those fields under lifecycle; tm.mu guards only the lookup and the
+// re-verification that the registered state is unchanged, so no lock-order
+// inversion (holding tm.mu while acquiring lifecycle) can occur. The caller
+// must NOT already hold the lifecycle lock (the RPC handler uses LockActive as
+// an admission gate only and releases it before calling this method).
 func (tm *TransactionManager) ExtendTimeout(
 	txID string, duration time.Duration, persist func(*TransactionState) error,
 ) error {
@@ -245,15 +255,36 @@ func (tm *TransactionManager) ExtendTimeout(
 		return errInvalidExtendTimeoutDuration("duration must be positive")
 	}
 
-	tm.mu.Lock()
-	defer tm.mu.Unlock()
-
+	tm.mu.RLock()
 	state, ok := tm.active[txID]
+	tm.mu.RUnlock()
 	if !ok {
 		return errTransactionNotFound(txID)
 	}
 
+	if tm.beforeLifecycleLock != nil {
+		tm.beforeLifecycleLock(txID)
+	}
+	state.lifecycle.Lock()
+	defer state.lifecycle.Unlock()
+
+	// Re-verify under lifecycle, mirroring lock(): a concurrent rollback or GC
+	// cleanup may have deregistered (and replaced) the state between the
+	// initial lookup and the lifecycle acquisition.
+	tm.mu.RLock()
+	current, stillActive := tm.active[txID]
+	tm.mu.RUnlock()
+	if !stillActive || current != state {
+		return errTransactionNotFound(txID)
+	}
+	if state.RollbackOnly {
+		return errTransactionNotFound(txID)
+	}
+
 	now := tm.clock.Now()
+	if now.After(state.ExpiresAt) {
+		return errTransactionTimedOut(txID)
+	}
 	totalLifetime := now.Sub(state.CreatedAt) + duration
 	if totalLifetime > tm.hardMaxTimeout {
 		return errInvalidExtendTimeoutDuration("total lifetime would exceed 7-day maximum")
