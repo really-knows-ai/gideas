@@ -106,32 +106,11 @@ func Open(path string) (store.Store, error) {
 		return nil, fmt.Errorf("open connection: %w", err)
 	}
 
-	ldb := &ladybugDB{
-		path:              path,
-		db:                database,
-		conn:              conn,
-		entityTypeDefs:    make(map[string]*store.EntityTypeDef),
-		edgeTypeDefs:      make(map[string]*store.EdgeTypeDef),
-		ruleIndex:         make(map[string][]*flowv1.ConnectionRule),
-		edgePairs:         make(map[string][]fromToPair),
-		branches:          make(map[string]*branchDB),
-		branchStates:      make(map[string]store.BranchTransactionState),
-		stageMetadata:     stageSchemaMetadata,
-		publishMetadata:   publishSchemaMetadata,
-		writeMetadata:     writeSchemaMetadata,
-		createVectorIndex: createVectorIndexOnConn,
-		readDir:           os.ReadDir,
+	ldb, err := newLadybugDB(path, database, conn)
+	if err != nil {
+		return nil, err
 	}
 
-	if err := ldb.loadExtensions(); err != nil {
-		_ = ldb.Close()
-		return nil, fmt.Errorf("load extensions: %w", err)
-	}
-
-	if err := ldb.rebuildSchemaCache(); err != nil {
-		_ = ldb.Close()
-		return nil, fmt.Errorf("rebuild schema cache: %w", err)
-	}
 	ldb.mu.Lock()
 	err = ldb.restoreMainSchemaMetadataLocked()
 	ldb.mu.Unlock()
@@ -199,7 +178,16 @@ func OpenInMemory() (store.Store, error) {
 		return nil, fmt.Errorf("open connection: %w", err)
 	}
 
+	return newLadybugDB("", database, conn)
+}
+
+// newLadybugDB builds the ladybugDB struct around an opened database and
+// connection and runs the shared post-open sequence (extension load and
+// schema-cache rebuild) that both Open and OpenInMemory require. On any
+// failure the partially-built store is closed before the error is returned.
+func newLadybugDB(path string, database *lbug.Database, conn *lbug.Connection) (*ladybugDB, error) {
 	ldb := &ladybugDB{
+		path:              path,
 		db:                database,
 		conn:              conn,
 		entityTypeDefs:    make(map[string]*store.EntityTypeDef),
@@ -214,17 +202,14 @@ func OpenInMemory() (store.Store, error) {
 		createVectorIndex: createVectorIndexOnConn,
 		readDir:           os.ReadDir,
 	}
-
-	if err := ldb.loadExtensions(); err != nil {
+	if err := loadExtensionsOnConn(ldb.conn, ""); err != nil {
 		_ = ldb.Close()
 		return nil, fmt.Errorf("load extensions: %w", err)
 	}
-
 	if err := ldb.rebuildSchemaCache(); err != nil {
 		_ = ldb.Close()
 		return nil, fmt.Errorf("rebuild schema cache: %w", err)
 	}
-
 	return ldb, nil
 }
 
@@ -258,19 +243,26 @@ func (db *ladybugDB) Close() error {
 	return nil
 }
 
-// loadExtensions installs and loads the vector and fts extensions.
-// INSTALL is idempotent — it is safe to call on every Open.
-func (db *ladybugDB) loadExtensions() error {
+// loadExtensionsOnConn installs and loads the vector and fts extensions on an
+// arbitrary connection. INSTALL is idempotent — it is safe to call on every
+// Open. On some configurations the extension may already be installed, so
+// INSTALL errors are ignored and LOAD is attempted directly. contextLabel
+// names the database in the error message ("" for main, "on branch" for
+// branch connections) so the failing connection is identifiable.
+func loadExtensionsOnConn(conn *lbug.Connection, contextLabel string) error {
 	for _, ext := range []string{"vector", "fts"} {
 		// Try INSTALL first; on some configurations the extension may already
 		// be installed, so we ignore INSTALL errors and attempt LOAD directly.
-		r, _ := db.conn.Query("INSTALL " + ext + ";")
+		r, _ := conn.Query("INSTALL " + ext + ";")
 		if r != nil {
 			r.Close()
 		}
-		r, err := db.conn.Query("LOAD " + ext + ";")
+		r, err := conn.Query("LOAD " + ext + ";")
 		if err != nil {
-			return fmt.Errorf("load extension %q: %w", ext, err)
+			if contextLabel == "" {
+				return fmt.Errorf("load extension %q: %w", ext, err)
+			}
+			return fmt.Errorf("load extension %q %s: %w", ext, contextLabel, err)
 		}
 		r.Close()
 	}

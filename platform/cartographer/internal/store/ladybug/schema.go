@@ -26,49 +26,11 @@ func (db *ladybugDB) rebuildSchemaCache() error {
 }
 
 // collectVectorIndexes returns a set of table names that have a vector index.
-// LadybugDB's vector extension creates indexes of type HNSW.
+// LadybugDB's vector extension creates indexes of type HNSW. It delegates to
+// the conn-based vectorIndexesOnConn used by the branch schema rebuild; the
+// catalog-read error is propagated, never swallowed (see vectorIndexesOnConn).
 func (db *ladybugDB) collectVectorIndexes() (map[string]bool, error) {
-	idxMap := make(map[string]bool)
-
-	result, err := db.conn.Query("CALL show_indexes() RETURN *;")
-	if err != nil {
-		// Propagate, never swallow: rebuildSchemaCacheLocked treats a nil error
-		// as authoritative vector state, so a catalog-read failure returning
-		// (empty map, nil) would silently strip vector state from every type
-		// read on schema-cache rebuild (Open and metadata-table restoration).
-		// The caller propagates this error already, so the read path fails
-		// loudly instead of silently marking every type non-vector.
-		return nil, err
-	}
-	defer result.Close()
-
-	for result.HasNext() {
-		tuple, err := result.Next()
-		if err != nil {
-			return nil, fmt.Errorf("read index row: %w", err)
-		}
-
-		vals, err := tuple.GetAsSlice()
-		tuple.Close()
-		if err != nil {
-			return nil, fmt.Errorf("get index values: %w", err)
-		}
-
-		// Columns from show_indexes: table_name, index_name, index_type,
-		// property_names, extension_loaded, index_definition
-		if len(vals) < 3 {
-			continue
-		}
-		tableName := fmt.Sprintf("%v", vals[0])
-		indexType := fmt.Sprintf("%v", vals[2])
-
-		// Only HNSW (vector) indexes count as vector indexes.
-		if tableName != "" && strings.EqualFold(indexType, "HNSW") {
-			idxMap[tableName] = true
-		}
-	}
-
-	return idxMap, nil
+	return vectorIndexesOnConn(db.conn)
 }
 
 // indexExistsOnConn reports whether the given table has an index with the
@@ -178,70 +140,14 @@ func vectorIndexExists(conn *lbug.Connection, table string) (bool, error) {
 }
 
 // getTableProperties queries table_info for the given table and returns its
-// column definitions (excluding hidden/system columns). Which columns are
-// structural (and therefore not user properties) depends on the table kind:
-// REL tables carry structural from/to/type endpoint columns, and vector-indexed
-// NODE tables carry a structural embedding column. SPEC R1 reserves those names
-// only in those positions — an entity property named from/to/type is not a
-// reserved word and passes schema.Validate, and a non-vector entity type may
-// declare a property named embedding — so they must be retained as real
-// properties on NODE tables. vectorIndexed reports whether the NODE table
-// carries an HNSW vector index (the embedding column and its index are
-// bootstrapped together, so an index implies a structural embedding column).
+// column definitions (excluding hidden/system columns), delegating to the
+// conn-based tablePropertiesOnConn used by the branch schema rebuild. See
+// tablePropertiesOnConn for the structural-column skipping rules (which
+// columns are structural depends on the table kind: REL tables carry
+// structural from/to/type endpoint columns, and vector-indexed NODE tables
+// carry a structural embedding column).
 func (db *ladybugDB) getTableProperties(tableName, tableType string, vectorIndexed bool) ([]store.PropertyDef, error) {
-	q := fmt.Sprintf("CALL table_info('%s') RETURN *;", tableName)
-	result, err := db.conn.Query(q)
-	if err != nil {
-		return nil, err
-	}
-	defer result.Close()
-
-	// Skip implicit/self-managed columns that we don't expose as user properties.
-	skip := map[string]bool{"id": true}
-	switch strings.ToUpper(tableType) {
-	case tableTypeNode:
-		if vectorIndexed {
-			skip["embedding"] = true
-		}
-	case tableTypeRel:
-		skip["from"] = true
-		skip["to"] = true
-		skip["type"] = true
-	}
-
-	var props []store.PropertyDef
-	for result.HasNext() {
-		tuple, err := result.Next()
-		if err != nil {
-			return nil, fmt.Errorf("read column row: %w", err)
-		}
-
-		vals, err := tuple.GetAsSlice()
-		tuple.Close()
-		if err != nil {
-			return nil, fmt.Errorf("get column values: %w", err)
-		}
-
-		// columns: property id, name, type, default expression, primary key
-		if len(vals) < 3 {
-			continue
-		}
-		colName := fmt.Sprintf("%v", vals[1])
-		if skip[colName] {
-			continue
-		}
-		colType := fmt.Sprintf("%v", vals[2])
-
-		props = append(props, store.PropertyDef{
-			Name: colName,
-			Type: colType,
-		})
-	}
-
-	if props == nil {
-		props = []store.PropertyDef{}
-	}
-	return props, nil
+	return tablePropertiesOnConn(db.conn, tableName, tableType, vectorIndexed)
 }
 
 // quoteID quotes a Cypher identifier using backticks. LadybugDB/Cypher uses
@@ -856,10 +762,6 @@ func (db *ladybugDB) ListMainEntityTypes() ([]string, error) {
 		return nil, store.ErrDatabaseNotReady
 	}
 	return sortedKeys(db.entityTypeDefs), nil
-}
-
-func (db *ladybugDB) ValidateSchema(_ context.Context, s *flowv1.Schema) error {
-	return schema.Validate(s)
 }
 
 func (db *ladybugDB) Health(_ context.Context) (*store.HealthResult, error) {

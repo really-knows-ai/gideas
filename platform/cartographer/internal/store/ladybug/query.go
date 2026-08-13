@@ -140,18 +140,27 @@ func (db *ladybugDB) ExtractEntityTypes(ctx context.Context, cypher string) ([]s
 // outside MATCH clauses (e.g. a `WHERE (a)--(:Service)` pattern expression)
 // ARE extracted, since they reference the same labels.
 //
+// Bare (non-parenthesised) label predicates — `m:Service` in
+// `WHERE m:Service` — are also extracted as referenced labels, so a query
+// like `MATCH (n:Component)-[r]->(m) WHERE m:Service RETURN m` yields
+// [Component Service] and cannot be authorised for Service rows by a caller
+// holding only the Component per-type grant (SPEC R3). Relationship-type
+// specifiers (`-[r:DEPENDS_ON]->`) and map-literal key/value pairs are not
+// entity-type labels and are skipped.
+//
 // The analyzer is deliberately not a full Cypher parser: the SPEC check order
 // runs syntax validation (Prepare) before this point, so it only classifies
 // the pattern structure of a statement already known to parse.
 //
 // Fail-closed on unclassifiable labels: when a node pattern carries a label
 // form the analyzer cannot classify — backtick-quoted labels (`(n:`Label With
-// Space`)`), parameterised labels (`(n:$label)`), dynamic labels, or labels in
-// patterns the matcher cannot balance — the extraction is abandoned and
-// returns nil, so the caller falls back to the READ:graph/entity/* wildcard
-// check (SPEC:260 "must never widen access beyond the wildcard fallback"). A
-// partial extraction that returned only the classifiable labels would let a
-// caller holding that subset execute a query that also touches a missed type,
+// Space`)`), parameterised labels (`(n:$label)`), dynamic labels, labels in
+// patterns the matcher cannot balance, or a bare predicate whose label form
+// is likewise unclassifiable — the extraction is abandoned and returns nil,
+// so the caller falls back to the READ:graph/entity/* wildcard check (SPEC:260
+// "must never widen access beyond the wildcard fallback"). A partial
+// extraction that returned only the classifiable labels would let a caller
+// holding that subset execute a query that also touches a missed type,
 // widening access relative to the every-referenced-type rule (SPEC R3); the
 // wildcard check is strictly stronger than any per-type subset. Upgrade path:
 // a server-side cgo binding of a real Cypher parser (e.g. libcypher-parser)
@@ -162,56 +171,135 @@ func extractEntityTypeLabels(cypher string) []string {
 	s := stripCommentsAndStrings(cypher)
 	seen := make(map[string]struct{})
 	var labels []string
-	i := 0
-	for i < len(s) {
-		open := strings.IndexByte(s[i:], '(')
-		if open < 0 {
-			break
+	addLabel := func(label string) bool {
+		if !isCypherIdentifier(label) {
+			// Fail closed: an unclassifiable label form (backtick-quoted,
+			// parameterised, or dynamic labels) means the statement's
+			// referenced-type set cannot be derived exactly. Returning a
+			// partial subset would let a caller holding only the extracted
+			// types execute a query that also touches a missed type, widening
+			// access beyond the every-referenced-type rule (SPEC R3). Returning
+			// nil sends the caller to the READ:graph/entity/* wildcard check —
+			// the SPEC:260 bound.
+			return false
 		}
-		open += i
-		close, ok := matchingParen(s, open)
-		if !ok {
-			break
-		}
-		i = close + 1
-		inner := s[open+1 : close]
-		// A node pattern carries labels from its first ':' (after the optional
-		// variable) up to any '{' (inline property map) or the closing paren.
-		colon := strings.IndexByte(inner, ':')
-		if colon < 0 {
-			continue // unlabelled node (e.g. "(n)") — no labels
-		}
-		rest := inner[colon:]
-		if brace := strings.IndexByte(rest, '{'); brace >= 0 {
-			rest = rest[:brace]
-		}
-		for part := range strings.SplitSeq(rest, ":") {
-			label := strings.TrimSpace(part)
-			if label == "" {
-				continue // artifact of the ':' split (leading/trailing separator)
-			}
-			if !isCypherIdentifier(label) {
-				// Fail closed: an unclassifiable label form (backtick-quoted,
-				// parameterised, or dynamic labels) means the statement's
-				// referenced-type set cannot be derived exactly. Returning a
-				// partial subset would let a caller holding only the extracted
-				// types execute a query that also touches a missed type,
-				// widening access beyond the every-referenced-type rule
-				// (SPEC R3). Returning nil sends the caller to the
-				// READ:graph/entity/* wildcard check — the SPEC:260 bound.
-				return nil
-			}
-			if _, dup := seen[label]; dup {
-				continue
-			}
+		if _, dup := seen[label]; !dup {
 			seen[label] = struct{}{}
 			labels = append(labels, label)
+		}
+		return true
+	}
+	i := 0
+	for i < len(s) {
+		switch s[i] {
+		case '(':
+			close, ok := matchingParen(s, i)
+			if !ok {
+				break
+			}
+			inner := s[i+1 : close]
+			i = close + 1
+			// A node pattern carries labels from its first ':' (after the
+			// optional variable) up to any '{' (inline property map) or the
+			// closing paren.
+			colon := strings.IndexByte(inner, ':')
+			if colon < 0 {
+				continue // unlabelled node (e.g. "(n)") — no labels
+			}
+			rest := inner[colon:]
+			if brace := strings.IndexByte(rest, '{'); brace >= 0 {
+				rest = rest[:brace]
+			}
+			for part := range strings.SplitSeq(rest, ":") {
+				label := strings.TrimSpace(part)
+				if label == "" {
+					continue // artifact of the ':' split (leading/trailing separator)
+				}
+				if !addLabel(label) {
+					return nil
+				}
+			}
+		case '{':
+			// A map literal's key/value pairs are not label predicates.
+			close, ok := matchingBrace(s, i)
+			if !ok {
+				break
+			}
+			i = close + 1
+		case '[':
+			// A relationship specifier's edge type — `-[r:TYPE]->` — and list
+			// literal contents are not entity-type labels (per-type grants are
+			// entity grants, SPEC R3). The `WHERE x:Label` predicate inside a
+			// list comprehension is a missed shape with the same fail-closed
+			// exposure as the pre-fix bare-WHERE gap; distinguishing it from a
+			// relationship specifier needs the parser upgrade path below.
+			close, ok := matchingBracket(s, i)
+			if !ok {
+				break
+			}
+			i = close + 1
+		case ':':
+			// A bare (non-parenthesised) label predicate, e.g. `m:Service` in
+			// `WHERE m:Service`. Node patterns handle their own labels above;
+			// this case catches predicate-position labels the paren scanner
+			// never sees. In a parseable statement a colon outside node-pattern
+			// parens, map literals, and bracket groups must be a label
+			// predicate; an unclassifiable one abandons the extraction.
+			label, end, ok := barePredicateLabel(s, i)
+			if !ok {
+				return nil
+			}
+			if !addLabel(label) {
+				return nil
+			}
+			i = end
+		default:
+			i++
 		}
 	}
 	if len(labels) == 0 {
 		return nil
 	}
 	return labels
+}
+
+// barePredicateLabel parses the label of a bare `identifier:Label` predicate
+// whose colon sits at s[colon] (whitespace after the colon is allowed, e.g.
+// `WHERE n: Service`). It returns the label and the index just past it, or
+// ok=false when the shape is not a bare label predicate the analyzer can
+// classify: a colon not immediately preceded by a bare variable identifier,
+// or a backtick-quoted/parameterised/empty label. The caller fails closed on
+// ok=false.
+func barePredicateLabel(s string, colon int) (string, int, bool) {
+	// The variable identifier must immediately precede the colon.
+	start := colon
+	for start > 0 && isIdentifierChar(s[start-1]) {
+		start--
+	}
+	if !isCypherIdentifier(s[start:colon]) {
+		return "", 0, false
+	}
+	j := colon + 1
+	for j < len(s) && (s[j] == ' ' || s[j] == '\t') {
+		j++
+	}
+	end := j
+	for end < len(s) && isIdentifierChar(s[end]) {
+		end++
+	}
+	label := s[j:end]
+	if !isCypherIdentifier(label) {
+		return "", 0, false
+	}
+	return label, end, true
+}
+
+// isIdentifierChar reports whether c is a character that may appear in a bare
+// Cypher identifier ([a-zA-Z_][a-zA-Z0-9_]*, see isCypherIdentifier). It does
+// not enforce the first-character rule — barePredicateLabel validates the full
+// run via isCypherIdentifier.
+func isIdentifierChar(c byte) bool {
+	return c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
 }
 
 // matchingParen returns the index of the ')' matching the '(' at open, or
@@ -245,6 +333,42 @@ func matchingParen(s string, open int) (int, bool) {
 					break
 				}
 				j++
+			}
+		}
+	}
+	return 0, false
+}
+
+// matchingBrace returns the index of the '}' matching the '{' at open, or
+// ok=false if no match exists.
+func matchingBrace(s string, open int) (int, bool) {
+	depth := 0
+	for j := open; j < len(s); j++ {
+		switch s[j] {
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return j, true
+			}
+		}
+	}
+	return 0, false
+}
+
+// matchingBracket returns the index of the ']' matching the '[' at open, or
+// ok=false if no match exists.
+func matchingBracket(s string, open int) (int, bool) {
+	depth := 0
+	for j := open; j < len(s); j++ {
+		switch s[j] {
+		case '[':
+			depth++
+		case ']':
+			depth--
+			if depth == 0 {
+				return j, true
 			}
 		}
 	}

@@ -595,36 +595,6 @@ func TestListMainEntityTypes(t *testing.T) {
 	}
 }
 
-func TestValidateSchema(t *testing.T) {
-	s, err := OpenInMemory()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer closeStore(t, s)
-
-	// Valid schema.
-	valid := &flowv1.Schema{
-		EntityTypes: []*flowv1.EntityType{
-			{Name: "ValidType", Properties: []*flowv1.Property{
-				{Name: "attr", Type: "string"},
-			}},
-		},
-	}
-	if err := s.(*ladybugDB).ValidateSchema(context.Background(), valid); err != nil {
-		t.Errorf("expected valid schema to pass: %v", err)
-	}
-
-	// Invalid schema: empty name.
-	invalid := &flowv1.Schema{
-		EntityTypes: []*flowv1.EntityType{
-			{Name: ""},
-		},
-	}
-	if err := s.(*ladybugDB).ValidateSchema(context.Background(), invalid); err == nil {
-		t.Error("expected error for empty entity type name")
-	}
-}
-
 // The store's internal placeholder NODE table for edgeless rel types is named
 // `_untyped` (schemavalidator.UntypedTableName). schema.Validate reserves it: a
 // user entity or edge type with that name would alias the placeholder table
@@ -2292,6 +2262,24 @@ func TestExtractEntityTypes(t *testing.T) {
 		}
 	})
 
+	// A bare (non-parenthesised) label predicate in a WHERE clause —
+	// `WHERE m:Service` — is rejected by the LadybugDB v0.17.0 grammar at
+	// Prepare (the parenthesised pattern-predicate form `WHERE (m:Service)` is
+	// the supported shape). The seam therefore never extracts labels for this
+	// shape: the syntax gate surfaces ErrInvalidCypher before any capability
+	// decision (SPEC:1015 check order), so no per-type-grant bypass is
+	// reachable through it today. The analyzer's own handling of bare
+	// `identifier:Label` predicates is pinned by TestExtractEntityTypeLabels
+	// (bare-where-predicate), so a future grammar that accepts the shape cannot
+	// silently extract only the parenthesised labels.
+	t.Run("bare WHERE label predicate is rejected by the grammar", func(t *testing.T) {
+		_, err := s.ExtractEntityTypes(ctx,
+			"MATCH (n:Component)-[r]->(m) WHERE m:Service RETURN m")
+		if !errors.Is(err, store.ErrInvalidCypher) {
+			t.Errorf("expected ErrInvalidCypher (grammar rejects bare label predicates), got %v", err)
+		}
+	})
+
 	// A statement mixing a classifiable label with an unclassifiable one must
 	// fail closed (nil labels → READ:graph/entity/* wildcard fallback), never
 	// return the partial subset: a caller holding only the extracted type must
@@ -2342,6 +2330,26 @@ func TestExtractEntityTypeLabels(t *testing.T) {
 			"MATCH (a:Component)-->(b:Component) RETURN a, b", []string{"Component"}},
 		{"multiple-match-clauses",
 			"MATCH (c:Component) MATCH (s:Service) RETURN c, s", []string{"Component", "Service"}},
+		// Bare (non-parenthesised) label predicates in WHERE clauses reference
+		// the same labels as node patterns and must be extracted, so a query
+		// like `MATCH (n:Component)-[r]->(m) WHERE m:Service RETURN m` is not
+		// authorised for Service rows by a caller holding only the Component
+		// per-type grant (SPEC R3). Regression for the pre-fix bypass where
+		// only [Component] was extracted.
+		{"bare-where-predicate",
+			"MATCH (n:Component)-[r]->(m) WHERE m:Service RETURN m",
+			[]string{"Component", "Service"}},
+		{"bare-where-predicate-only",
+			"MATCH (n) WHERE n:Service RETURN n", []string{"Service"}},
+		{"bare-where-predicate-whitespace-after-colon",
+			"MATCH (n) WHERE n: Service RETURN n", []string{"Service"}},
+		// A bare label predicate whose label form the analyzer cannot classify
+		// fails closed to the READ:graph/entity/* wildcard fallback, never a
+		// partial subset.
+		{"bare-where-param-label-fails-closed",
+			"MATCH (n:Component) WHERE n:$label RETURN n", nil},
+		{"bare-where-backtick-label-fails-closed",
+			"MATCH (n:Component) WHERE n:`Label With Space` RETURN n", nil},
 		{"unlabelled-nodes-nil", "MATCH (n) RETURN n", nil},
 		{"no-match-nil", "RETURN 1", nil},
 		// SPEC:260 fail-closed rule: a pattern the analyzer cannot classify

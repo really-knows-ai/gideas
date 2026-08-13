@@ -600,37 +600,10 @@ func (db *ladybugDB) ListEdgesOfType(
 		return nil, fmt.Errorf("%w: %q", store.ErrUnknownEdgeType, edgeType)
 	}
 
-	q := fmt.Sprintf("MATCH (a)-[r:%s]->(b) RETURN a.id, r, b.id;", quoteID(edgeType))
-	result, err := conn.Query(q)
-	if err != nil {
-		return nil, err
-	}
-	defer result.Close()
-
-	var edges []store.Edge
-	for result.HasNext() {
-		tuple, err := result.Next()
-		if err != nil {
-			return nil, fmt.Errorf("read edge row: %w", err)
-		}
-		m, err := tuple.GetAsMap()
-		tuple.Close()
-		if err != nil {
-			return nil, fmt.Errorf("parse edge row: %w", err)
-		}
-
-		fromID := fmt.Sprintf("%v", m["a.id"])
-		rel, ok := m["r"].(lbug.Relationship)
-		if !ok {
-			return nil, fmt.Errorf("edge row for %q: unexpected relationship type %T", edgeType, m["r"])
-		}
-		toID := fmt.Sprintf("%v", m["b.id"])
-		edges = append(edges, *edgeFromRel(rel, edgeType, fromID, toID))
-	}
-	if edges == nil {
-		edges = []store.Edge{}
-	}
-	return edges, nil
+	// Shared conn-level edge listing (same MATCH (a)-[r:T]->(b) RETURN a.id, r,
+	// b.id query and GetAsMap/edgeFromRel parse loop used by DumpAllEdges and
+	// RehydrateFromBranch).
+	return listEdgesOnConn(conn, edgeType)
 }
 
 // --------------------------------------------------------------------------
