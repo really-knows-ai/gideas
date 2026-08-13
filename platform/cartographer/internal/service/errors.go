@@ -243,11 +243,6 @@ func errTransactionNotFound(txID string) error {
 	return status.Errorf(codes.NotFound, "transaction %q not found", txID)
 }
 
-func errTransactionRollbackOnly(txID string) error {
-	return status.Errorf(codes.FailedPrecondition,
-		"transaction %q is rollback-only; retry RollbackTransaction to finish cleanup", txID)
-}
-
 func errInvalidTransactionIDFormat(txID string) error {
 	return status.Errorf(codes.InvalidArgument, "invalid transaction ID format: %q", txID)
 }

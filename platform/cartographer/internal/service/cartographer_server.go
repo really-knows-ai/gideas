@@ -2446,11 +2446,18 @@ func (s *CartographerServer) ExtendTimeout(
 	if err := validateTxID(req.TransactionId); err != nil {
 		return nil, err
 	}
-	_, unlockTx, err := s.txManager.LockActive(req.TransactionId)
-	if err != nil {
+	// Admission gate (unknown / rollback-only / timed-out transaction) runs
+	// before duration validation so the transaction error surfaces first,
+	// matching the write-RPC check order. The lifecycle lock is released
+	// immediately: ExtendTimeout acquires it itself for the expiry mutation
+	// and persist and re-verifies admission under it, closing the window
+	// between this gate and the mutation. Holding it here would deadlock the
+	// manager's own lifecycle acquisition.
+	if _, unlockTx, err := s.txManager.LockActive(req.TransactionId); err != nil {
 		return nil, err
+	} else {
+		unlockTx()
 	}
-	defer unlockTx()
 	duration := req.Duration.AsDuration()
 	if err := s.txManager.ExtendTimeout(req.TransactionId, duration, func(state *TransactionState) error {
 		return s.persistTransactionState(ctx, state)

@@ -2637,10 +2637,15 @@ func TestTransaction_ChangeLogRollbackFailureIsExplicitAndRetryable(t *testing.T
 	if err != nil || !exists {
 		t.Fatalf("Git recovery anchor not retained: exists=%v err=%v", exists, err)
 	}
+	// Subsequent operations on the rolled-back (rollback-only) transaction are
+	// rejected with NOT_FOUND — the SPEC error table defines the cap-violation
+	// outcome as RESOURCE_EXHAUSTED with the transaction "rolled back", and
+	// "Transaction not found" covers "already committed/rolled back". Only
+	// RollbackTransaction (below) may still finish the cleanup.
 	assertTerminal := func(name string, call func() error) {
 		t.Helper()
-		if err := call(); status.Code(err) != codes.FailedPrecondition || !strings.Contains(err.Error(), "rollback-only") {
-			t.Fatalf("%s error = %v, want rollback-only FailedPrecondition", name, err)
+		if err := call(); status.Code(err) != codes.NotFound {
+			t.Fatalf("%s error = %v, want NotFound for rolled-back transaction", name, err)
 		}
 	}
 	assertTerminal("read", func() error {
@@ -6973,14 +6978,18 @@ func TestRecoverRollbackOnlyTransactionWhenRejectedUpdateDoesNotIncreaseNetDiff(
 	if err != nil || !state.RollbackOnly || state.ChangeLog.Len() != 1 {
 		t.Fatalf("recovered state = %+v, err=%v", state, err)
 	}
+	// A rollback-only transaction is already rolled back, so commit and
+	// mutations on it surface NOT_FOUND (SPEC "Transaction not found": "was
+	// already committed/rolled back") — the cap-violation outcome is defined
+	// solely as RESOURCE_EXHAUSTED with the transaction "rolled back".
 	if _, err := restarted.CommitTransaction(ctx, &flowv1.CommitTransactionRequest{
 		TransactionId: begin.TransactionId,
-	}); status.Code(err) != codes.FailedPrecondition {
+	}); status.Code(err) != codes.NotFound {
 		t.Fatalf("commit rollback-only transaction: %v", err)
 	}
 	if _, err := restarted.UpdateEntity(ctx, &flowv1.UpdateEntityRequest{
 		Id: mainEntity.Id, Properties: map[string]string{"version": "late"}, TransactionId: begin.TransactionId,
-	}); status.Code(err) != codes.FailedPrecondition {
+	}); status.Code(err) != codes.NotFound {
 		t.Fatalf("mutate rollback-only transaction: %v", err)
 	}
 	if _, err := restarted.RollbackTransaction(ctx, &flowv1.RollbackTransactionRequest{
@@ -10797,7 +10806,11 @@ func TestWriteCheckOrder_TransactionValidationPrecedesStructural(t *testing.T) {
 			}
 			state.RollbackOnly = true
 			return txID
-		}, codes.FailedPrecondition, ""},
+			// A rollback-only transaction is already rolled back (SPEC: the
+			// cap-violation outcome is RESOURCE_EXHAUSTED with the transaction
+			// "rolled back"), so the transaction gate surfaces NOT_FOUND
+			// ("Transaction not found": "was already committed/rolled back").
+		}, codes.NotFound, ""},
 	}
 	for _, wc := range writeCases {
 		for _, fm := range faultModes {
