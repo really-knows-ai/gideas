@@ -1512,18 +1512,21 @@ func TestExecuteCypher_MutationRejected(t *testing.T) {
 	ctx := testCtx()
 	applyTestSchema(ctx, t, st)
 
-	// Each mutation/DDL clause the SPEC R7 §5 and error-table row 913 enumerate
+	// Each mutation/DDL clause the SPEC R7 §5 and the error table enumerate
 	// (CREATE, SET, DELETE, MERGE, REMOVE, DROP, DDL index/constraint, and
-	// FOREACH-as-mutation) must be rejected by ExecuteCypher with
-	// PERMISSION_DENIED so no mutation ever executes through the read-only RPC.
+	// FOREACH-as-mutation) must be rejected by ExecuteCypher so no mutation
+	// ever executes through the read-only RPC.
 	//
 	// LadybugDB v0.17.0's parser recognises CREATE/SET/DELETE/MERGE/DROP and
 	// classifies each as non-read-only, surfacing ErrMutationCypher which the
-	// service maps to PERMISSION_DENIED. Its grammar does not parse top-level
-	// FOREACH, `MATCH ... REMOVE ...`, or index/constraint DDL; those are now
-	// classified as mutations by the store's keyword fallback and surface the
-	// same PERMISSION_DENIED — the SPEC-mandated code for the whole set
-	// (SPEC:913, SPEC:469-470, SPEC:874), never INVALID_ARGUMENT.
+	// service maps to PERMISSION_DENIED (row "ExecuteCypher with mutation
+	// statement", SPEC:976). Its grammar does not parse top-level FOREACH,
+	// `MATCH ... REMOVE ...`, or index/constraint DDL; those fail at the
+	// syntax gate and surface INVALID_ARGUMENT ("Invalid Cypher syntax",
+	// SPEC:979) — SPEC R3 mandates INVALID_ARGUMENT for every statement that
+	// fails to parse (SPEC:260) and the R7 §5 grammar-gap note pins it "never
+	// as PERMISSION_DENIED" (SPEC:493-497). The syntax gate precedes read-only
+	// enforcement in the ExecuteCypher check order (SPEC:1015).
 	cases := []struct {
 		name           string
 		cypher         string
@@ -1534,11 +1537,11 @@ func TestExecuteCypher_MutationRejected(t *testing.T) {
 		{"delete", "MATCH (n:Component) DELETE n", codes.PermissionDenied},
 		{"merge", "MERGE (n:Component {id: '11111111-1111-1111-1111-111111111111'})", codes.PermissionDenied},
 		{"drop", "DROP TABLE Component", codes.PermissionDenied},
-		{"remove", "MATCH (n:Component) REMOVE n.name", codes.PermissionDenied},
-		{"ddl-index", "CREATE INDEX Component_name IF NOT EXISTS FOR (n:Component) ON (n.name)", codes.PermissionDenied},
+		{"remove", "MATCH (n:Component) REMOVE n.name", codes.InvalidArgument},
+		{"ddl-index", "CREATE INDEX Component_name IF NOT EXISTS FOR (n:Component) ON (n.name)", codes.InvalidArgument},
 		{"ddl-constraint", "CREATE CONSTRAINT IF NOT EXISTS FOR (n:Component) REQUIRE n.id IS UNIQUE",
-			codes.PermissionDenied},
-		{"foreach-as-mutation", "FOREACH (x IN ['aaa'] | CREATE (n:Component {id: x}))", codes.PermissionDenied},
+			codes.InvalidArgument},
+		{"foreach-as-mutation", "FOREACH (x IN ['aaa'] | CREATE (n:Component {id: x}))", codes.InvalidArgument},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -5,7 +5,6 @@ import (
 	"encoding/base64"
 	"fmt"
 	"math"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -34,25 +33,18 @@ func (db *ladybugDB) ExecuteCypher(
 	// Prepare to parse and check read-only.
 	stmt, err := conn.Prepare(cypher)
 	if err != nil {
-		// Statements the LadybugDB v0.17.0 grammar cannot classify (e.g.
-		// `MATCH ... REMOVE ...`, index/constraint DDL, top-level FOREACH) fail
-		// at Prepare before the IsReadOnly guard runs. They are still
-		// mutation/DDL statements per SPEC error-table row "ExecuteCypher with
-		// mutation statement" (SPEC:972) and R7 §5 (FOREACH is treated as
-		// mutation per SPEC:486-487), so they must surface as PERMISSION_DENIED
-		// (ErrMutationCypher) rather than INVALID_ARGUMENT (ErrInvalidCypher).
-		// Genuinely-invalid read-only syntax keeps INVALID_ARGUMENT — the
-		// SPEC's syntax-before-read-only check order (SPEC:1011) and the
-		// grammar-unparseable read-only note (SPEC:489-493, "never as
-		// PERMISSION_DENIED"). isMutationCypher matches clause keywords only
-		// outside string literals and comments and only before the first
-		// RETURN, so a malformed read-only statement that quotes a mutation
-		// keyword (`MATCH (n:Component) RETURN n 'delete'`) or trails one
-		// after RETURN (`MATCH (n) RETURN n DELETE`) is not misclassified as a
-		// mutation.
-		if isMutationCypher(cypher) {
-			return nil, store.ErrMutationCypher
-		}
+		// A statement that fails to parse is rejected with INVALID_ARGUMENT —
+		// this comes from Prepare, unchanged (SPEC R3, SPEC:260; error-table
+		// row "Invalid Cypher syntax", SPEC:979). That includes mutation/DDL
+		// clauses the LadybugDB v0.17.0 grammar cannot parse (top-level
+		// FOREACH, `MATCH ... REMOVE ...`, index/constraint DDL): the grammar
+		// gap surfaces INVALID_ARGUMENT (ErrInvalidCypher) — never
+		// PERMISSION_DENIED (ErrMutationCypher), per the R7 §5 note on
+		// grammar-unparseable clauses (SPEC:493-497). Statements that parse
+		// and are classified as mutation/DDL are rejected by the IsReadOnly
+		// guard below with PERMISSION_DENIED (row "ExecuteCypher with mutation
+		// statement", SPEC:976) — the syntax gate precedes read-only
+		// enforcement (check order, SPEC:1015).
 		return nil, fmt.Errorf("%w: prepare: %v", store.ErrInvalidCypher, err)
 	}
 	defer stmt.Close()
@@ -101,12 +93,10 @@ func (db *ladybugDB) ExecuteCypher(
 //
 // Error classification is identical to ExecuteCypher's, so the SPEC check
 // order "empty query → Cypher syntax → read-only enforcement → capability"
-// (SPEC:1011) holds: an empty statement returns ErrEmptyQuery, a statement the
-// grammar rejects returns ErrMutationCypher (via the mutation-keyword
-// fallback, for mutation/DDL clauses the v0.17.0 grammar cannot classify) or
-// ErrInvalidCypher, and a non-read-only statement returns ErrMutationCypher —
-// all before any capability decision. A bare mutation keyword trailing a
-// RETURN clause is syntax, not a clause, so it stays ErrInvalidCypher.
+// (SPEC:1015) holds: an empty statement returns ErrEmptyQuery, a statement
+// that fails to parse returns ErrInvalidCypher (the syntax gate precedes
+// read-only enforcement, SPEC R3 / SPEC:260), and a non-read-only statement
+// returns ErrMutationCypher — all before any capability decision.
 //
 // Extraction itself is best-effort and never an error: a parseable read-only
 // statement whose patterns yield no labels returns an empty slice and the
@@ -122,14 +112,12 @@ func (db *ladybugDB) ExtractEntityTypes(ctx context.Context, cypher string) ([]s
 	}
 	defer unlock()
 
-	// Prepare to parse and check read-only — the same seam ExecuteCypher uses,
-	// including the mutation-keyword fallback (clause-position only) for
-	// statements the grammar cannot classify.
+	// Prepare to parse and check read-only — the same seam ExecuteCypher uses.
+	// A statement that fails to parse surfaces ErrInvalidCypher (INVALID_ARGUMENT)
+	// unchanged (SPEC R3, SPEC:260; row "Invalid Cypher syntax", SPEC:979),
+	// never ErrMutationCypher — the syntax gate precedes read-only enforcement.
 	stmt, err := conn.Prepare(cypher)
 	if err != nil {
-		if isMutationCypher(cypher) {
-			return nil, store.ErrMutationCypher
-		}
 		return nil, fmt.Errorf("%w: prepare: %v", store.ErrInvalidCypher, err)
 	}
 	defer stmt.Close()
@@ -735,54 +723,4 @@ func (db *ladybugDB) ListEntities(
 		entities = []store.Entity{}
 	}
 	return entities, nextToken, nil
-}
-
-// --------------------------------------------------------------------------
-// ExecuteCypher mutation/DDL classification helpers
-// --------------------------------------------------------------------------
-
-// mutationCypherPattern matches the mutation/DDL clause keywords the SPEC
-// error-table row "ExecuteCypher with mutation statement" (SPEC:972) and R7 §5
-// enumerate: CREATE, SET, DELETE, MERGE, REMOVE, DROP, and FOREACH (SPEC:486-487
-// mandates treating FOREACH as mutation). DDL clause forms — index and
-// constraint operations — begin with CREATE, so they are covered by the CREATE
-// keyword.
-var mutationCypherPattern = regexp.MustCompile(`(?i)\b(create|set|delete|merge|remove|drop|foreach)\b`)
-
-// returnKeywordPattern locates the RETURN clause, which terminates a query —
-// no clause of any kind can follow it.
-var returnKeywordPattern = regexp.MustCompile(`(?i)\breturn\b`)
-
-// isMutationCypher reports whether a statement that the grammar could not
-// prepare is nevertheless a mutation/DDL statement per SPEC error-table row
-// "ExecuteCypher with mutation statement" (SPEC:972). String literals and
-// comments are stripped first (stripCommentsAndStrings), so a mutation keyword
-// inside a string literal or comment is never treated as a clause — a
-// genuinely-invalid read-only statement that merely quotes a keyword (e.g.
-// `MATCH (n:Component) RETURN n 'delete'`) falls through to ErrInvalidCypher.
-// The keyword must also occur before the first RETURN clause: RETURN
-// terminates a query, so a keyword that appears only after it (e.g.
-// `MATCH (n) RETURN n DELETE`) cannot be a real clause and the statement is a
-// syntax error, not a mutation — surfacing ErrInvalidCypher honours the SPEC
-// check order "empty query → Cypher syntax → read-only enforcement →
-// capability" (SPEC:1011) and the grammar-unparseable read-only note
-// (SPEC:489-493, "never as PERMISSION_DENIED").
-// ponytail: keyword containment is still a heuristic fallback for statements
-// the LadybugDB v0.17.0 grammar cannot parse, and it cannot distinguish a
-// genuinely-invalid statement whose malformed body uses a mutation keyword as
-// a bare token in a non-clause position before any RETURN (e.g.
-// `MATCH (n) DELETE DELETE`) from a real clause, so that narrow case fails
-// closed with PERMISSION_DENIED rather than INVALID_ARGUMENT. The SPEC
-// mandates parser-based AST classification (SPEC:479-487), which is impossible
-// for statements the parser cannot classify, and its error-table row mandates
-// PERMISSION_DENIED for statements containing the enumerated keywords
-// (SPEC:972), so the residual is a conservative rejection, never an execution.
-// Upgrade path: a parser accepting the full Neo4j clause grammar would classify
-// by AST/clause position instead of keyword containment.
-func isMutationCypher(cypher string) bool {
-	s := stripCommentsAndStrings(cypher)
-	if m := returnKeywordPattern.FindStringIndex(s); m != nil {
-		s = s[:m[0]]
-	}
-	return mutationCypherPattern.MatchString(s)
 }

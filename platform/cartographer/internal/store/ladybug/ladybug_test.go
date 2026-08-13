@@ -1819,20 +1819,26 @@ func TestExecuteCypher_MutationRejected(t *testing.T) {
 	}
 }
 
-// TestExecuteCypher_MutationClausesClassified asserts that each mutation/DDL
-// clause the SPEC R7 §5 and error-table row 913 enumerate (CREATE, SET, DELETE,
-// MERGE, REMOVE, DROP, DDL index/constraint, and FOREACH-as-mutation) is REJECTED
-// by ExecuteCypher with ErrMutationCypher (mapped to PERMISSION_DENIED) — never
-// executed as read-only — not just the single CREATE clause the historical test
-// covered.
+// TestExecuteCypher_MutationClausesClassified asserts the SPEC
+// syntax-before-read-only check order (SPEC:1015) for the mutation/DDL clause
+// set that R7 §5 and the error table enumerate (CREATE, SET, DELETE, MERGE,
+// REMOVE, DROP, DDL index/constraint, and FOREACH-as-mutation):
 //
-// LadybugDB v0.17.0's parser does not recognise the full Neo4j clause grammar:
-// forms like top-level FOREACH, `MATCH ... REMOVE ...`, and index/constraint DDL
-// fail at Prepare *before* the IsReadOnly guard runs. Such statements are still
-// mutations per SPEC:913 / SPEC:469-470, so they are classified by the
-// mutation-keyword fallback (isMutationCypher) and surface ErrMutationCypher
-// (PERMISSION_DENIED), not ErrInvalidCypher (INVALID_ARGUMENT). Genuinely
-// invalid read-only syntax (no mutation keyword) keeps ErrInvalidCypher.
+//   - Clauses the LadybugDB v0.17.0 grammar parses (CREATE, SET, DELETE,
+//     MERGE, DROP) are classified non-read-only by the IsReadOnly guard and
+//     surface ErrMutationCypher (mapped to PERMISSION_DENIED, error-table row
+//     "ExecuteCypher with mutation statement", SPEC:976) — never executed as
+//     read-only.
+//   - Clauses the grammar cannot parse (top-level FOREACH, `MATCH ... REMOVE
+//     ...`, index/constraint DDL) fail at Prepare *before* the IsReadOnly guard
+//     runs. Per SPEC R3 "a statement that fails to parse is rejected with
+//     INVALID_ARGUMENT — this comes from Prepare, unchanged" (SPEC:260), the
+//     "Invalid Cypher syntax" row (SPEC:979), and the R7 §5 grammar-gap note
+//     (SPEC:493-497, grammar-unparseable clauses surface INVALID_ARGUMENT
+//     "never as PERMISSION_DENIED"), they surface ErrInvalidCypher
+//     (INVALID_ARGUMENT) — the syntax gate precedes read-only enforcement, so a
+//     statement that fails to parse is INVALID_ARGUMENT regardless of mutation
+//     keywords in its text.
 func TestExecuteCypher_MutationClausesClassified(t *testing.T) {
 	s, err := OpenInMemory()
 	if err != nil {
@@ -1841,26 +1847,43 @@ func TestExecuteCypher_MutationClausesClassified(t *testing.T) {
 	defer closeStore(t, s)
 	applyTestSchema(t, s)
 
-	cases := []struct {
+	mutationCases := []struct {
 		name   string
 		cypher string
 	}{
 		{"create", "CREATE (n:Component {id: 'bad-uuid'})"},
-		{"create-drop-entity", "CREATE (n:Component {id: 'bad-uuid'}) DROP n"},
 		{"set", "MATCH (n:Component) SET n.name = 'x'"},
 		{"delete", "MATCH (n:Component) DELETE n"},
 		{"merge", "MERGE (n:Component {id: 'bad-uuid'})"},
-		{"remove", "MATCH (n:Component) REMOVE n.name"},
 		{"drop", "DROP TABLE Component"},
-		{"ddl-index", "CREATE INDEX Component_name IF NOT EXISTS FOR (n:Component) ON (n.name)"},
-		{"ddl-constraint", "CREATE CONSTRAINT IF NOT EXISTS FOR (n:Component) REQUIRE n.id IS UNIQUE"},
-		{"foreach-as-mutation", "FOREACH (x IN ['aaa'] | CREATE (n:Component {id: x}))"},
 	}
-	for _, tc := range cases {
+	for _, tc := range mutationCases {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := s.ExecuteCypher(context.Background(), tc.cypher, nil, "")
 			if !errors.Is(err, store.ErrMutationCypher) {
 				t.Errorf("expected ErrMutationCypher for %q, got %v", tc.cypher, err)
+			}
+		})
+	}
+
+	// Grammar-gap mutations fail at Prepare, so the syntax gate surfaces
+	// ErrInvalidCypher (SPEC R3 / SPEC:260; row "Invalid Cypher syntax",
+	// SPEC:979; R7 §5 note SPEC:493-497).
+	prepareFailCases := []struct {
+		name   string
+		cypher string
+	}{
+		{"create-drop-entity", "CREATE (n:Component {id: 'bad-uuid'}) DROP n"},
+		{"remove", "MATCH (n:Component) REMOVE n.name"},
+		{"ddl-index", "CREATE INDEX Component_name IF NOT EXISTS FOR (n:Component) ON (n.name)"},
+		{"ddl-constraint", "CREATE CONSTRAINT IF NOT EXISTS FOR (n:Component) REQUIRE n.id IS UNIQUE"},
+		{"foreach-as-mutation", "FOREACH (x IN ['aaa'] | CREATE (n:Component {id: x}))"},
+	}
+	for _, tc := range prepareFailCases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := s.ExecuteCypher(context.Background(), tc.cypher, nil, "")
+			if !errors.Is(err, store.ErrInvalidCypher) {
+				t.Errorf("expected ErrInvalidCypher for %q, got %v", tc.cypher, err)
 			}
 		})
 	}
@@ -1957,18 +1980,15 @@ func TestExecuteCypher_ReadOnlyClausesClassified(t *testing.T) {
 	})
 }
 
-// TestExecuteCypher_StringLiteralKeywordNotMutation pins the false-positive
-// direction of the mutation-keyword fallback (query.go isMutationCypher): a
-// genuinely-invalid read-only statement that happens to quote a mutation
-// keyword inside a string literal must surface ErrInvalidCypher
-// (INVALID_ARGUMENT), never ErrMutationCypher (PERMISSION_DENIED). The SPEC
-// check order runs Cypher syntax before read-only enforcement (SPEC:1009), the
-// "Invalid Cypher syntax" error row is INVALID_ARGUMENT (SPEC:973), and the
-// grammar-unparseable read-only note (SPEC:487-491) mandates "never as
-// PERMISSION_DENIED". The v0.17.0 grammar rejects `MATCH (n:Component) RETURN n
-// 'delete'` at Prepare (trailing string literal); the `delete` keyword sits
-// inside that literal, so the fallback (which skips strings/comments) must not
-// classify it as a mutation.
+// TestExecuteCypher_StringLiteralKeywordNotMutation pins the SPEC check-order
+// consequence that a statement failing at Prepare surfaces ErrInvalidCypher
+// (INVALID_ARGUMENT) regardless of mutation keywords in its text: the syntax
+// gate precedes read-only enforcement (SPEC:1015), the "Invalid Cypher syntax"
+// row is INVALID_ARGUMENT (SPEC:979), and SPEC R3 mandates INVALID_ARGUMENT for
+// every statement that fails to parse (SPEC:260). A malformed read-only
+// statement that happens to quote a mutation keyword inside a string literal or
+// comment (e.g. `MATCH (n:Component) RETURN n 'delete'`) therefore keeps
+// INVALID_ARGUMENT, never PERMISSION_DENIED.
 func TestExecuteCypher_StringLiteralKeywordNotMutation(t *testing.T) {
 	s, err := OpenInMemory()
 	if err != nil {
@@ -2003,15 +2023,13 @@ func TestExecuteCypher_StringLiteralKeywordNotMutation(t *testing.T) {
 }
 
 // TestExecuteCypher_BareMutationKeywordTrailingReturnNotMutation pins the
-// clause-position boundary of the mutation-keyword fallback (query.go
-// isMutationCypher): a syntactically-invalid read-only statement whose text
-// uses a bare mutation keyword AFTER a RETURN clause (e.g.
-// `MATCH (n:Component) RETURN n DELETE`) must surface ErrInvalidCypher
-// (INVALID_ARGUMENT), never ErrMutationCypher (PERMISSION_DENIED). RETURN
-// terminates a query, so a keyword trailing it cannot be a real clause — the
-// statement is a syntax error, and the SPEC check order "empty query → Cypher
-// syntax → read-only enforcement → capability" (SPEC:1011) plus the
-// grammar-unparseable read-only note (SPEC:489-493, "never as
+// SPEC check-order consequence that a statement failing at Prepare surfaces
+// ErrInvalidCypher (INVALID_ARGUMENT) regardless of mutation keywords in its
+// text: a syntactically-invalid read-only statement whose text uses a bare
+// mutation keyword AFTER a RETURN clause (e.g. `MATCH (n:Component) RETURN n
+// DELETE`) is rejected at Prepare, and the SPEC check order "empty query →
+// Cypher syntax → read-only enforcement → capability" (SPEC:1015) plus SPEC R3
+// (SPEC:260) and the grammar-unparseable note (SPEC:493-497, "never as
 // PERMISSION_DENIED") require INVALID_ARGUMENT. The same boundary must hold on
 // the ExtractEntityTypes seam, whose error classification is identical to
 // ExecuteCypher's (SPEC check order).
@@ -2135,8 +2153,8 @@ func TestExtractEntityTypes(t *testing.T) {
 
 	// A statement that fails Prepare with a mutation keyword quoted inside a
 	// string literal must keep ErrInvalidCypher, matching ExecuteCypher's
-	// error classification — the mutation-keyword fallback skips strings, so
-	// the SPEC's syntax-before-read-only ordering is preserved (SPEC:1009).
+	// error classification — the syntax gate precedes read-only enforcement
+	// (SPEC R3 / SPEC:260, SPEC:1015).
 	t.Run("invalid syntax with string-literal mutation keyword returns ErrInvalidCypher", func(t *testing.T) {
 		_, err := s.ExtractEntityTypes(ctx, "MATCH (n:Component) RETURN n 'delete'")
 		if errors.Is(err, store.ErrMutationCypher) {
@@ -2148,12 +2166,14 @@ func TestExtractEntityTypes(t *testing.T) {
 		}
 	})
 
-	// Each mutation/DDL clause the SPEC R7 §5 and error-table row 913
-	// enumerate must surface ErrMutationCypher — either via IsReadOnly (the
-	// grammar classifies CREATE/SET/DELETE/MERGE/DROP) or via the
-	// mutation-keyword fallback for statements the v0.17.0 grammar cannot
-	// prepare (REMOVE, FOREACH, index/constraint DDL) — never
-	// ErrInvalidCypher, so read-only enforcement precedes capability.
+	// Each mutation/DDL clause the SPEC R7 §5 and the error table enumerate
+	// must be rejected before any capability decision. Clauses the v0.17.0
+	// grammar parses (CREATE, SET, DELETE, MERGE, DROP) are classified
+	// non-read-only by IsReadOnly and surface ErrMutationCypher — never
+	// ErrInvalidCypher, so read-only enforcement precedes capability. Clauses
+	// the grammar cannot prepare (REMOVE, FOREACH, index/constraint DDL) fail
+	// at the syntax gate and surface ErrInvalidCypher, which precedes
+	// read-only enforcement (SPEC:1015) — identical to ExecuteCypher.
 	mutations := []struct {
 		name   string
 		cypher string
@@ -2162,15 +2182,32 @@ func TestExtractEntityTypes(t *testing.T) {
 		{"set", "MATCH (n:Component) SET n.name = 'x'"},
 		{"delete", "MATCH (n:Component) DELETE n"},
 		{"merge", "MERGE (n:Component {id: 'bad-uuid'})"},
-		{"remove-keyword-fallback", "MATCH (n:Component) REMOVE n.name"},
 		{"drop", "DROP TABLE Component"},
-		{"foreach-as-mutation", "FOREACH (x IN ['aaa'] | CREATE (n:Component {id: x}))"},
 	}
 	for _, tc := range mutations {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := s.ExtractEntityTypes(ctx, tc.cypher)
 			if !errors.Is(err, store.ErrMutationCypher) {
 				t.Errorf("expected ErrMutationCypher for %q, got %v", tc.cypher, err)
+			}
+		})
+	}
+
+	// Grammar-gap mutations fail at Prepare, so the syntax gate surfaces
+	// ErrInvalidCypher (SPEC R3 / SPEC:260; row "Invalid Cypher syntax",
+	// SPEC:979; R7 §5 note SPEC:493-497).
+	prepareFailMutations := []struct {
+		name   string
+		cypher string
+	}{
+		{"remove-syntax-gate", "MATCH (n:Component) REMOVE n.name"},
+		{"foreach-syntax-gate", "FOREACH (x IN ['aaa'] | CREATE (n:Component {id: x}))"},
+	}
+	for _, tc := range prepareFailMutations {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := s.ExtractEntityTypes(ctx, tc.cypher)
+			if !errors.Is(err, store.ErrInvalidCypher) {
+				t.Errorf("expected ErrInvalidCypher for %q, got %v", tc.cypher, err)
 			}
 		})
 	}
