@@ -14,7 +14,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"strings"
 	"sync"
 	"time"
 
@@ -85,7 +84,11 @@ func NewSidecarServer(namespace, nodeID, nodeAddress string) *SidecarServer {
 }
 
 // Close releases the gRPC connection to the User Code container.
+// Guarded by s.mu: AssignWork RPCs run on their own goroutines and may be
+// lazily initialising the connection while a shutdown races this call.
 func (s *SidecarServer) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.nodeConn != nil {
 		return s.nodeConn.Close()
 	}
@@ -299,7 +302,16 @@ func (s *SidecarServer) AssignWork(ctx context.Context, req *flowv1.AssignWorkRe
 	// Create an assignment session with an inactivity timer.
 	sess, sessionCtx := newSession(ctx, workitemID, nodeID, s.timeout())
 
+	// Register the session. A duplicate assignment for a live workitem is
+	// rejected so a retry can never overwrite the in-flight session (and so
+	// the losing handler's cleanup can never delete the winning session).
 	s.mu.Lock()
+	if _, exists := s.sessions[workitemID]; exists {
+		s.mu.Unlock()
+		sess.stop() // Do not leak the rejected session's inactivity timer.
+		return nil, status.Error(codes.AlreadyExists,
+			fmt.Sprintf("assign_work: workitem %q already has an active assignment", workitemID))
+	}
 	s.sessions[workitemID] = sess
 	s.mu.Unlock()
 
@@ -307,7 +319,12 @@ func (s *SidecarServer) AssignWork(ctx context.Context, req *flowv1.AssignWorkRe
 	defer func() {
 		sess.stop()
 		s.mu.Lock()
-		delete(s.sessions, workitemID)
+		// Only remove this handler's own session. If the entry was replaced
+		// by a newer assignment (or a test injection) it must not be
+		// destroyed by this handler's cleanup.
+		if cur, ok := s.sessions[workitemID]; ok && cur == sess {
+			delete(s.sessions, workitemID)
+		}
 		s.mu.Unlock()
 	}()
 
@@ -355,7 +372,14 @@ func (s *SidecarServer) AssignWork(ctx context.Context, req *flowv1.AssignWorkRe
 
 // ensureNodeConnection lazily initializes the gRPC connection to the
 // User Code container.
+//
+// Guarded by s.mu: each AssignWork RPC runs on its own goroutine, so the
+// lazy-init must be serialized or concurrent RPCs would each create a
+// connection and all but the last would leak (never closed by Close()).
 func (s *SidecarServer) ensureNodeConnection() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	if s.nodeClient != nil {
 		return nil
 	}
@@ -391,7 +415,7 @@ func (s *SidecarServer) AddFriction(
 	}
 
 	// WRITE:friction is Sidecar-enforced (spec exception).
-	if err := checkCapability(ctx, "WRITE:friction"); err != nil {
+	if err := flow.CheckCapability(ctx, "WRITE:friction"); err != nil {
 		return nil, err
 	}
 
@@ -446,34 +470,6 @@ func (s *SidecarServer) RecordTelemetry(
 	})
 
 	return &flowv1.RecordTelemetryResponse{Acknowledged: true}, nil
-}
-
-// checkCapability is the Sidecar-side capability gate for WRITE:friction.
-// It reads x-flow-capabilities and x-flow-node-id from incoming gRPC metadata.
-// If x-flow-node-id is absent (system-to-system call), the check passes.
-// If x-flow-node-id is present (node-originated), the required capability
-// must be present in x-flow-capabilities or the request is denied.
-func checkCapability(ctx context.Context, required string) error {
-	md, ok := metadata.FromIncomingContext(ctx)
-	if !ok {
-		return nil // No metadata — system call.
-	}
-	nodeIDs := md.Get("x-flow-node-id")
-	if len(nodeIDs) == 0 {
-		return nil // No node identity — system call.
-	}
-
-	caps := md.Get("x-flow-capabilities")
-	for _, c := range caps {
-		for cap := range strings.SplitSeq(c, ",") {
-			if flow.MatchCapability(strings.TrimSpace(cap), required) {
-				return nil
-			}
-		}
-	}
-
-	return status.Errorf(codes.PermissionDenied,
-		"CAPABILITY_DENIED: missing required capability %q", required)
 }
 
 // ExtractIdentityFromMD extracts Sidecar-injected identity from incoming

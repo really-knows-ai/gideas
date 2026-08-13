@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"sync"
 	"testing"
@@ -239,6 +240,129 @@ func TestSidecarServer_AssignWork_SessionCleanup(t *testing.T) {
 	sidecar.mu.Unlock()
 	if count != 0 {
 		t.Fatalf("expected 0 sessions after completion, got %d", count)
+	}
+}
+
+func TestSidecarServer_AssignWork_DuplicateRejected(t *testing.T) {
+	fake := &fakeNodeServer{returnOK: true, blockCh: make(chan struct{})}
+	sidecar := newTestSidecar(t, fake)
+	sidecar.Timeout = 5 * time.Second
+
+	// Start the first assignment (blocked inside the fake node's Process).
+	done := make(chan error, 1)
+	go func() {
+		_, err := sidecar.AssignWork(context.Background(), &flowv1.AssignWorkRequest{
+			Context: testContext(),
+		})
+		done <- err
+	}()
+
+	waitForSession(t, sidecar)
+
+	// A second assignment for the same workitem must be rejected while the
+	// first handler is still live, not silently overwrite its session.
+	_, err := sidecar.AssignWork(context.Background(), &flowv1.AssignWorkRequest{
+		Context: testContext(),
+	})
+	if err == nil {
+		t.Fatal("expected duplicate assignment to be rejected")
+	}
+	st, ok := status.FromError(err)
+	if !ok || st.Code() != codes.AlreadyExists {
+		t.Fatalf("expected AlreadyExists, got %v", err)
+	}
+
+	// The first handler's session must still be live.
+	if s := sidecar.getSession("wi-1"); s == nil {
+		t.Fatal("first assignment's session was destroyed by the rejected duplicate")
+	}
+
+	// Complete the first handler.
+	close(fake.blockCh)
+	if err := <-done; err != nil {
+		t.Fatalf("first AssignWork() error: %v", err)
+	}
+
+	// Cleanup must still remove the first handler's session.
+	if s := sidecar.getSession("wi-1"); s != nil {
+		t.Fatal("session not cleaned up after first assignment completed")
+	}
+}
+
+func TestSidecarServer_AssignWork_CleanupKeepsReplacedSession(t *testing.T) {
+	fake := &fakeNodeServer{returnOK: true, blockCh: make(chan struct{})}
+	sidecar := newTestSidecar(t, fake)
+	sidecar.Timeout = 5 * time.Second
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := sidecar.AssignWork(context.Background(), &flowv1.AssignWorkRequest{
+			Context: testContext(),
+		})
+		done <- err
+	}()
+
+	waitForSession(t, sidecar)
+	first := sidecar.getSession("wi-1")
+
+	// A newer session for the same workitem replaces the first handler's
+	// entry (via a test injection that bypasses AssignWork's conflict check).
+	sidecar.InjectSessionForTest("wi-1", "node-2")
+	second := sidecar.getSession("wi-1")
+	if first == second {
+		t.Fatal("test setup broken: expected the injected session to replace the first")
+	}
+
+	// Complete the first handler. Its cleanup must not destroy the newer
+	// session that replaced its entry.
+	close(fake.blockCh)
+	if err := <-done; err != nil {
+		t.Fatalf("first AssignWork() error: %v", err)
+	}
+
+	if s := sidecar.getSession("wi-1"); s != second {
+		t.Fatal("first handler's cleanup deleted the session that replaced it")
+	}
+}
+
+func TestSidecarServer_ConcurrentAssignWorkAndClose(t *testing.T) {
+	fake := &fakeNodeServer{returnOK: true}
+	sidecar := newTestSidecar(t, fake)
+	sidecar.Timeout = 5 * time.Second
+
+	// Run several AssignWork RPCs concurrently (as gRPC does per-request) so
+	// they share the lazily-initialised node connection, then Close the
+	// server. The lazy-init and close must be synchronised — without the
+	// guard this races on nodeConn/nodeClient and leaks every connection but
+	// the last.
+	var wg sync.WaitGroup
+	for i := range 5 {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			ctx := &flowv1.WorkitemContext{
+				FlowNamespace: "flow-1",
+				WorkitemId:    fmt.Sprintf("wi-%d", i),
+				NodeId:        "node-1",
+			}
+			if _, err := sidecar.AssignWork(context.Background(), &flowv1.AssignWorkRequest{Context: ctx}); err != nil {
+				t.Errorf("AssignWork(%d) error: %v", i, err)
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	// All sessions must be cleaned up after completion.
+	sidecar.mu.Lock()
+	count := len(sidecar.sessions)
+	sidecar.mu.Unlock()
+	if count != 0 {
+		t.Fatalf("expected 0 sessions after concurrent assignments, got %d", count)
+	}
+
+	// Close must release the single shared connection without error.
+	if err := sidecar.Close(); err != nil {
+		t.Fatalf("Close() error: %v", err)
 	}
 }
 

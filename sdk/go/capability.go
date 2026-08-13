@@ -1,8 +1,13 @@
 package flow
 
 import (
+	"context"
 	"path/filepath"
 	"strings"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 )
 
 // StampCapability represents a parsed STAMP:artefact/<kind>/<stamp> or
@@ -94,4 +99,43 @@ func MatchCapability(capability, required string) bool {
 func matchSegment(pattern, segment string) bool {
 	ok, err := filepath.Match(pattern, segment)
 	return ok && err == nil
+}
+
+// Metadata keys for the Sidecar-injected identity and capability headers.
+// These wire strings are contract-defining: they are defined once here and
+// imported by the service modules that enforce or read them, never re-declared
+// as bare literals in sibling modules.
+const (
+	// MetadataKeyNodeID is the gRPC metadata key carrying the Sidecar-injected
+	// node identity.
+	MetadataKeyNodeID = "x-flow-node-id"
+	// MetadataKeyCapabilities is the gRPC metadata key carrying the
+	// Sidecar-injected, comma-separated capability grants for the node.
+	MetadataKeyCapabilities = "x-flow-capabilities"
+)
+
+// CheckCapability enforces deny-by-default capability gating for
+// node-originated requests. System-to-system calls (no x-flow-node-id)
+// pass through unconditionally.
+func CheckCapability(ctx context.Context, required string) error {
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return nil // No metadata — system call.
+	}
+	nodeIDs := md.Get(MetadataKeyNodeID)
+	if len(nodeIDs) == 0 {
+		return nil // No node identity — system call.
+	}
+
+	caps := md.Get(MetadataKeyCapabilities)
+	for _, c := range caps {
+		for cap := range strings.SplitSeq(c, ",") {
+			if MatchCapability(strings.TrimSpace(cap), required) {
+				return nil
+			}
+		}
+	}
+
+	return status.Errorf(codes.PermissionDenied,
+		"CAPABILITY_DENIED: missing required capability %q", required)
 }

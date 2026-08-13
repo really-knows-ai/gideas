@@ -117,38 +117,11 @@ func (s *OperatorServer) resolveFlow(ctx context.Context, namespace string) (*ap
 // ---------------------------------------------------------------------------
 // Capability enforcement
 // ---------------------------------------------------------------------------
-
-const (
-	// metadataKeyCapabilities is the gRPC metadata key carrying the
-	// Sidecar-injected, comma-separated capability grants for the node.
-	metadataKeyCapabilities = "x-flow-capabilities"
-)
-
-// checkCapability enforces deny-by-default capability gating for
-// node-originated requests. System-to-system calls (no x-flow-node-id)
-// pass through unconditionally.
-func checkCapability(ctx context.Context, required string) error {
-	md, ok := metadata.FromIncomingContext(ctx)
-	if !ok {
-		return nil // No metadata — system call.
-	}
-	nodeIDs := md.Get(metadataKeyNodeID)
-	if len(nodeIDs) == 0 {
-		return nil // No node identity — system call.
-	}
-
-	caps := md.Get(metadataKeyCapabilities)
-	for _, c := range caps {
-		for cap := range strings.SplitSeq(c, ",") {
-			if flow.MatchCapability(strings.TrimSpace(cap), required) {
-				return nil
-			}
-		}
-	}
-
-	return status.Errorf(codes.PermissionDenied,
-		"CAPABILITY_DENIED: missing required capability %q", required)
-}
+//
+// Capability gating is shared with the Sidecar and other Flow services via
+// flow.CheckCapability (sdk/go), which enforces deny-by-default gating for
+// node-originated requests. System-to-system calls (no x-flow-node-id) pass
+// through unconditionally.
 
 // SubmitResult handles the node's routing instruction submission.
 //
@@ -258,7 +231,7 @@ func (s *OperatorServer) SubmitResult(ctx context.Context, req *flowv1.SubmitRes
 //  5. Build and return the GetFlowTopologyResponse.
 func (s *OperatorServer) GetFlowTopology(ctx context.Context, _ *flowv1.GetFlowTopologyRequest) (*flowv1.GetFlowTopologyResponse, error) {
 	// Capability gate: READ:flow.
-	if err := checkCapability(ctx, "READ:flow"); err != nil {
+	if err := flow.CheckCapability(ctx, "READ:flow"); err != nil {
 		return nil, err
 	}
 
@@ -426,7 +399,7 @@ func (s *OperatorServer) CreateWorkitem(ctx context.Context, req *flowv1.CreateW
 //  6. Return the child_workitem_id.
 func (s *OperatorServer) CreateChildWorkitem(ctx context.Context, _ *flowv1.CreateChildWorkitemRequest) (*flowv1.CreateChildWorkitemResponse, error) {
 	// 1. Capability gate: CREATE:workitem/child.
-	if err := checkCapability(ctx, "CREATE:workitem/child"); err != nil {
+	if err := flow.CheckCapability(ctx, "CREATE:workitem/child"); err != nil {
 		return nil, err
 	}
 

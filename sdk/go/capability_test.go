@@ -1,6 +1,13 @@
 package flow
 
-import "testing"
+import (
+	"context"
+	"testing"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
+)
 
 func TestParseStampCapability_Valid(t *testing.T) {
 	tests := []struct {
@@ -167,5 +174,40 @@ func TestMatchCapability(t *testing.T) {
 				t.Errorf("MatchCapability(%q, %q) = %v, want %v", tt.pattern, tt.required, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestCheckCapability(t *testing.T) {
+	// No metadata — system call passes.
+	if err := CheckCapability(context.Background(), "READ:flow"); err != nil {
+		t.Fatalf("expected pass with no metadata, got %v", err)
+	}
+
+	// No x-flow-node-id — system call passes even with capabilities absent.
+	md := metadata.Pairs("x-flow-capabilities", "WRITE:artefact")
+	if err := CheckCapability(metadata.NewIncomingContext(context.Background(), md), "READ:flow"); err != nil {
+		t.Fatalf("expected pass without node identity, got %v", err)
+	}
+
+	// Node-originated with the required capability — passes.
+	md = metadata.Pairs(
+		MetadataKeyNodeID, "node-1",
+		MetadataKeyCapabilities, "WRITE:artefact, READ:flow",
+	)
+	if err := CheckCapability(metadata.NewIncomingContext(context.Background(), md), "READ:flow"); err != nil {
+		t.Fatalf("expected pass with matching capability, got %v", err)
+	}
+
+	// Node-originated without the required capability — denied.
+	md = metadata.Pairs(
+		MetadataKeyNodeID, "node-1",
+		MetadataKeyCapabilities, "WRITE:artefact",
+	)
+	err := CheckCapability(metadata.NewIncomingContext(context.Background(), md), "READ:flow")
+	if err == nil {
+		t.Fatal("expected denial for missing capability")
+	}
+	if st, ok := status.FromError(err); !ok || st.Code() != codes.PermissionDenied {
+		t.Fatalf("expected PermissionDenied, got %v", err)
 	}
 }
