@@ -73,7 +73,7 @@ func (db *ladybugDB) CreateBranchDB(_ context.Context, txID string) error {
 		edgeTypeDefs:   make(map[string]*store.EdgeTypeDef),
 	}
 
-	if err := loadBranchExtensions(conn); err != nil {
+	if err := loadExtensionsOnConn(conn, "on branch"); err != nil {
 		conn.Close()
 		database.Close()
 		if path != "" {
@@ -214,7 +214,7 @@ func (db *ladybugDB) branchLocked(txID string) (*branchDB, error) {
 		return nil, fmt.Errorf("open persisted branch connection %q: %w", txID, err)
 	}
 	br := &branchDB{db: database, conn: conn}
-	if err := loadBranchExtensions(conn); err != nil {
+	if err := loadExtensionsOnConn(conn, "on branch"); err != nil {
 		conn.Close()
 		database.Close()
 		return nil, err
@@ -258,25 +258,6 @@ func (db *ladybugDB) branchLocked(txID string) (*branchDB, error) {
 	}
 	db.branches[txID] = br
 	return br, nil
-}
-
-func loadBranchExtensions(conn *lbug.Connection) error {
-	for _, ext := range []string{"vector", "fts"} {
-		// INSTALL is idempotent — it is safe to call on every Open (same as
-		// main's loadExtensions). On some configurations the extension may
-		// already be installed, so we ignore INSTALL errors and attempt LOAD
-		// directly; the LOAD result is checked below.
-		r, _ := conn.Query("INSTALL " + ext + ";")
-		if r != nil {
-			r.Close()
-		}
-		r, err := conn.Query("LOAD " + ext + ";")
-		if err != nil {
-			return fmt.Errorf("load extension %q on branch: %w", ext, err)
-		}
-		r.Close()
-	}
-	return nil
 }
 
 func rebuildBranchSchemaCache(conn *lbug.Connection) (
@@ -354,13 +335,16 @@ func vectorIndexesOnConn(conn *lbug.Connection) (map[string]bool, error) {
 }
 
 // tablePropertiesOnConn reads a table's column definitions via table_info.
-// Structural column skipping is table-kind-dependent (see getTableProperties):
-// REL tables skip their from/to/type endpoint columns; vector-indexed NODE
-// tables skip their embedding column. SPEC-valid entity properties named
-// from/to/type (or embedding on a non-vector entity type) are real properties
-// and are retained. vectorIndexed reports whether the NODE table carries an
-// HNSW vector index (the embedding column and its index are bootstrapped
-// together, so an index implies a structural embedding column).
+// It is the shared helper for both the main schema-cache rebuild
+// (getTableProperties delegates here) and the branch schema rebuild
+// (rebuildBranchSchemaCache). Structural column skipping is table-kind
+// dependent: REL tables skip their from/to/type endpoint columns;
+// vector-indexed NODE tables skip their embedding column. SPEC-valid entity
+// properties named from/to/type (or embedding on a non-vector entity type)
+// are real properties and are retained. vectorIndexed reports whether the
+// NODE table carries an HNSW vector index (the embedding column and its index
+// are bootstrapped together, so an index implies a structural embedding
+// column).
 func tablePropertiesOnConn(
 	conn *lbug.Connection, table, tableType string, vectorIndexed bool,
 ) ([]store.PropertyDef, error) {
