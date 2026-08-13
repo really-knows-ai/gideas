@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"testing"
 
+	flowmeta "github.com/foundry/flow/pkg/metadata"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
 )
@@ -26,7 +27,7 @@ func TestIdentityInterceptor_InjectsSessionIdentity(t *testing.T) {
 	interceptor := IdentityInterceptor(srv, "ns-A", "node-X", "READ:artefact,WRITE:artefact", nil)
 
 	// Build incoming context with SDK-supplied workitem ID.
-	md := metadata.Pairs(MetadataKeyWorkitemID, "wi-42")
+	md := metadata.Pairs(flowmeta.MetadataKeyWorkitemID, "wi-42")
 	ctx := metadata.NewIncomingContext(context.Background(), md)
 
 	var capturedCtx context.Context
@@ -50,10 +51,10 @@ func TestIdentityInterceptor_InjectsSessionIdentity(t *testing.T) {
 		t.Fatal("expected incoming metadata in handler context")
 	}
 
-	assertMDValue(t, enrichedMD, MetadataKeyNamespace, "ns-A")
-	assertMDValue(t, enrichedMD, MetadataKeyWorkitemID, "wi-42")
-	assertMDValue(t, enrichedMD, MetadataKeyNodeID, "node-X")
-	assertMDValue(t, enrichedMD, MetadataKeyCapabilities, "READ:artefact,WRITE:artefact")
+	assertMDValue(t, enrichedMD, flowmeta.MetadataKeyNamespace, "ns-A")
+	assertMDValue(t, enrichedMD, flowmeta.MetadataKeyWorkitemID, "wi-42")
+	assertMDValue(t, enrichedMD, flowmeta.MetadataKeyNodeID, "node-X")
+	assertMDValue(t, enrichedMD, flowmeta.MetadataKeyCapabilities, "READ:artefact,WRITE:artefact")
 }
 
 func TestIdentityInterceptor_OverwritesNodeSuppliedValues(t *testing.T) {
@@ -68,10 +69,10 @@ func TestIdentityInterceptor_OverwritesNodeSuppliedValues(t *testing.T) {
 
 	// Node attempts to spoof namespace, node_id, and capabilities.
 	md := metadata.Pairs(
-		MetadataKeyWorkitemID, "wi-1",
-		MetadataKeyNamespace, "spoofed-ns",
-		MetadataKeyNodeID, "spoofed-node",
-		MetadataKeyCapabilities, "WRITE:artefact,STAMP:artefact/x/y",
+		flowmeta.MetadataKeyWorkitemID, "wi-1",
+		flowmeta.MetadataKeyNamespace, "spoofed-ns",
+		flowmeta.MetadataKeyNodeID, "spoofed-node",
+		flowmeta.MetadataKeyCapabilities, "WRITE:artefact,STAMP:artefact/x/y",
 	)
 	ctx := metadata.NewIncomingContext(context.Background(), md)
 
@@ -93,9 +94,9 @@ func TestIdentityInterceptor_OverwritesNodeSuppliedValues(t *testing.T) {
 	}
 
 	// Spoofed values must be overwritten with authoritative session values.
-	assertMDValue(t, enrichedMD, MetadataKeyNamespace, "real-ns")
-	assertMDValue(t, enrichedMD, MetadataKeyNodeID, "real-node")
-	assertMDValue(t, enrichedMD, MetadataKeyCapabilities, "READ:law")
+	assertMDValue(t, enrichedMD, flowmeta.MetadataKeyNamespace, "real-ns")
+	assertMDValue(t, enrichedMD, flowmeta.MetadataKeyNodeID, "real-node")
+	assertMDValue(t, enrichedMD, flowmeta.MetadataKeyCapabilities, "READ:law")
 }
 
 // ---------------------------------------------------------------------------
@@ -128,12 +129,12 @@ func TestIdentityInterceptor_EntryBoundFallback(t *testing.T) {
 	}
 
 	// Entry-bound fallback: namespace and node_id injected.
-	assertMDValue(t, enrichedMD, MetadataKeyNamespace, "entry-ns")
-	assertMDValue(t, enrichedMD, MetadataKeyNodeID, "entry-node")
-	assertMDValue(t, enrichedMD, MetadataKeyCapabilities, "READ:artefact")
+	assertMDValue(t, enrichedMD, flowmeta.MetadataKeyNamespace, "entry-ns")
+	assertMDValue(t, enrichedMD, flowmeta.MetadataKeyNodeID, "entry-node")
+	assertMDValue(t, enrichedMD, flowmeta.MetadataKeyCapabilities, "READ:artefact")
 
 	// workitem_id should NOT be present.
-	if vals := enrichedMD.Get(MetadataKeyWorkitemID); len(vals) > 0 {
+	if vals := enrichedMD.Get(flowmeta.MetadataKeyWorkitemID); len(vals) > 0 {
 		t.Fatalf("workitem_id should not be present in entry-bound fallback, got %v", vals)
 	}
 
@@ -146,7 +147,7 @@ func TestIdentityInterceptor_EntryBoundFallback_UnknownWorkitem(t *testing.T) {
 	interceptor := IdentityInterceptor(srv, "entry-ns", "entry-node", "", nil)
 
 	// Workitem ID present but no matching session — falls through to entry-bound.
-	md := metadata.Pairs(MetadataKeyWorkitemID, "unknown-wi")
+	md := metadata.Pairs(flowmeta.MetadataKeyWorkitemID, "unknown-wi")
 	ctx := metadata.NewIncomingContext(context.Background(), md)
 
 	var capturedCtx context.Context
@@ -167,8 +168,8 @@ func TestIdentityInterceptor_EntryBoundFallback_UnknownWorkitem(t *testing.T) {
 	}
 
 	// Entry-bound fallback should kick in.
-	assertMDValue(t, enrichedMD, MetadataKeyNamespace, "entry-ns")
-	assertMDValue(t, enrichedMD, MetadataKeyNodeID, "entry-node")
+	assertMDValue(t, enrichedMD, flowmeta.MetadataKeyNamespace, "entry-ns")
+	assertMDValue(t, enrichedMD, flowmeta.MetadataKeyNodeID, "entry-node")
 }
 
 // ---------------------------------------------------------------------------
@@ -207,7 +208,7 @@ func TestIdentityInterceptor_PreservesOtherMetadata(t *testing.T) {
 	interceptor := IdentityInterceptor(srv, "ns-f", "n", "READ:artefact", nil)
 
 	md := metadata.Pairs(
-		MetadataKeyWorkitemID, "wi-1",
+		flowmeta.MetadataKeyWorkitemID, "wi-1",
 		"x-custom-header", "custom-value",
 	)
 	ctx := metadata.NewIncomingContext(context.Background(), md)
@@ -230,8 +231,8 @@ func TestIdentityInterceptor_PreservesOtherMetadata(t *testing.T) {
 	assertMDValue(t, enrichedMD, "x-custom-header", "custom-value")
 
 	// Identity fields should be injected.
-	assertMDValue(t, enrichedMD, MetadataKeyNamespace, "ns-f")
-	assertMDValue(t, enrichedMD, MetadataKeyNodeID, "n")
+	assertMDValue(t, enrichedMD, flowmeta.MetadataKeyNamespace, "ns-f")
+	assertMDValue(t, enrichedMD, flowmeta.MetadataKeyNodeID, "n")
 }
 
 // ---------------------------------------------------------------------------
@@ -300,8 +301,8 @@ func TestIdentityInterceptor_SignsCapabilities(t *testing.T) {
 	}
 
 	caps := "READ:graph/entity/*"
-	assertMDValue(t, enrichedMD, MetadataKeyCapabilities, caps)
-	assertMDValue(t, enrichedMD, MetadataKeyCapabilitiesSignedBy, "sidecar")
+	assertMDValue(t, enrichedMD, flowmeta.MetadataKeyCapabilities, caps)
+	assertMDValue(t, enrichedMD, flowmeta.MetadataKeyCapabilitiesSignedBy, "sidecar")
 	assertSignedCapabilities(t, pub, enrichedMD, caps)
 }
 
@@ -322,11 +323,11 @@ func TestIdentityInterceptor_NilKey_NoSignature(t *testing.T) {
 	}
 
 	enrichedMD, _ := metadata.FromIncomingContext(capturedCtx)
-	assertMDValue(t, enrichedMD, MetadataKeyCapabilities, "READ:artefact")
-	if vals := enrichedMD.Get(MetadataKeyCapabilitiesSignature); len(vals) != 0 {
+	assertMDValue(t, enrichedMD, flowmeta.MetadataKeyCapabilities, "READ:artefact")
+	if vals := enrichedMD.Get(flowmeta.MetadataKeyCapabilitiesSignature); len(vals) != 0 {
 		t.Fatalf("no signature expected without a signing key, got %v", vals)
 	}
-	if vals := enrichedMD.Get(MetadataKeyCapabilitiesSignedAt); len(vals) != 0 {
+	if vals := enrichedMD.Get(flowmeta.MetadataKeyCapabilitiesSignedAt); len(vals) != 0 {
 		t.Fatalf("no signed-at expected without a signing key, got %v", vals)
 	}
 }
@@ -377,8 +378,8 @@ func TestIdentityStreamInterceptor_SignsCapabilities(t *testing.T) {
 	}
 
 	caps := "READ:graph/entity/*"
-	assertMDValue(t, enrichedMD, MetadataKeyCapabilities, caps)
-	assertMDValue(t, enrichedMD, MetadataKeyCapabilitiesSignedBy, "sidecar")
+	assertMDValue(t, enrichedMD, flowmeta.MetadataKeyCapabilities, caps)
+	assertMDValue(t, enrichedMD, flowmeta.MetadataKeyCapabilitiesSignedBy, "sidecar")
 	assertSignedCapabilities(t, pub, enrichedMD, caps)
 }
 
@@ -394,8 +395,8 @@ func (s *identityTestStream) Context() context.Context { return s.ctx }
 // "{caps}|{signed-at}" against the given public key.
 func assertSignedCapabilities(t *testing.T, pub ed25519.PublicKey, md metadata.MD, caps string) {
 	t.Helper()
-	sigB64 := md.Get(MetadataKeyCapabilitiesSignature)
-	signedAt := md.Get(MetadataKeyCapabilitiesSignedAt)
+	sigB64 := md.Get(flowmeta.MetadataKeyCapabilitiesSignature)
+	signedAt := md.Get(flowmeta.MetadataKeyCapabilitiesSignedAt)
 	if len(sigB64) != 1 || len(signedAt) != 1 {
 		t.Fatalf("expected signature and signed-at metadata, got sig=%v at=%v", sigB64, signedAt)
 	}

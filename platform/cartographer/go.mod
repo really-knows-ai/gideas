@@ -6,10 +6,13 @@ replace github.com/foundry/flow/gen => ../../gen
 
 replace github.com/foundry/flow/pkg/eventbus => ../pkg/eventbus
 
+replace github.com/foundry/flow/pkg/metadata => ../pkg/metadata
+
 require (
 	github.com/LadybugDB/go-ladybug v0.17.0
 	github.com/foundry/flow/gen v0.0.0
 	github.com/foundry/flow/pkg/eventbus v0.0.0-00010101000000-000000000000
+	github.com/foundry/flow/pkg/metadata v0.0.0
 	github.com/go-git/go-billy/v5 v5.9.0
 	github.com/go-git/go-git/v5 v5.19.1
 	github.com/google/uuid v1.6.0

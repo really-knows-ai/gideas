@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/foundry/flow/cartographer/internal/uuidutil"
+	flowmeta "github.com/foundry/flow/pkg/metadata"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
 )
@@ -102,26 +103,26 @@ func (v *CapabilityVerifier) verify(ctx context.Context) (context.Context, error
 		return ctx, nil
 	}
 
-	capsList := md.Get(MetadataKeyCapabilities)
+	capsList := md.Get(flowmeta.MetadataKeyCapabilities)
 	if len(capsList) == 0 || capsList[0] == "" {
 		// No capabilities metadata = system-to-system call (Operator).
 		return ctx, nil
 	}
 	capsStr := capsList[0]
 
-	sigList := md.Get(MetadataKeyCapabilitiesSignature)
+	sigList := md.Get(flowmeta.MetadataKeyCapabilitiesSignature)
 	if len(sigList) == 0 || sigList[0] == "" {
 		return nil, errInvalidCapabilitySignature()
 	}
 	sigB64 := sigList[0]
 
-	signedByList := md.Get(MetadataKeyCapabilitiesSignedBy)
+	signedByList := md.Get(flowmeta.MetadataKeyCapabilitiesSignedBy)
 	if len(signedByList) == 0 || signedByList[0] == "" {
 		return nil, errCapabilitySignedByUnrecognized("")
 	}
 	signedBy := signedByList[0]
 
-	signedAtList := md.Get(MetadataKeyCapabilitiesSignedAt)
+	signedAtList := md.Get(flowmeta.MetadataKeyCapabilitiesSignedAt)
 	if len(signedAtList) == 0 || signedAtList[0] == "" {
 		// Missing/empty signed-at is the stale-capability trigger (SPEC error
 		// table "Stale capability signature (anti-replay)": missing, malformed,

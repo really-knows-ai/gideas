@@ -6,6 +6,7 @@ require (
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/foundry/flow/gen v0.0.0-00010101000000-000000000000
+	github.com/foundry/flow/pkg/metadata v0.0.0
 	github.com/spf13/cobra v1.10.2
 	google.golang.org/grpc v1.80.0
 	google.golang.org/protobuf v1.36.12-0.20260120151049-f2248ac996af
@@ -17,6 +18,8 @@ require (
 )
 
 replace github.com/foundry/flow/gen => ../../gen
+
+replace github.com/foundry/flow/pkg/metadata => ../../platform/pkg/metadata
 
 require (
 	github.com/aymanbagabas/go-osc52/v2 v2.0.1 // indirect

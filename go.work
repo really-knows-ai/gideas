@@ -12,6 +12,7 @@ use (
 	./platform/monitor
 	./platform/operator
 	./platform/pkg/eventbus
+	./platform/pkg/metadata
 	./platform/pkg/randid
 	./platform/queue
 	./platform/sidecar

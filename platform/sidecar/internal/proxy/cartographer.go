@@ -10,7 +10,7 @@ import (
 	"strings"
 
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
-	"github.com/foundry/flow/sidecar/internal/service"
+	flowmeta "github.com/foundry/flow/pkg/metadata"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -76,11 +76,11 @@ func nodeCapabilities(ctx context.Context) []string {
 	if !ok {
 		return nil
 	}
-	if len(md.Get(service.MetadataKeyNodeID)) == 0 {
+	if len(md.Get(flowmeta.MetadataKeyNodeID)) == 0 {
 		return nil
 	}
 	caps := []string{}
-	for _, c := range md.Get(service.MetadataKeyCapabilities) {
+	for _, c := range md.Get(flowmeta.MetadataKeyCapabilities) {
 		for cap := range strings.SplitSeq(c, ",") {
 			if cap = strings.TrimSpace(cap); cap != "" {
 				caps = append(caps, cap)

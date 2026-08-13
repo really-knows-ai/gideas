@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	flowmeta "github.com/foundry/flow/pkg/metadata"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
@@ -102,16 +103,16 @@ func matchSegment(pattern, segment string) bool {
 }
 
 // Metadata keys for the Sidecar-injected identity and capability headers.
-// These wire strings are contract-defining: they are defined once here and
-// imported by the service modules that enforce or read them, never re-declared
-// as bare literals in sibling modules.
+// These wire strings are contract-defining and are defined once in
+// github.com/foundry/flow/pkg/metadata; the SDK re-exports the two it reads
+// so node code and CheckCapability keep a stable name.
 const (
 	// MetadataKeyNodeID is the gRPC metadata key carrying the Sidecar-injected
 	// node identity.
-	MetadataKeyNodeID = "x-flow-node-id"
+	MetadataKeyNodeID = flowmeta.MetadataKeyNodeID
 	// MetadataKeyCapabilities is the gRPC metadata key carrying the
 	// Sidecar-injected, comma-separated capability grants for the node.
-	MetadataKeyCapabilities = "x-flow-capabilities"
+	MetadataKeyCapabilities = flowmeta.MetadataKeyCapabilities
 )
 
 // CheckCapability enforces deny-by-default capability gating for
