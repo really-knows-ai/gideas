@@ -4373,8 +4373,9 @@ func TestBranchTransactionState_InMemoryLifecycle(t *testing.T) {
 	if err := s.CreateBranchDB(context.Background(), "tx-state"); err != nil {
 		t.Fatalf("CreateBranchDB: %v", err)
 	}
-	if _, err := s.LoadBranchTransactionState(context.Background(), "tx-state"); err == nil {
-		t.Fatal("unregistered branch state was accepted")
+	if _, err := s.LoadBranchTransactionState(context.Background(), "tx-state"); err != nil &&
+		!errors.Is(err, store.ErrBranchStateMissing) {
+		t.Fatalf("unregistered branch state: expected ErrBranchStateMissing, got %v", err)
 	}
 	want := store.BranchTransactionState{
 		MainHeadAtLastSync: "head", SchemaHash: "schema", AppliedTimeout: 5 * time.Minute,
@@ -4390,8 +4391,9 @@ func TestBranchTransactionState_InMemoryLifecycle(t *testing.T) {
 	if err := s.DropBranchDB(context.Background(), "tx-state"); err != nil {
 		t.Fatalf("DropBranchDB: %v", err)
 	}
-	if _, err = s.LoadBranchTransactionState(context.Background(), "tx-state"); err == nil {
-		t.Fatal("dropped branch state was accepted")
+	if _, err = s.LoadBranchTransactionState(context.Background(), "tx-state"); err != nil &&
+		!errors.Is(err, store.ErrBranchStateMissing) {
+		t.Fatalf("dropped branch state: expected ErrBranchStateMissing, got %v", err)
 	}
 }
 
@@ -4420,8 +4422,9 @@ func TestBranchTransactionState_MissingRecordFailsClosed(t *testing.T) {
 		t.Fatalf("Open: %v", err)
 	}
 	defer closeStore(t, reopened)
-	if _, err := reopened.LoadBranchTransactionState(context.Background(), "tx-state"); err == nil {
-		t.Fatal("missing branch state marker was accepted")
+	if _, err := reopened.LoadBranchTransactionState(context.Background(), "tx-state"); err != nil &&
+		!errors.Is(err, store.ErrBranchStateMissing) {
+		t.Fatalf("missing branch state marker: expected ErrBranchStateMissing, got %v", err)
 	}
 }
 

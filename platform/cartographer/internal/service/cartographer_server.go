@@ -470,12 +470,12 @@ func (s *CartographerServer) cleanupMissingRecoveryBranch(ctx context.Context, t
 // isMissingBranchStateError reports whether LoadBranchTransactionState failed
 // because no durable lifecycle record exists for the branch — the
 // BeginTransaction crash window (git branch + branch DB persisted, state
-// record never written). The store returns a plain message error for the
-// missing record ("branch state is missing"); every other state error
-// (corrupt record, unsupported version, invalid baseline) is a genuine state
-// problem and stays a hard failure.
+// record never written). The store signals the missing record with
+// ErrBranchStateMissing; every other state error (corrupt record, unsupported
+// version, invalid baseline) is a genuine state problem and stays a hard
+// failure.
 func isMissingBranchStateError(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "branch state is missing")
+	return errors.Is(err, store.ErrBranchStateMissing)
 }
 
 func (s *CartographerServer) cleanupIdenticalRecoveryBranch(ctx context.Context, txID string) error {
