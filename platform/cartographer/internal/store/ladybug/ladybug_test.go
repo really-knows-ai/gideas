@@ -2899,22 +2899,40 @@ func TestPersistence_MissingOrCorruptSchemaMetadataFailsClosed(t *testing.T) {
 	}
 }
 
-func TestPersistence_MissingBranchSchemaMetadataFailsClosed(t *testing.T) {
+// SPEC R9 recovery point 4 rolls back a transaction whose branch .lbug is
+// absent; this pins the sibling crash window inside ReplicateSchemaToBranch.
+// The branch schema metadata (branches/<txID>.schema.json) is written only
+// after ReplicateSchemaToBranch's DDL loop, so a crash after ≥1 table is
+// created but before the metadata write leaves a branch .lbug with a
+// non-empty catalog and no schema metadata. The client never received the
+// txID (the BeginTransaction response is sent only after the metadata write
+// succeeds), so the transaction is provably harmless and the reopen must
+// classify the partial branch exactly like the absent-.lbug case —
+// ErrBranchNotFound, which RecoverOpenTransactions turns into a rollback via
+// cleanupTransaction/DropBranchDB — instead of surfacing a hard error that
+// bricks startup. A present-but-corrupt metadata file stays a loud failure
+// (the guard matches only the not-exist read error).
+func TestPersistence_MissingBranchSchemaMetadataRollsBackOnReopen(t *testing.T) {
 	dir := t.TempDir()
+	ctx := context.Background()
 	s, err := Open(dir)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	applyTestSchema(t, s)
-	if err := s.CreateBranchDB(context.Background(), "tx-missing-metadata"); err != nil {
+	if err := s.CreateBranchDB(ctx, "tx-missing-metadata"); err != nil {
 		t.Fatalf("CreateBranchDB: %v", err)
 	}
-	if err := s.ReplicateSchemaToBranch(context.Background(), "tx-missing-metadata"); err != nil {
+	if err := s.ReplicateSchemaToBranch(ctx, "tx-missing-metadata"); err != nil {
 		t.Fatalf("ReplicateSchemaToBranch: %v", err)
 	}
 	if err := s.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
+	// Remove the branch schema metadata: the crash residue of a replication
+	// interrupted before the metadata write is a non-empty catalog with an
+	// absent branches/<txID>.schema.json (on disk indistinguishable from a
+	// metadata file lost after the fact).
 	metadataPath := filepath.Join(dir, "branches", "tx-missing-metadata.schema.json")
 	if err := os.Remove(metadataPath); err != nil {
 		t.Fatalf("remove branch metadata: %v", err)
@@ -2924,11 +2942,22 @@ func TestPersistence_MissingBranchSchemaMetadataFailsClosed(t *testing.T) {
 		t.Fatalf("reopen main: %v", err)
 	}
 	defer closeStore(t, reopened)
-	if _, err := reopened.DumpAllEntities(context.Background(), "tx-missing-metadata"); err == nil {
-		t.Fatal("expected missing branch metadata error")
+	// The partial branch must be classified for rollback, not hard-failed.
+	if _, err := reopened.DumpAllEntities(ctx, "tx-missing-metadata"); !errors.Is(err, store.ErrBranchNotFound) {
+		t.Fatalf("DumpAllEntities = %v, want ErrBranchNotFound (rollback classification)", err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "branches", "tx-missing-metadata.lbug")); err != nil {
-		t.Fatalf("branch database was removed: %v", err)
+	// The rollback path (RecoverOpenTransactions' cleanup) drops the branch via
+	// DropBranchDB; it must succeed and remove the persisted .lbug.
+	if err := reopened.DropBranchDB(ctx, "tx-missing-metadata"); err != nil {
+		t.Fatalf("DropBranchDB: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "branches", "tx-missing-metadata.lbug")); !os.IsNotExist(err) {
+		t.Fatalf("branch .lbug was not removed by rollback: %v", err)
+	}
+	// After the rollback the branch is fully absent: classification stays
+	// ErrBranchNotFound, never a resurrected partial branch.
+	if _, err := reopened.DumpAllEntities(ctx, "tx-missing-metadata"); !errors.Is(err, store.ErrBranchNotFound) {
+		t.Fatalf("DumpAllEntities after rollback = %v, want ErrBranchNotFound", err)
 	}
 }
 
@@ -2941,8 +2970,10 @@ func TestPersistence_MissingBranchSchemaMetadataFailsClosed(t *testing.T) {
 // classify it exactly like the absent-.lbug case (ErrBranchNotFound, which
 // RecoverOpenTransactions turns into a rollback via cleanupTransaction/
 // DropBranchDB) instead of surfacing a hard error that bricks startup. The
-// non-empty-catalog sibling (TestPersistence_MissingBranchSchemaMetadataFailsClosed)
-// stays a loud failure.
+// non-empty-catalog sibling — a crash mid-DDL in ReplicateSchemaToBranch
+// (TestPersistence_MissingBranchSchemaMetadataRollsBackOnReopen) — is
+// classified identically: the client never received the txID, so the partial
+// branch is just as harmless.
 func TestBranch_EmptyBranchNoMetadataRollsBackOnReopen(t *testing.T) {
 	dir := t.TempDir()
 	s, err := Open(dir)
