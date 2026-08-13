@@ -20,8 +20,7 @@ type session struct {
 	conn         *grpc.ClientConn
 	eventBusConn *grpc.ClientConn
 
-	timeout    time.Duration
-	maxRetries int
+	timeout time.Duration
 
 	// Base context for Cartographer operations, cancelled on Close().
 	// ponytail: Cartographer operations use a session-scoped base context;
@@ -75,7 +74,6 @@ func newSession(cfg *clientConfig) (*session, error) {
 		namespace:      namespace,
 		conn:           conn,
 		timeout:        cfg.timeout,
-		maxRetries:     cfg.maxRetries,
 		ctx:            sessCtx,
 		cancel:         sessCancel,
 		Sidecar:        flowv1.NewSidecarServiceClient(conn),
@@ -147,10 +145,6 @@ func (s *session) call(ctx context.Context, fn func(context.Context) error, key 
 		ctx = metadata.AppendToOutgoingContext(ctx, kv...)
 	}
 	// Apply per-call timeout from the session config.
-	// ponytail: The timeout and maxRetries fields already exist on the
-	// session struct; this implementation consumes s.timeout as a per-call
-	// deadline, and s.maxRetries is reserved for a future retry-with-backoff
-	// pass.
 	if s.timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, s.timeout)

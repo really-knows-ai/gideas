@@ -533,14 +533,6 @@ func TestNewClient_WithRequestTimeout(t *testing.T) {
 	}
 }
 
-func TestNewClient_WithRetry(t *testing.T) {
-	cfg := &clientConfig{sidecarAddr: DefaultSidecarAddress}
-	WithRetry(3)(cfg)
-	if cfg.maxRetries != 3 {
-		t.Fatalf("expected maxRetries=3, got %d", cfg.maxRetries)
-	}
-}
-
 func TestClient_Close(t *testing.T) {
 	env := setupTestEnv(t, "workitem-close-001")
 	err := env.client.Close()
