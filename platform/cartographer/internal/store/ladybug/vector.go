@@ -11,66 +11,6 @@ import (
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
 )
 
-// IsVectorIndexBootstrapped returns true if the entity type has a non-null
-// embedding column and a vector index exists. Read failures (lock acquisition,
-// embedding-dimension read, or the show_indexes catalog read — query, row
-// read, or parse) are propagated with a context-carrying error, never swallowed
-// into "not bootstrapped": a caller that treats a nil error as authoritative
-// vector state would silently lose the bootstrap signal on a transient catalog
-// failure (sibling scans vectorIndexesOnConn and collectVectorIndexes fail
-// loudly for the same reason). An unknown entity type and an un-bootstrapped
-// (dim == 0) type are legitimate "not bootstrapped" outcomes, not failures.
-func (db *ladybugDB) IsVectorIndexBootstrapped(_ context.Context, entityType, branch string) (bool, error) {
-	conn, typeDefs, unlock, err := db.lockForRead(branch)
-	if err != nil {
-		return false, err
-	}
-	defer unlock()
-
-	def, ok := typeDefs.entityTypeDefs[entityType]
-	if !ok {
-		return false, nil
-	}
-
-	// Check that the embedding column exists with a dimension > 0.
-	dim, err := getEmbeddingDimension(conn, entityType, def.EnableVectorIndex)
-	if err != nil {
-		return false, fmt.Errorf("read embedding dimension for %q: %w", entityType, err)
-	}
-	if dim == 0 {
-		return false, nil
-	}
-
-	// Check that a vector index exists.
-	q := "CALL show_indexes() RETURN *;"
-	result, err := conn.Query(q)
-	if err != nil {
-		return false, fmt.Errorf("list vector indexes for %q: %w", entityType, err)
-	}
-	defer result.Close()
-
-	for result.HasNext() {
-		tuple, err := result.Next()
-		if err != nil {
-			return false, fmt.Errorf("read vector index row for %q: %w", entityType, err)
-		}
-		vals, err := tuple.GetAsSlice()
-		tuple.Close()
-		if err != nil {
-			return false, fmt.Errorf("parse vector index row for %q: %w", entityType, err)
-		}
-		if len(vals) < 3 {
-			continue
-		}
-		tableName := fmt.Sprintf("%v", vals[0])
-		indexType := fmt.Sprintf("%v", vals[2])
-		if tableName == entityType && strings.EqualFold(indexType, "HNSW") {
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
 // GetEstablishedDimension returns the dimension of the FLOAT[n] embedding
 // column for the given entity type, or 0 if not established.
 func (db *ladybugDB) GetEstablishedDimension(_ context.Context, entityType, branch string) (int, error) {
@@ -90,22 +30,6 @@ func (db *ladybugDB) GetEstablishedDimension(_ context.Context, entityType, bran
 		return 0, fmt.Errorf("read embedding dimension for %q: %w", entityType, err)
 	}
 	return dim, nil
-}
-
-// WipeAll removes all graph data while preserving schema and indexes.
-func (db *ladybugDB) WipeAll(ctx context.Context) error {
-	conn, _, unlock, err := db.lockForWrite("")
-	if err != nil {
-		return err
-	}
-	defer unlock()
-
-	result, err := conn.Query("MATCH (n) DETACH DELETE n;")
-	if err != nil {
-		return fmt.Errorf("delete graph data: %w", err)
-	}
-	result.Close()
-	return nil
 }
 
 // WipeSchema drops all schema tables, indexes, and metadata, leaving the

@@ -45,10 +45,9 @@ type Store interface {
 	ApplySchema(ctx context.Context, schema *flowv1.Schema) error
 	TableExists(entityType string) bool
 	ListMainEntityTypes() ([]string, error)
-	EntityTypeNames() []string
-	EdgeTypeNames() []string
-	EntityType(name string) (*EntityTypeDef, bool)
-	EdgeType(name string) (*EdgeTypeDef, bool)
+	// EntityTypeNames, EdgeTypeNames, EntityType, and EdgeType are provided by
+	// the embedded SchemaProvider (types.go) rather than re-declared here.
+	SchemaProvider
 
 	// Entity CRUD
 	//
@@ -126,11 +125,9 @@ type Store interface {
 	RehydrateFromBranch(ctx context.Context, txID string) error
 	RehydrateMainFromFiles(ctx context.Context, entitiesDir, edgesDir string) error
 	HydrateBranchFromFiles(ctx context.Context, txID, entitiesDir, edgesDir string) error
-	IsVectorIndexBootstrapped(ctx context.Context, entityType, branch string) (bool, error)
 	GetEstablishedDimension(ctx context.Context, entityType, branch string) (int, error)
 
 	// Wipe
-	WipeAll(ctx context.Context) error
 	WipeSchema(ctx context.Context) error
 
 	// Health
@@ -139,20 +136,6 @@ type Store interface {
 	// Branch scanning
 	DumpAllEntities(ctx context.Context, txID string) ([]Entity, error)
 	DumpAllEdges(ctx context.Context, txID string) ([]Edge, error)
-	// ListEntityTypes returns the entity type names known to a branch (or main).
-	//
-	// ponytail: Deliberately omits context.Context — the only branch-scanned
-	// method that does. The read is purely in-memory (a mutex-guarded snapshot
-	// of the type-definition cache; see lockForRead in ladybug/branch.go), so
-	// unlike its siblings there is no cancellable I/O to bound and a caller can
-	// never block on a hung engine. Failure mode if this drifts: an
-	// implementation that starts querying LadybugDB would have no context to
-	// cancel, propagate deadlines through, or carry trace values, silently
-	// wedging callers on a hung catalog read with no escape hatch or
-	// observability correlation. Upgrade path: add ctx context.Context the
-	// moment this method performs real I/O, aligning it with the rest of the
-	// interface.
-	ListEntityTypes(txID string) ([]string, error)
 
 	Close() error
 }

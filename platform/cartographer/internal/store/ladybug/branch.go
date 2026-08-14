@@ -809,17 +809,6 @@ func (db *ladybugDB) DumpAllEdges(ctx context.Context, txID string) ([]store.Edg
 	return results, nil
 }
 
-// ListEntityTypes returns the entity type names known to a branch (or main).
-func (db *ladybugDB) ListEntityTypes(txID string) ([]string, error) {
-	_, typeDefs, unlock, err := db.lockForRead(txID)
-	if err != nil {
-		return nil, err
-	}
-	defer unlock()
-
-	return sortedKeys(typeDefs.entityTypeDefs), nil
-}
-
 // --------------------------------------------------------------------------
 // Internal helpers — table DDL on an arbitrary connection
 // --------------------------------------------------------------------------

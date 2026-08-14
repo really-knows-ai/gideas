@@ -46,9 +46,9 @@ const embeddingPropertyValue = "not-a-vector"
 const driftedColumnType = "INT64"
 
 func TestOpenClose(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
-		t.Fatalf("OpenInMemory() error: %v", err)
+		t.Fatalf("openInMemory() error: %v", err)
 	}
 	defer func() {
 		if err := s.Close(); err != nil {
@@ -72,38 +72,8 @@ func TestOpenFileBacked(t *testing.T) {
 	}
 }
 
-func TestWipeAllClearsDataAndPreservesSchema(t *testing.T) {
-	s, err := OpenInMemory()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer closeStore(t, s)
-	ctx := context.Background()
-	if err := s.ApplySchema(ctx, &flowv1.Schema{EntityTypes: []*flowv1.EntityType{{
-		Name: "Document", Properties: []*flowv1.Property{{Name: "title", Type: "string"}},
-	}}}); err != nil {
-		t.Fatalf("ApplySchema: %v", err)
-	}
-	if _, err := s.CreateEntity(ctx, "Document", "", map[string]string{"title": "before"}, nil, "main"); err != nil {
-		t.Fatalf("CreateEntity: %v", err)
-	}
-	if err := s.WipeAll(ctx); err != nil {
-		t.Fatalf("WipeAll: %v", err)
-	}
-	if !s.TableExists("Document") {
-		t.Fatal("schema was removed by WipeAll")
-	}
-	entities, _, err := s.ListEntities(ctx, "Document", 10, "", "main")
-	if err != nil {
-		t.Fatalf("ListEntities: %v", err)
-	}
-	if len(entities) != 0 {
-		t.Fatalf("expected empty graph after WipeAll, got %d entities", len(entities))
-	}
-}
-
 func TestRehydrateMainFromFilesReplacesEntitiesAndEdgesAndPreservesVectorState(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,11 +138,7 @@ func TestRehydrateMainFromFilesReplacesEntitiesAndEdgesAndPreservesVectorState(t
 	); err != nil || dimension != 2 {
 		t.Fatalf("vector dimension changed: dimension=%d error=%v", dimension, err)
 	}
-	if ok, err := s.IsVectorIndexBootstrapped(context.Background(), "Component", "main"); err != nil {
-		t.Fatalf("IsVectorIndexBootstrapped: %v", err)
-	} else if !ok {
-		t.Fatal("vector index was not preserved")
-	}
+	assertVectorIndexState(t, s, "Component", "main", true, "vector index was not preserved")
 }
 
 func writeJSONFile(t *testing.T, path string, value any) {
@@ -190,7 +156,7 @@ func writeJSONFile(t *testing.T, path string, value any) {
 }
 
 func TestApplySchema_CreateEntityType(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -218,7 +184,7 @@ func TestApplySchema_CreateEntityType(t *testing.T) {
 }
 
 func TestApplySchema_CreateEdgeType(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -260,7 +226,7 @@ func TestApplySchema_CreateEdgeType(t *testing.T) {
 }
 
 func TestApplySchema_Idempotent(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -286,7 +252,7 @@ func TestApplySchema_Idempotent(t *testing.T) {
 }
 
 func TestApplySchema_TableExists(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -314,7 +280,7 @@ func TestApplySchema_TableExists(t *testing.T) {
 }
 
 func TestApplySchema_EntityTypeDefs(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -440,19 +406,19 @@ func TestSchemaCache_RebuildOnOpen(t *testing.T) {
 }
 
 func TestExtensions_Load(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer closeStore(t, s)
 
-	// No explicit check — if OpenInMemory succeeded, extensions were loaded.
-	// A failure to load extensions would have caused OpenInMemory to return an error.
+	// No explicit check — if openInMemory succeeded, extensions were loaded.
+	// A failure to load extensions would have caused openInMemory to return an error.
 }
 
 func TestHealth(t *testing.T) {
 	t.Run("in-memory", func(t *testing.T) {
-		s, err := OpenInMemory()
+		s, err := openInMemory()
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -515,7 +481,7 @@ func TestHealth(t *testing.T) {
 	})
 
 	t.Run("closed store reports unhealthy", func(t *testing.T) {
-		s, err := OpenInMemory()
+		s, err := openInMemory()
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -534,7 +500,7 @@ func TestHealth(t *testing.T) {
 }
 
 func TestClosedStore_ReturnsError(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -549,7 +515,7 @@ func TestClosedStore_ReturnsError(t *testing.T) {
 }
 
 func TestListMainEntityTypes(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -617,7 +583,7 @@ func TestApplySchema_RejectsUntypedPlaceholderName(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			s, err := OpenInMemory()
+			s, err := openInMemory()
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -640,7 +606,7 @@ func TestApplySchema_RejectsUntypedPlaceholderName(t *testing.T) {
 // s.EntityTypes on the nil pointer and would panic — surfacing as gRPC
 // INTERNAL instead of the correct INVALID_ARGUMENT.
 func TestApplySchema_NilSchema_Rejected(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -665,7 +631,7 @@ func TestApplySchema_NilSchema_Rejected(t *testing.T) {
 // every catalog table and drops the placeholder with the rest.
 func TestUntypedPlaceholder_Lifecycle(t *testing.T) {
 	t.Run("edgeless edge type creates the placeholder node table", func(t *testing.T) {
-		s, err := OpenInMemory()
+		s, err := openInMemory()
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -749,7 +715,7 @@ func TestUntypedPlaceholder_Lifecycle(t *testing.T) {
 	})
 
 	t.Run("removed by WipeSchema", func(t *testing.T) {
-		s, err := OpenInMemory()
+		s, err := openInMemory()
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -803,11 +769,67 @@ func tableKindOnConn(t *testing.T, conn *lbug.Connection, name string) string {
 	return ""
 }
 
+// openInMemory is the package-test constructor for an ephemeral in-memory
+// LadybugDB. The exported OpenInMemory seam was removed as test-only dead
+// production surface (LEARNINGS: test-only callers do not justify a production
+// surface); this test-local replacement keeps the in-package tests on an
+// in-memory engine. Cross-package tests (service) use a temp-dir file-backed
+// Open instead.
+func openInMemory() (store.Store, error) {
+	database, err := lbug.OpenInMemoryDatabase(lbug.DefaultSystemConfig())
+	if err != nil {
+		return nil, fmt.Errorf("open in-memory database: %w", err)
+	}
+
+	conn, err := lbug.OpenConnection(database)
+	if err != nil {
+		database.Close()
+		return nil, fmt.Errorf("open connection: %w", err)
+	}
+
+	return newLadybugDB("", database, conn)
+}
+
 // closeStore is a test helper that closes the store and reports errors.
 func closeStore(t *testing.T, s interface{ Close() error }) {
 	t.Helper()
 	if err := s.Close(); err != nil {
 		t.Errorf("Close: %v", err)
+	}
+}
+
+// assertVectorIndexState pins the entity type's vector-index bootstrap state on
+// the given branch (SPEC R7). Production reads that state through
+// GetEstablishedDimension (the exported IsVectorIndexBootstrapped seam was
+// removed as test-only dead code), so "bootstrapped" is asserted exactly as the
+// production semantics: an established embedding dimension (dim > 0) AND a
+// present HNSW vector index (the crash-window recovery tests rely on the index
+// half of the check — a re-opened store can carry a locked dimension whose
+// index was never recreated).
+func assertVectorIndexState(t *testing.T, s store.Store, entityType, branch string, want bool, msg string) {
+	t.Helper()
+	dim, err := s.GetEstablishedDimension(context.Background(), entityType, branch)
+	if err != nil {
+		t.Fatalf("GetEstablishedDimension(%q, %q): %v", entityType, branch, err)
+	}
+	if !want {
+		if dim != 0 {
+			t.Fatalf("%s: vector index bootstrapped (dim=%d), want not bootstrapped", msg, dim)
+		}
+		return
+	}
+	db := s.(*ladybugDB)
+	conn, _, unlock, err := db.lockForRead(branch)
+	if err != nil {
+		t.Fatalf("lockForRead(%q): %v", branch, err)
+	}
+	defer unlock()
+	indexed, err := vectorIndexExists(conn, entityType)
+	if err != nil {
+		t.Fatalf("vectorIndexExists(%q): %v", entityType, err)
+	}
+	if dim == 0 || !indexed {
+		t.Fatalf("%s: vector index not bootstrapped (dim=%d, indexed=%v)", msg, dim, indexed)
 	}
 }
 
@@ -863,7 +885,7 @@ func applyTestSchema(t *testing.T, s store.Store) {
 // ---------------------------------------------------------------------------
 
 func TestCreateEntity_Valid(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -887,7 +909,7 @@ func TestCreateEntity_Valid(t *testing.T) {
 }
 
 func TestCreateEntity_DuplicateID(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -909,7 +931,7 @@ func TestCreateEntity_DuplicateID(t *testing.T) {
 }
 
 func TestCreateEntity_InvalidUUID(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -926,7 +948,7 @@ func TestCreateEntity_InvalidUUID(t *testing.T) {
 }
 
 func TestCreateEntity_NonCanonicalUUIDSpellingRejected(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -952,7 +974,7 @@ func TestCreateEntity_NonCanonicalUUIDSpellingRejected(t *testing.T) {
 }
 
 func TestCreateEntity_UnknownType(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -969,7 +991,7 @@ func TestCreateEntity_UnknownType(t *testing.T) {
 }
 
 func TestCreateEntity_MissingRequiredProperty(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1015,7 +1037,7 @@ func TestCreateEntity_StructuralErrorBeforeDuplicateID(t *testing.T) {
 	}
 
 	id := uuid.New().String()
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1039,7 +1061,7 @@ func TestCreateEntity_StructuralErrorBeforeDuplicateID(t *testing.T) {
 	// Duplicate id + missing required property → ErrMissingRequiredProperty
 	// (INVALID_ARGUMENT), not ErrEntityAlreadyExists. Uses a fresh store whose
 	// schema declares a required property.
-	s2, err := OpenInMemory()
+	s2, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1097,7 +1119,7 @@ func TestCreateEntity_StructuralErrorBeforeDuplicateID(t *testing.T) {
 }
 
 func TestGetEntity_Found(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1123,7 +1145,7 @@ func TestGetEntity_Found(t *testing.T) {
 }
 
 func TestGetEntity_NotFound(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1140,7 +1162,7 @@ func TestGetEntity_NotFound(t *testing.T) {
 }
 
 func TestUpdateEntity_Valid(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1167,7 +1189,7 @@ func TestUpdateEntity_Valid(t *testing.T) {
 }
 
 func TestUpdateEntity_Partial(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1198,7 +1220,7 @@ func TestUpdateEntity_Partial(t *testing.T) {
 // property must succeed because updates are partial — only the supplied
 // properties are SET. The Required constraint applies only at create time.
 func TestUpdateEntity_OmitsRequiredProperty_Succeeds(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1241,7 +1263,7 @@ func TestUpdateEntity_OmitsRequiredProperty_Succeeds(t *testing.T) {
 }
 
 func TestDeleteEntity_Valid(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1269,7 +1291,7 @@ func TestDeleteEntity_Valid(t *testing.T) {
 }
 
 func TestDeleteEntity_NotFound(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1290,7 +1312,7 @@ func TestDeleteEntity_NotFound(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestCreateEdge_Valid(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1326,7 +1348,7 @@ func TestCreateEdge_Valid(t *testing.T) {
 }
 
 func TestCreateEdge_MissingRequiredProperty(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1378,7 +1400,7 @@ func TestCreateEdge_MissingRequiredProperty(t *testing.T) {
 // surfaces the structural error (unknown/missing required property →
 // INVALID_ARGUMENT) rather than the existence NOT_FOUND masking it.
 func TestCreateEdge_StructuralErrorBeforeEntityExistence(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1438,7 +1460,7 @@ func TestCreateEdge_StructuralErrorBeforeEntityExistence(t *testing.T) {
 }
 
 func TestCreateEdge_SourceNotFound(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1460,7 +1482,7 @@ func TestCreateEdge_SourceNotFound(t *testing.T) {
 }
 
 func TestCreateEdge_RuleViolation(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1488,7 +1510,7 @@ func TestCreateEdge_RuleViolation(t *testing.T) {
 }
 
 func TestCreateEdge_TargetNotFound(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1515,7 +1537,7 @@ func TestCreateEdge_TargetNotFound(t *testing.T) {
 // NOT_FOUND). Regression: CreateEdge wrapped every findEntityByID error —
 // including Prepare/Execute failures — in ErrSourceOrTargetNotFound.
 func TestCreateEdge_PropagatesProbeOperationalError(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1544,7 +1566,7 @@ func TestCreateEdge_PropagatesProbeOperationalError(t *testing.T) {
 }
 
 func TestCreateEdge_NoRulesDeclared(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1573,7 +1595,7 @@ func TestCreateEdge_NoRulesDeclared(t *testing.T) {
 }
 
 func TestDeleteEdge_Valid(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1618,7 +1640,7 @@ func TestDeleteEdge_Valid(t *testing.T) {
 }
 
 func TestDeleteEdge_NotFound(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1635,7 +1657,7 @@ func TestDeleteEdge_NotFound(t *testing.T) {
 }
 
 func TestGetEdge_NotFound(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1652,7 +1674,7 @@ func TestGetEdge_NotFound(t *testing.T) {
 }
 
 func TestCreateEdge_InvalidUUID(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1682,7 +1704,7 @@ func TestCreateEdge_InvalidUUID(t *testing.T) {
 }
 
 func TestDeleteEdge_InvalidUUID(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1699,7 +1721,7 @@ func TestDeleteEdge_InvalidUUID(t *testing.T) {
 }
 
 func TestListEdgesOfType(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1742,7 +1764,7 @@ func TestListEdgesOfType(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestExecuteCypher_ReadOnly(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1773,7 +1795,7 @@ func TestExecuteCypher_ReadOnly(t *testing.T) {
 }
 
 func TestExecuteCypher_MutationRejected(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1823,7 +1845,7 @@ func TestExecuteCypher_MutationRejected(t *testing.T) {
 // prepare-fail loop and the "mutating CALLs grammar cannot parse" subtest
 // below.
 func TestExecuteCypher_MutationClausesClassified(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1925,7 +1947,7 @@ func TestExecuteCypher_MutationClausesClassified(t *testing.T) {
 // be rejected as a mutation, so LOAD CSV surfaces ErrInvalidCypher
 // (INVALID_ARGUMENT), never ErrMutationCypher (PERMISSION_DENIED).
 func TestExecuteCypher_ReadOnlyClausesClassified(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2010,7 +2032,7 @@ func TestExecuteCypher_ReadOnlyClausesClassified(t *testing.T) {
 // comment (e.g. `MATCH (n:Component) RETURN n 'delete'`) therefore keeps
 // INVALID_ARGUMENT, never PERMISSION_DENIED.
 func TestExecuteCypher_StringLiteralKeywordNotMutation(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2054,7 +2076,7 @@ func TestExecuteCypher_StringLiteralKeywordNotMutation(t *testing.T) {
 // the ExtractEntityTypes seam, whose error classification is identical to
 // ExecuteCypher's (SPEC check order).
 func TestExecuteCypher_BareMutationKeywordTrailingReturnNotMutation(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2087,7 +2109,7 @@ func TestExecuteCypher_BareMutationKeywordTrailingReturnNotMutation(t *testing.T
 }
 
 func TestExecuteCypher_WithParams(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2150,7 +2172,7 @@ func extractTestSchema(t *testing.T, s store.Store) {
 // syntax → read-only enforcement → capability" (SPEC:958) holds.
 func TestExtractEntityTypes(t *testing.T) {
 	ctx := context.Background()
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2372,7 +2394,7 @@ func TestExtractEntityTypeLabels(t *testing.T) {
 }
 
 func TestListEntities_DefaultPageSize(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2400,7 +2422,7 @@ func TestListEntities_DefaultPageSize(t *testing.T) {
 }
 
 func TestListEntities_PageSizeCap(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2417,7 +2439,7 @@ func TestListEntities_PageSizeCap(t *testing.T) {
 }
 
 func TestListEntities_NegativePageSize(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2434,7 +2456,7 @@ func TestListEntities_NegativePageSize(t *testing.T) {
 }
 
 func TestListEntities_Pagination(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2481,7 +2503,7 @@ func TestListEntities_Pagination(t *testing.T) {
 // exactly why the overflow is practically unreachable — the boundary test asserts the
 // accepted-bound and the rejected-downstream-bound so the ceiling stays explicit.
 func TestListEntities_PageTokenOverflowBoundary(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2519,7 +2541,7 @@ func TestListEntities_PageTokenOverflowBoundary(t *testing.T) {
 }
 
 func TestSearchNeighbors_Valid(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2546,7 +2568,7 @@ func TestSearchNeighbors_Valid(t *testing.T) {
 }
 
 func TestSearchNeighbors_NonIndexed(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2564,7 +2586,7 @@ func TestSearchNeighbors_NonIndexed(t *testing.T) {
 }
 
 func TestSearchNeighbors_UnknownType(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2582,7 +2604,7 @@ func TestSearchNeighbors_UnknownType(t *testing.T) {
 }
 
 func TestSearchNeighbors_EmptyEmbedding(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2608,7 +2630,7 @@ func TestSearchNeighbors_EmptyEmbedding(t *testing.T) {
 }
 
 func TestSearchNeighbors_NegativeTopK(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2625,7 +2647,7 @@ func TestSearchNeighbors_NegativeTopK(t *testing.T) {
 }
 
 func TestSearchNeighbors_DimensionMismatch(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2654,7 +2676,7 @@ func TestSearchNeighbors_DimensionMismatch(t *testing.T) {
 // embedding whose dimension matches no indexed type must return
 // ErrEmbeddingDimension even when the entity type is omitted.
 func TestSearchNeighbors_WildcardType_DimensionMismatch(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2685,7 +2707,7 @@ func TestSearchNeighbors_WildcardType_DimensionMismatch(t *testing.T) {
 // established index, and with no established index there is nothing to mismatch.
 func TestSearchNeighbors_WildcardEmptyGraph_Succeeds(t *testing.T) {
 	t.Run("no schema applied", func(t *testing.T) {
-		s, err := OpenInMemory()
+		s, err := openInMemory()
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -2702,7 +2724,7 @@ func TestSearchNeighbors_WildcardEmptyGraph_Succeeds(t *testing.T) {
 	})
 
 	t.Run("schema applied but no vector index bootstrapped", func(t *testing.T) {
-		s, err := OpenInMemory()
+		s, err := openInMemory()
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -2722,7 +2744,7 @@ func TestSearchNeighbors_WildcardEmptyGraph_Succeeds(t *testing.T) {
 }
 
 func TestFullTextSearch_Valid(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2745,7 +2767,7 @@ func TestFullTextSearch_Valid(t *testing.T) {
 }
 
 func TestFullTextSearch_CrossType(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2781,7 +2803,7 @@ func TestFullTextSearch_CrossType(t *testing.T) {
 // search matching more than 100 documents must return all of them, not the
 // capped subset.
 func TestFullTextSearch_NoResultCap(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3452,9 +3474,7 @@ func TestVectorBootstrapIndexFailureHealsOnReopen(t *testing.T) {
 				t.Fatalf("reopen after interrupted vector bootstrap: %v", err)
 			}
 			defer closeStore(t, reopened)
-			if ok, ierr := reopened.IsVectorIndexBootstrapped(context.Background(), "Vector", branch); ierr != nil || !ok {
-				t.Fatalf("interrupted vector index not completed on reopen: %v", ierr)
-			}
+			assertVectorIndexState(t, reopened, "Vector", branch, true, "interrupted vector index not completed on reopen")
 			if dim, derr := reopened.GetEstablishedDimension(context.Background(), "Vector", branch); derr != nil || dim != 2 {
 				t.Fatalf("vector dimension after recovery = %d, %v, want 2", dim, derr)
 			}
@@ -3526,9 +3546,7 @@ func TestBranchVectorMetadataPublishFailureRecoversOnReopen(t *testing.T) {
 	if _, err := reopened.DumpAllEntities(context.Background(), branch); err != nil {
 		t.Fatalf("branch unusable after metadata-publish crash residue: %v", err)
 	}
-	if ok, ierr := reopened.IsVectorIndexBootstrapped(context.Background(), "Vector", branch); ierr != nil || !ok {
-		t.Fatalf("branch vector state not recovered: %v", ierr)
-	}
+	assertVectorIndexState(t, reopened, "Vector", branch, true, "branch vector state not recovered")
 	if dim, derr := reopened.GetEstablishedDimension(context.Background(), "Vector", branch); derr != nil || dim != 2 {
 		t.Fatalf("branch vector dimension after recovery = %d, %v, want 2", dim, derr)
 	}
@@ -3582,9 +3600,7 @@ func TestMainVectorMetadataPublishFailureRecoversOnReopen(t *testing.T) {
 	if dim, derr := reopened.GetEstablishedDimension(context.Background(), "Vector", ""); derr != nil || dim != 2 {
 		t.Fatalf("vector dimension after recovery = %d, %v, want 2", dim, derr)
 	}
-	if ok, ierr := reopened.IsVectorIndexBootstrapped(context.Background(), "Vector", ""); ierr != nil || !ok {
-		t.Fatalf("vector state not recovered: %v", ierr)
-	}
+	assertVectorIndexState(t, reopened, "Vector", "", true, "vector state not recovered")
 	if _, cerr := reopened.CreateEntity(
 		context.Background(), "Vector", "", map[string]string{"name": "after"}, []float32{3, 4}, "",
 	); cerr != nil {
@@ -3672,11 +3688,8 @@ func TestRehydrateFromBranch_PromotedVectorMetadataSurvivesReopen(t *testing.T) 
 	}}}); err != nil {
 		t.Fatalf("ApplySchema: %v", err)
 	}
-	if ok, err := database.IsVectorIndexBootstrapped(context.Background(), "Vector", ""); err != nil {
-		t.Fatalf("IsVectorIndexBootstrapped: %v", err)
-	} else if ok {
-		t.Fatal("expected Vector not bootstrapped on main before branch write")
-	}
+	assertVectorIndexState(t, database, "Vector", "", false,
+		"expected Vector not bootstrapped on main before branch write")
 
 	const branch = "tx-bootstrap-first"
 	if err := database.CreateBranchDB(context.Background(), branch); err != nil {
@@ -3697,11 +3710,7 @@ func TestRehydrateFromBranch_PromotedVectorMetadataSurvivesReopen(t *testing.T) 
 	if err := database.RehydrateFromBranch(context.Background(), branch); err != nil {
 		t.Fatalf("RehydrateFromBranch: %v", err)
 	}
-	if ok, err := database.IsVectorIndexBootstrapped(context.Background(), "Vector", ""); err != nil {
-		t.Fatalf("IsVectorIndexBootstrapped: %v", err)
-	} else if !ok {
-		t.Fatal("expected vector index promoted to main after rehydrate")
-	}
+	assertVectorIndexState(t, database, "Vector", "", true, "expected vector index promoted to main after rehydrate")
 
 	if err := database.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
@@ -3802,9 +3811,7 @@ func TestVectorBootstrapCrashWindow_UpdateEntityHealsOnReopen(t *testing.T) {
 	if dim, derr := reopened.GetEstablishedDimension(ctx, "Vector", ""); derr != nil || dim != 3 {
 		t.Fatalf("vector dimension after recovery = %d, %v, want 3", dim, derr)
 	}
-	if ok, ierr := reopened.IsVectorIndexBootstrapped(ctx, "Vector", ""); ierr != nil || !ok {
-		t.Fatalf("vector index not recovered: %v", ierr)
-	}
+	assertVectorIndexState(t, reopened, "Vector", "", true, "vector index not recovered after update-bootstrap crash")
 	// The healed store accepts a matching-dimension embedding write.
 	if _, cerr := reopened.CreateEntity(
 		ctx, "Vector", "", map[string]string{"name": "after"}, []float32{4, 5, 6}, "",
@@ -3862,9 +3869,7 @@ func TestVectorBootstrapCrashWindow_EmbeddingRewriteHealsOnReopen(t *testing.T) 
 	if dim, derr := reopened.GetEstablishedDimension(ctx, "Vector", ""); derr != nil || dim != 3 {
 		t.Fatalf("vector dimension after recovery = %d, %v, want 3", dim, derr)
 	}
-	if ok, ierr := reopened.IsVectorIndexBootstrapped(ctx, "Vector", ""); ierr != nil || !ok {
-		t.Fatalf("vector index not recovered: %v", ierr)
-	}
+	assertVectorIndexState(t, reopened, "Vector", "", true, "vector index not recovered after embedding-rewrite crash")
 	// The rewritten embedding survived the crash (the SET committed before it).
 	got, gerr := reopened.GetEntity(ctx, ent.Id, "")
 	if gerr != nil {
@@ -4055,7 +4060,7 @@ func TestVectorBootstrapCrashWindow_BranchFileLoadHealsOnReopen(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestGetEstablishedDimension_UnknownType(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -4072,7 +4077,7 @@ func TestGetEstablishedDimension_UnknownType(t *testing.T) {
 }
 
 func TestEmbeddingBootstrap_DimensionLock(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -4105,7 +4110,7 @@ func TestEmbeddingBootstrap_DimensionLock(t *testing.T) {
 }
 
 func TestEmbeddingBootstrap_DimensionMismatch(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -4131,7 +4136,7 @@ func TestEmbeddingBootstrap_DimensionMismatch(t *testing.T) {
 }
 
 func TestEmbeddingBootstrap_FirstEntityNoEmbedding(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -4149,7 +4154,7 @@ func TestEmbeddingBootstrap_FirstEntityNoEmbedding(t *testing.T) {
 }
 
 func TestCreateEntity_NaNEmbeddingNonIndexed(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -4171,7 +4176,7 @@ func TestCreateEntity_NaNEmbeddingNonIndexed(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestValidateUUID_Version4Required(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -4189,7 +4194,7 @@ func TestValidateUUID_Version4Required(t *testing.T) {
 }
 
 func TestValidateUUID_InvalidFormat(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -4210,7 +4215,7 @@ func TestValidateUUID_InvalidFormat(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestDeleteEntity_CascadeDeletesEdges(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -4257,7 +4262,7 @@ func TestDeleteEntity_CascadeDeletesEdges(t *testing.T) {
 // resolves the entity's type, then checks the caller's capabilities against
 // that type. Pins the found branch: an existing entity resolves to its type.
 func TestResolveEntityType_Found(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -4283,7 +4288,7 @@ func TestResolveEntityType_Found(t *testing.T) {
 // sentinel (learnings rule "Sentinel errors over zero-value returns") rather
 // than a zero-value ("", nil).
 func TestResolveEntityType_NotFound(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -4304,7 +4309,7 @@ func TestResolveEntityType_NotFound(t *testing.T) {
 // entity created on the branch is resolvable on the branch and NOT on main; an
 // entity on main is resolvable on main and NOT on the branch.
 func TestResolveEntityType_BranchScoped(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -4355,7 +4360,7 @@ func TestResolveEntityType_BranchScoped(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestBranch_CreateDrop(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -4374,7 +4379,7 @@ func TestBranch_CreateDrop(t *testing.T) {
 }
 
 func TestBranchTransactionState_InMemoryLifecycle(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -4484,7 +4489,7 @@ func TestBranchTransactionState_PersistsAndRejectsCorruption(t *testing.T) {
 }
 
 func TestBranch_IsolatedWrites(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -4525,7 +4530,7 @@ func TestBranch_IsolatedWrites(t *testing.T) {
 }
 
 func TestBranch_HydrationRoundTrip(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -4630,7 +4635,7 @@ func setupBranch(t *testing.T, s store.Store) {
 }
 
 func TestBranch_ExecuteCypherScoped(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -4668,7 +4673,7 @@ func TestBranch_ExecuteCypherScoped(t *testing.T) {
 }
 
 func TestBranch_SearchNeighborsScoped(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -4706,7 +4711,7 @@ func TestBranch_SearchNeighborsScoped(t *testing.T) {
 }
 
 func TestBranch_FullTextSearchScoped(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -4740,7 +4745,7 @@ func TestBranch_FullTextSearchScoped(t *testing.T) {
 }
 
 func TestBranch_ListEntitiesScoped(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -4779,7 +4784,7 @@ func TestBranch_ListEntitiesScoped(t *testing.T) {
 // only the transaction's isolated instance: the change is visible on the branch
 // but not on main.
 func TestBranch_UpdateEntityScoped(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -4828,7 +4833,7 @@ func TestBranch_UpdateEntityScoped(t *testing.T) {
 // the entity from the transaction's isolated instance only: gone on the branch,
 // still present on main.
 func TestBranch_DeleteEntityScoped(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -4866,7 +4871,7 @@ func TestBranch_DeleteEntityScoped(t *testing.T) {
 // edge from the transaction's isolated instance only: gone on the branch, still
 // present on main.
 func TestBranch_DeleteEdgeScoped(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -4921,7 +4926,7 @@ func TestBranch_DeleteEdgeScoped(t *testing.T) {
 // transaction's isolated instance: the branch sees its own edge, and a main
 // read of the branch's edge ID fails.
 func TestBranch_GetEdgeScoped(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -4961,18 +4966,14 @@ func TestBranch_GetEdgeScoped(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestVectorIndex_Bootstrap(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer closeStore(t, s)
 	applyTestSchema(t, s)
 
-	if ok, err := s.IsVectorIndexBootstrapped(context.Background(), "VectorType", ""); err != nil {
-		t.Fatalf("IsVectorIndexBootstrapped: %v", err)
-	} else if ok {
-		t.Error("expected not bootstrapped before first entity")
-	}
+	assertVectorIndexState(t, s, "VectorType", "", false, "expected not bootstrapped before first entity")
 
 	_, err = s.CreateEntity(context.Background(), "VectorType", "",
 		map[string]string{"name": "v1"}, []float32{1, 2, 3}, "")
@@ -4980,61 +4981,11 @@ func TestVectorIndex_Bootstrap(t *testing.T) {
 		t.Fatalf("CreateEntity: %v", err)
 	}
 
-	if ok, err := s.IsVectorIndexBootstrapped(context.Background(), "VectorType", ""); err != nil {
-		t.Fatalf("IsVectorIndexBootstrapped: %v", err)
-	} else if !ok {
-		t.Error("expected bootstrapped after first entity with embedding")
-	}
-}
-
-// IsVectorIndexBootstrapped must surface a genuine catalog-read failure as a
-// non-nil, wrapped error rather than swallowing it into "not bootstrapped": a
-// caller that treats a nil error as authoritative vector state would silently
-// lose the bootstrap signal on a transient catalog failure (LEARNINGS:
-// storage-layer silent divergence — sibling scans vectorIndexesOnConn and
-// collectVectorIndexes fail loudly for the same reason). Regression: every
-// failure — lock acquisition, getEmbeddingDimension, and the show_indexes
-// query/row/parse — returned false with no error channel. The injected failure
-// here is a real getEmbeddingDimension error: a phantom vector-enabled entity
-// type whose table carries an `embedding` column of a non-FLOAT type is
-// anomalous for a vector-enabled type (crud.go getEmbeddingDimension), driving
-// the error out of the public method instead of the "not bootstrapped" state.
-func TestIsVectorIndexBootstrapped_PropagatesReadFailure(t *testing.T) {
-	s, err := OpenInMemory()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer closeStore(t, s)
-	applyTestSchema(t, s)
-
-	db := s.(*ladybugDB)
-	res, err := db.conn.Query("CREATE NODE TABLE BadVec (id STRING PRIMARY KEY, embedding DOUBLE);")
-	if err != nil {
-		t.Fatalf("create phantom table: %v", err)
-	}
-	res.Close()
-	// Replace the defs (rather than adding) so the probe can never succeed
-	// against a real type.
-	db.mu.Lock()
-	db.entityTypeDefs = map[string]*store.EntityTypeDef{
-		"BadVec": {Name: "BadVec", EnableVectorIndex: true},
-	}
-	db.mu.Unlock()
-
-	ok, err := s.IsVectorIndexBootstrapped(context.Background(), "BadVec", "")
-	if err == nil {
-		t.Fatal("expected the embedding-dimension read failure to surface")
-	}
-	if ok {
-		t.Fatal("a failing catalog read must not report the index as bootstrapped")
-	}
-	if !strings.Contains(err.Error(), "anomalous embedding column type") {
-		t.Fatalf("expected the wrapped anomalous-column error, got %v", err)
-	}
+	assertVectorIndexState(t, s, "VectorType", "", true, "expected bootstrapped after first entity with embedding")
 }
 
 func TestFTSIndex_Search(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -5061,7 +5012,7 @@ func TestFTSIndex_Search(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestRehydrateMainFromFiles_EntitiesDirOnly_ReturnsError(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -5101,7 +5052,7 @@ func TestRehydrateMainFromFiles_EntitiesDirOnly_ReturnsError(t *testing.T) {
 // entities and skipping every edge would hydrate an incomplete graph with no
 // signal.
 func TestHydrateBranchFromFiles_EntitiesDirOnly_ReturnsError(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -5442,7 +5393,7 @@ func TestRehydrateMainFromFiles_InferredEdgeTypeSurvivesFileBackedReopen(t *test
 }
 
 func TestRehydrateMainFromFiles_BothMissing_NoError(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -5460,7 +5411,7 @@ func TestRehydrateMainFromFiles_BothMissing_NoError(t *testing.T) {
 }
 
 func TestLoadEntitiesFromDir_ReadDirError(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -5501,7 +5452,7 @@ func TestLoadEntitiesFromDir_ReadDirError(t *testing.T) {
 // replay of a property-bearing file would fail against a table with only the
 // `id` column.
 func TestRehydrateMainFromFiles_InferredTypeWithProperties(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -5558,7 +5509,7 @@ func TestRehydrateMainFromFiles_InferredTypeWithProperties(t *testing.T) {
 // for an inferred type failed with a raw engine error and re-hydration could
 // not recover edge data.
 func TestRehydrateMainFromFiles_InferredEdgeTypeWithProperties(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -5614,7 +5565,7 @@ func TestRehydrateMainFromFiles_InferredEdgeTypeWithProperties(t *testing.T) {
 // absent from the applied schema must have its rel table inferred so the
 // branch's edge files load instead of failing with a raw engine error.
 func TestHydrateBranchFromFiles_InferredEdgeTypeWithProperties(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -5826,7 +5777,7 @@ func TestRehydrateMainFromFiles_InferredTypeSurvivesFileBackedReopen(t *testing.
 // consistent with the embedding column/index actually created. Without this the
 // in-memory def disagrees with the metadata model and with SearchNeighbors.
 func TestRehydrateMainFromFiles_InferredTypePromotesEnableVectorIndex(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -5861,11 +5812,8 @@ func TestRehydrateMainFromFiles_InferredTypePromotesEnableVectorIndex(t *testing
 	if !def.EnableVectorIndex {
 		t.Error("expected EnableVectorIndex to be promoted to true for re-hydrated type with embedding")
 	}
-	if ok, err := s.IsVectorIndexBootstrapped(context.Background(), "Document", "main"); err != nil {
-		t.Fatalf("IsVectorIndexBootstrapped: %v", err)
-	} else if !ok {
-		t.Error("expected vector index to be bootstrapped for re-hydrated type with embedding")
-	}
+	assertVectorIndexState(t, s, "Document", "main", true,
+		"expected vector index to be bootstrapped for re-hydrated type with embedding")
 }
 
 // ---------------------------------------------------------------------------
@@ -5976,7 +5924,7 @@ func TestApplySchema_AdditiveEntityProperty(t *testing.T) {
 // not retroactively invalidated — it stays readable, and UpdateEntity does not
 // require the property either.
 func TestApplySchema_AdditiveRequiredEntityProperty_ForwardOnly(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -6058,9 +6006,9 @@ func TestApplySchema_AdditiveRequiredEntityProperty_ForwardOnly(t *testing.T) {
 // (ErrDestructiveSchemaChange).
 func TestCheckBranchSchemaCompatibility(t *testing.T) {
 	ctx := context.Background()
-	opened, err := OpenInMemory()
+	opened, err := openInMemory()
 	if err != nil {
-		t.Fatalf("OpenInMemory: %v", err)
+		t.Fatalf("openInMemory: %v", err)
 	}
 	t.Cleanup(func() { _ = opened.Close() })
 	db := opened.(*ladybugDB)
@@ -6405,7 +6353,7 @@ func TestApplySchema_AdditiveEdgeProperty(t *testing.T) {
 // change. The pre-existing edge must stay readable and listed while new edge
 // creation validates against the modified rules.
 func TestApplySchema_RuleModification_PreexistingEdgeRemainsValid(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -6905,7 +6853,7 @@ func TestApplySchema_RedundantRulesDedupPairsSurviveReopen(t *testing.T) {
 // dimension does not match the query embedding and aggregates only the
 // matching-dimension types, instead of aborting on the first mismatched type.
 func TestSearchNeighbors_WildcardHeterogeneousDimensions(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -6948,7 +6896,7 @@ func TestSearchNeighbors_WildcardHeterogeneousDimensions(t *testing.T) {
 }
 
 func TestApplySchema_DestructiveChange_Rejected(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -7011,7 +6959,7 @@ func TestApplySchema_DestructiveChange_Rejected(t *testing.T) {
 // mismatch to FAILED_PRECONDITION; the store surfaces it as
 // ErrDestructiveSchemaChange.
 func TestApplySchema_RemovedEntityType_Rejected(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -7062,7 +7010,7 @@ func TestApplySchema_RemovedEntityType_Rejected(t *testing.T) {
 // (table-structure mismatch → FAILED_PRECONDITION), surfaced by the store as
 // ErrDestructiveSchemaChange.
 func TestApplySchema_RemovedEdgeType_Rejected(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -7123,7 +7071,7 @@ func TestApplySchema_RemovedEdgeType_Rejected(t *testing.T) {
 // TestCheckBranchSchemaCompatibility — and ApplySchema must reject the
 // re-application with the sentinel.
 func TestApplySchema_ChangedEntityPropertyType_Rejected(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -7173,7 +7121,7 @@ func TestApplySchema_ChangedEntityPropertyType_Rejected(t *testing.T) {
 // edge side), mirroring the entity-side test: SPEC:930's different-column-type
 // condition is destructive (FAILED_PRECONDITION → ErrDestructiveSchemaChange).
 func TestApplySchema_ChangedEdgePropertyType_Rejected(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -7224,7 +7172,7 @@ func TestApplySchema_ChangedEdgePropertyType_Rejected(t *testing.T) {
 }
 
 func TestApplySchema_DestructiveChange_VectorDisable(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -7310,11 +7258,8 @@ func TestApplySchema_EnableVectorIndexFalseToTrue_NonDestructive(t *testing.T) {
 		map[string]string{"title": "doc"}, []float32{1, 2, 3}, "main"); err != nil {
 		t.Fatalf("CreateEntity on non-vector type should accept (and discard) an embedding: %v", err)
 	}
-	if ok, err := s.IsVectorIndexBootstrapped(context.Background(), "Document", "main"); err != nil {
-		t.Fatalf("IsVectorIndexBootstrapped: %v", err)
-	} else if ok {
-		t.Fatal("vector index must not be bootstrapped while EnableVectorIndex is false")
-	}
+	assertVectorIndexState(t, s, "Document", "main", false,
+		"vector index must not be bootstrapped while EnableVectorIndex is false")
 
 	// Re-apply the same entity type with EnableVectorIndex true. Per SPEC R2/R6
 	// this is additive (the embedding column is added via ALTER) and must NOT
@@ -7326,22 +7271,16 @@ func TestApplySchema_EnableVectorIndexFalseToTrue_NonDestructive(t *testing.T) {
 	if err := s.ApplySchema(ctx, enabled); err != nil {
 		t.Fatalf("false→true ApplySchema must be non-destructive, got %v", err)
 	}
-	if ok, err := s.IsVectorIndexBootstrapped(context.Background(), "Document", "main"); err != nil {
-		t.Fatalf("IsVectorIndexBootstrapped: %v", err)
-	} else if ok {
-		t.Fatal("the false→true transition must stay lazy — no entity written yet")
-	}
+	assertVectorIndexState(t, s, "Document", "main", false,
+		"the false→true transition must stay lazy — no entity written yet")
 
 	// A first embedding write now bootstraps the dimension (SPEC R7 lazy).
 	if _, err := s.CreateEntity(ctx, "Document", "",
 		map[string]string{"title": "vec"}, []float32{1, 2, 3}, "main"); err != nil {
 		t.Fatalf("CreateEntity with embedding after enable: %v", err)
 	}
-	if ok, err := s.IsVectorIndexBootstrapped(context.Background(), "Document", "main"); err != nil {
-		t.Fatalf("IsVectorIndexBootstrapped: %v", err)
-	} else if !ok {
-		t.Fatal("expected vector index bootstrapped after first embedding write")
-	}
+	assertVectorIndexState(t, s, "Document", "main", true,
+		"expected vector index bootstrapped after first embedding write")
 	if dim, derr := s.GetEstablishedDimension(context.Background(), "Document", "main"); derr != nil || dim != 3 {
 		t.Fatalf("dimension after enable = %d, error = %v, want 3", dim, derr)
 	}
@@ -7355,11 +7294,7 @@ func TestApplySchema_EnableVectorIndexFalseToTrue_NonDestructive(t *testing.T) {
 		t.Fatalf("reopen: %v", err)
 	}
 	defer closeStore(t, s2)
-	if ok, err := s2.IsVectorIndexBootstrapped(context.Background(), "Document", "main"); err != nil {
-		t.Fatalf("IsVectorIndexBootstrapped: %v", err)
-	} else if !ok {
-		t.Fatal("lazy vector index was not restored on reopen")
-	}
+	assertVectorIndexState(t, s2, "Document", "main", true, "lazy vector index was not restored on reopen")
 	if dim, derr := s2.GetEstablishedDimension(context.Background(), "Document", "main"); derr != nil || dim != 3 {
 		t.Fatalf("restored dimension = %d, error = %v, want 3", dim, derr)
 	}
@@ -7545,7 +7480,7 @@ func TestWipeSchema_ThenApplySchema_EntityOnlyTransaction(t *testing.T) {
 func TestRehydrateMainFromFiles_HoldsLockForEntireOperation(t *testing.T) {
 	// Concurrent reads during rehydration must not observe partial state.
 	// The rehydration must hold db.mu for the entire wipe-and-load cycle.
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -7633,7 +7568,7 @@ func TestFindEntityByID_PropagatesPrepareError(t *testing.T) {
 	// that has no corresponding table in the database. LadybugDB returns an
 	// error from Prepare, and findEntityByID propagates it as an operational
 	// error rather than swallowing it into ErrEntityNotFound.
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -7658,7 +7593,7 @@ func TestFindEntityByID_PropagatesPrepareError(t *testing.T) {
 }
 
 func TestFindEdgeByID_PropagatesPrepareError(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -7681,7 +7616,7 @@ func TestFindEdgeByID_PropagatesPrepareError(t *testing.T) {
 }
 
 func TestLoadEntitiesFromDir_ReadFileError(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -7718,7 +7653,7 @@ func TestLoadEntitiesFromDir_ReadFileError(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestExecuteCypher_EmptyQuery(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -7735,7 +7670,7 @@ func TestExecuteCypher_EmptyQuery(t *testing.T) {
 }
 
 func TestExecuteCypher_InvalidCypher(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -7752,7 +7687,7 @@ func TestExecuteCypher_InvalidCypher(t *testing.T) {
 }
 
 func TestFullTextSearch_EmptyQuery(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -7769,7 +7704,7 @@ func TestFullTextSearch_EmptyQuery(t *testing.T) {
 }
 
 func TestFullTextSearch_UnknownType(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -7786,7 +7721,7 @@ func TestFullTextSearch_UnknownType(t *testing.T) {
 }
 
 func TestListEntities_InvalidPageToken(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -7809,7 +7744,7 @@ func TestListEntities_InvalidPageToken(t *testing.T) {
 }
 
 func TestListEntities_UnknownType(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -7831,7 +7766,7 @@ func TestListEntities_UnknownType(t *testing.T) {
 // surfaced (entity type wins over pageSize and pageToken; pageSize wins over
 // pageToken).
 func TestListEntities_CheckOrder(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -7862,7 +7797,7 @@ func TestListEntities_CheckOrder(t *testing.T) {
 }
 
 func TestCreateEntity_UnknownProperty(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -7880,7 +7815,7 @@ func TestCreateEntity_UnknownProperty(t *testing.T) {
 }
 
 func TestUpdateEntity_UnknownProperty(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -7903,7 +7838,7 @@ func TestUpdateEntity_UnknownProperty(t *testing.T) {
 }
 
 func TestUpdateEntity_NotFound(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -7920,7 +7855,7 @@ func TestUpdateEntity_NotFound(t *testing.T) {
 }
 
 func TestCreateEdge_UnknownProperty(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -7947,7 +7882,7 @@ func TestCreateEdge_UnknownProperty(t *testing.T) {
 }
 
 func TestCreateEdge_UnknownEdgeType(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -7973,7 +7908,7 @@ func TestCreateEdge_UnknownEdgeType(t *testing.T) {
 }
 
 func TestListEdgesOfType_UnknownEdgeType(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -7990,7 +7925,7 @@ func TestListEdgesOfType_UnknownEdgeType(t *testing.T) {
 }
 
 func TestSearchNeighbors_NaNOrInfEmbedding(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -8013,7 +7948,7 @@ func TestSearchNeighbors_NaNOrInfEmbedding(t *testing.T) {
 }
 
 func TestUpdateEntity_NaNOrInfEmbedding(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -8047,7 +7982,7 @@ func TestUpdateEntity_NaNOrInfEmbedding(t *testing.T) {
 // gate; this pins the non-indexed branch, mirroring the CreateEntity non-indexed
 // test (TestCreateEntity_NaNEmbeddingNonIndexed).
 func TestUpdateEntity_NaNOrInfEmbedding_NonIndexedType(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -8080,7 +8015,7 @@ func TestUpdateEntity_NaNOrInfEmbedding_NonIndexedType(t *testing.T) {
 // subsequent update with a differing dimension must fail with
 // ErrEmbeddingDimension. The branch is a parameter of the same validation.
 func TestUpdateEntity_EmbeddingDimensionMismatch(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -8116,18 +8051,14 @@ func TestUpdateEntity_EmbeddingDimensionMismatch(t *testing.T) {
 // write on the bootstrap path and drops/recreates the index on the established
 // path. The bootstrap DDL still locks the dimension first.
 func TestUpdateEntity_EmbeddingBootstrap(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer closeStore(t, s)
 	applyTestSchema(t, s)
 
-	if ok, err := s.IsVectorIndexBootstrapped(context.Background(), "VectorType", ""); err != nil {
-		t.Fatalf("IsVectorIndexBootstrapped: %v", err)
-	} else if ok {
-		t.Fatal("expected VectorType not bootstrapped before rehydration")
-	}
+	assertVectorIndexState(t, s, "VectorType", "", false, "expected VectorType not bootstrapped before rehydration")
 
 	// Create a VectorType entity without an embedding via rehydration: the
 	// load path persists the entity but does not bootstrap the embedding
@@ -8145,11 +8076,7 @@ func TestUpdateEntity_EmbeddingBootstrap(t *testing.T) {
 	if err := s.RehydrateMainFromFiles(context.Background(), entitiesDir, edgesDir); err != nil {
 		t.Fatalf("RehydrateMainFromFiles: %v", err)
 	}
-	if ok, err := s.IsVectorIndexBootstrapped(context.Background(), "VectorType", ""); err != nil {
-		t.Fatalf("IsVectorIndexBootstrapped: %v", err)
-	} else if ok {
-		t.Fatal("rehydration must not bootstrap the vector index")
-	}
+	assertVectorIndexState(t, s, "VectorType", "", false, "rehydration must not bootstrap the vector index")
 
 	// First embedding update runs the bootstrap: ALTER TABLE add embedding
 	// column, persist the embedding, then CREATE_VECTOR_INDEX, locking the
@@ -8162,11 +8089,7 @@ func TestUpdateEntity_EmbeddingBootstrap(t *testing.T) {
 	if !reflect.DeepEqual(updated.Embedding, []float32{1, 2, 3}) {
 		t.Fatalf("embedding after bootstrap update = %v, want [1 2 3]", updated.Embedding)
 	}
-	if ok, err := s.IsVectorIndexBootstrapped(context.Background(), "VectorType", ""); err != nil {
-		t.Fatalf("IsVectorIndexBootstrapped: %v", err)
-	} else if !ok {
-		t.Fatalf("expected vector index bootstrapped after first embedding update (update err: %v)", err)
-	}
+	assertVectorIndexState(t, s, "VectorType", "", true, "expected vector index bootstrapped after first embedding update")
 	if dim, derr := s.GetEstablishedDimension(context.Background(), "VectorType", ""); derr != nil || dim != 3 {
 		t.Fatalf("dimension = %d, error = %v (update err: %v)", dim, derr, err)
 	}
@@ -8186,7 +8109,7 @@ func TestUpdateEntity_EmbeddingBootstrap(t *testing.T) {
 // SPEC success branch the error-table rows (dimension mismatch, NaN/Inf) imply:
 // a matching, NaN-free embedding update is accepted, never rejected.
 func TestUpdateEntity_EmbeddingRewriteSuccess(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -8200,11 +8123,7 @@ func TestUpdateEntity_EmbeddingRewriteSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("bootstrap CreateEntity: %v", err)
 	}
-	if ok, err := s.IsVectorIndexBootstrapped(context.Background(), "VectorType", ""); err != nil {
-		t.Fatalf("IsVectorIndexBootstrapped: %v", err)
-	} else if !ok {
-		t.Fatal("expected VectorType bootstrapped after create")
-	}
+	assertVectorIndexState(t, s, "VectorType", "", true, "expected VectorType bootstrapped after create")
 
 	// Matching-dimension update: the dimension guard passes (3 == 3) and the
 	// embedding rewrite succeeds (drop index → SET → recreate index).
@@ -8223,11 +8142,7 @@ func TestUpdateEntity_EmbeddingRewriteSuccess(t *testing.T) {
 	if dim, derr := s.GetEstablishedDimension(context.Background(), "VectorType", ""); derr != nil || dim != 3 {
 		t.Fatalf("dimension = %d, error = %v, want 3", dim, derr)
 	}
-	if ok, err := s.IsVectorIndexBootstrapped(context.Background(), "VectorType", ""); err != nil {
-		t.Fatalf("IsVectorIndexBootstrapped: %v", err)
-	} else if !ok {
-		t.Fatal("expected vector index recreated after embedding rewrite")
-	}
+	assertVectorIndexState(t, s, "VectorType", "", true, "expected vector index recreated after embedding rewrite")
 	got, err := s.GetEntity(ctx, e.Id, "")
 	if err != nil {
 		t.Fatalf("GetEntity after embedding rewrite: %v", err)
@@ -8246,7 +8161,7 @@ func TestUpdateEntity_EmbeddingRewriteSuccess(t *testing.T) {
 }
 
 func TestSearchNeighbors_ZeroTopKDefaults(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -8277,7 +8192,7 @@ func TestSearchNeighbors_ZeroTopKDefaults(t *testing.T) {
 // runs on the branch's own connection; dropping the branch must not leak that
 // side-effect into main.
 func TestBranch_DropBranchDB_LeavesMainUnbootstrapped(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -8285,11 +8200,7 @@ func TestBranch_DropBranchDB_LeavesMainUnbootstrapped(t *testing.T) {
 	applyTestSchema(t, s)
 	ctx := context.Background()
 
-	if ok, err := s.IsVectorIndexBootstrapped(context.Background(), "VectorType", ""); err != nil {
-		t.Fatalf("IsVectorIndexBootstrapped: %v", err)
-	} else if ok {
-		t.Fatal("expected VectorType not bootstrapped on main before branch")
-	}
+	assertVectorIndexState(t, s, "VectorType", "", false, "expected VectorType not bootstrapped on main before branch")
 
 	const branch = "tx-drop-bootstrap"
 	if err := s.CreateBranchDB(ctx, branch); err != nil {
@@ -8304,11 +8215,7 @@ func TestBranch_DropBranchDB_LeavesMainUnbootstrapped(t *testing.T) {
 		map[string]string{"name": "v"}, []float32{1, 2, 3}, branch); err != nil {
 		t.Fatalf("CreateEntity on branch: %v", err)
 	}
-	if ok, err := s.IsVectorIndexBootstrapped(context.Background(), "VectorType", branch); err != nil {
-		t.Fatalf("IsVectorIndexBootstrapped: %v", err)
-	} else if !ok {
-		t.Fatal("expected VectorType bootstrapped on branch")
-	}
+	assertVectorIndexState(t, s, "VectorType", branch, true, "expected VectorType bootstrapped on branch")
 
 	// Rollback: drop the branch.
 	if err := s.DropBranchDB(ctx, branch); err != nil {
@@ -8316,11 +8223,7 @@ func TestBranch_DropBranchDB_LeavesMainUnbootstrapped(t *testing.T) {
 	}
 
 	// Main must remain un-bootstrapped (SPEC R7 branch scope).
-	if ok, err := s.IsVectorIndexBootstrapped(context.Background(), "VectorType", ""); err != nil {
-		t.Fatalf("IsVectorIndexBootstrapped: %v", err)
-	} else if ok {
-		t.Fatal("main must not be bootstrapped after branch rollback")
-	}
+	assertVectorIndexState(t, s, "VectorType", "", false, "main must not be bootstrapped after branch rollback")
 	dim, err := s.GetEstablishedDimension(context.Background(), "VectorType", "")
 	if err != nil {
 		t.Fatalf("GetEstablishedDimension: %v", err)
@@ -8337,7 +8240,7 @@ func TestBranch_DropBranchDB_LeavesMainUnbootstrapped(t *testing.T) {
 // conflicts. This is the store-layer path that surfaces the ABORTED Refresh
 // conflict of SPEC R7 when the branch's dimension disagrees with main's.
 func TestBranch_InheritsMainVectorDimension_RejectsConflict(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -8386,7 +8289,7 @@ func TestBranch_InheritsMainVectorDimension_RejectsConflict(t *testing.T) {
 // scope). Without this, the branch-copy path's CREATE targeting the embedding
 // column would fail because main's table never added it.
 func TestRehydrateFromBranch_PromotesEmbeddingDimensionToMain(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -8400,11 +8303,7 @@ func TestRehydrateFromBranch_PromotesEmbeddingDimensionToMain(t *testing.T) {
 		t.Fatalf("ReplicateSchemaToBranch: %v", err)
 	}
 
-	if ok, err := s.IsVectorIndexBootstrapped(context.Background(), "VectorType", ""); err != nil {
-		t.Fatalf("IsVectorIndexBootstrapped: %v", err)
-	} else if ok {
-		t.Fatal("expected VectorType not bootstrapped on main before commit")
-	}
+	assertVectorIndexState(t, s, "VectorType", "", false, "expected VectorType not bootstrapped on main before commit")
 
 	// First embedding write happens inside the branch, bootstrapping the
 	// dimension there (SPEC R7 dimension lock scoped to the branch).
@@ -8418,11 +8317,8 @@ func TestRehydrateFromBranch_PromotesEmbeddingDimensionToMain(t *testing.T) {
 		t.Fatalf("RehydrateFromBranch promotes embedding schema to main: %v", err)
 	}
 
-	if ok, err := s.IsVectorIndexBootstrapped(context.Background(), "VectorType", ""); err != nil {
-		t.Fatalf("IsVectorIndexBootstrapped: %v", err)
-	} else if !ok {
-		t.Fatal("expected vector index promoted to main after RehydrateFromBranch")
-	}
+	assertVectorIndexState(t, s, "VectorType", "", true,
+		"expected vector index promoted to main after RehydrateFromBranch")
 	if dim, derr := s.GetEstablishedDimension(context.Background(), "VectorType", ""); derr != nil || dim != 3 {
 		t.Fatalf("dimension on main = %d, error = %v, want 3", dim, derr)
 	}
@@ -8435,7 +8331,7 @@ func TestRehydrateFromBranch_PromotesEmbeddingDimensionToMain(t *testing.T) {
 // disagree with the returned type. Both paths (main and branch) must reject
 // such a file.
 func TestRehydrateMainFromFiles_RejectsTypeDirectoryMismatch(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -8466,16 +8362,13 @@ func TestRehydrateMainFromFiles_RejectsTypeDirectoryMismatch(t *testing.T) {
 	// The guard must have rejected the file before the embedding bootstrap ran:
 	// VectorType must not have gained an embedding column / vector index as a
 	// side effect of the rejected file.
-	if ok, err := s.IsVectorIndexBootstrapped(ctx, "VectorType", ""); err != nil {
-		t.Fatalf("IsVectorIndexBootstrapped: %v", err)
-	} else if ok {
-		t.Fatal("embedding bootstrap DDL must not run before the type/directory mismatch guard")
-	}
+	assertVectorIndexState(t, s, "VectorType", "", false,
+		"embedding bootstrap DDL must not run before the type/directory mismatch guard")
 }
 
 // The same type/directory mismatch guard must apply on the branch load path.
 func TestHydrateBranchFromFiles_RejectsTypeDirectoryMismatch(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -8508,11 +8401,8 @@ func TestHydrateBranchFromFiles_RejectsTypeDirectoryMismatch(t *testing.T) {
 	} else if !errors.Is(err, store.ErrInvalidEntityDir) {
 		t.Fatalf("expected ErrInvalidEntityDir, got %v", err)
 	}
-	if ok, err := s.IsVectorIndexBootstrapped(ctx, "VectorType", "tx1"); err != nil {
-		t.Fatalf("IsVectorIndexBootstrapped: %v", err)
-	} else if ok {
-		t.Fatal("embedding bootstrap DDL must not run before the type/directory mismatch guard")
-	}
+	assertVectorIndexState(t, s, "VectorType", "tx1", false,
+		"embedding bootstrap DDL must not run before the type/directory mismatch guard (branch)")
 }
 
 // SearchNeighbors must surface a genuine read-time failure on the vector-index
@@ -8533,7 +8423,7 @@ func TestHydrateBranchFromFiles_RejectsTypeDirectoryMismatch(t *testing.T) {
 // DDL/API can arrange (ALTER of an embedding column is a parser error; a
 // dimension change fails the earlier ErrEmbeddingDimension guard at query.go:133).
 func TestSearchNeighbors_VectorPrepareFailureSurfacesError(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -8546,11 +8436,7 @@ func TestSearchNeighbors_VectorPrepareFailureSurfacesError(t *testing.T) {
 		map[string]string{"name": "v"}, []float32{1, 2, 3}, ""); err != nil {
 		t.Fatalf("bootstrap vector type: %v", err)
 	}
-	if ok, err := s.IsVectorIndexBootstrapped(context.Background(), "VectorType", ""); err != nil {
-		t.Fatalf("IsVectorIndexBootstrapped: %v", err)
-	} else if !ok {
-		t.Fatal("expected VectorType vector index bootstrapped")
-	}
+	assertVectorIndexState(t, s, "VectorType", "", true, "expected VectorType vector index bootstrapped")
 
 	// Drop the vector index. The index-locked FLOAT[3] embedding column remains
 	// (so getEmbeddingDimension still reports 3), but the QUERY_VECTOR_INDEX
@@ -8583,7 +8469,7 @@ func TestSearchNeighbors_VectorPrepareFailureSurfacesError(t *testing.T) {
 // single-type (non-empty entityType) success branch: SearchNeighbors returns an
 // empty result set with a nil error rather than erroring or fabricating data.
 func TestSearchNeighbors_DeclaredNotBootstrappedType_SucceedsEmpty(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -8609,7 +8495,7 @@ func TestSearchNeighbors_DeclaredNotBootstrappedType_SucceedsEmpty(t *testing.T)
 // a table's FTS index and then searching it must NOT error and must return
 // nothing rather than fabricating results.
 func TestFullTextSearch_MissingIndexSilentlySkipped(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -8757,6 +8643,99 @@ func TestOpenCorruptDatabase_RecoversOrFailsClosed(t *testing.T) {
 	})
 }
 
+// The engine's write-ahead-log companions (<db>.lbug.wal and
+// <db>.lbug.wal.checkpoint) are the artifacts a crash tears alongside the main
+// file, and they can be the sole cause of the open failure: OpenDatabase
+// replays a present WAL, so a torn WAL fails the open while main.lbug stays
+// OS-readable and corruptionCandidates(main.lbug) reports corruption. SPEC R8
+// recovery must therefore remove the WAL companions together with main.lbug,
+// or the fresh re-open replays the still-torn WAL and fails again — a permanent
+// crash loop that never reaches the R8 git re-hydration. Both subtests pin the
+// companion removal (they fail pre-fix, which removed only main.lbug and left
+// the torn WAL to fail the re-open).
+func TestOpenCorruptDatabase_RemovesTornWalCompanions(t *testing.T) {
+	// setupDB opens a file-backed store, applies a schema, and closes it,
+	// leaving a clean main.lbug + schema.json with no WAL residue.
+	setupDB := func(t *testing.T) string {
+		t.Helper()
+		dir := t.TempDir()
+		s, err := Open(dir)
+		if err != nil {
+			t.Fatalf("Open: %v", err)
+		}
+		schema := &flowv1.Schema{EntityTypes: []*flowv1.EntityType{{
+			Name: "Component", Properties: []*flowv1.Property{{Name: "name", Type: "string"}},
+		}}}
+		if err := s.ApplySchema(context.Background(), schema); err != nil {
+			t.Fatalf("ApplySchema: %v", err)
+		}
+		if err := s.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+		return dir
+	}
+
+	t.Run("torn WAL next to healthy main.lbug recovers", func(t *testing.T) {
+		dir := setupDB(t)
+		dbPath := filepath.Join(dir, "main.lbug")
+		walPath := dbPath + ".wal"
+		ckptPath := dbPath + ".wal.checkpoint"
+		// Simulate the crash artifact: a torn WAL (and its checkpoint
+		// companion) left next to a main.lbug the engine itself could still
+		// parse.
+		if err := os.WriteFile(walPath, []byte("torn wal"), 0600); err != nil {
+			t.Fatalf("write torn WAL: %v", err)
+		}
+		if err := os.WriteFile(ckptPath, []byte("torn checkpoint"), 0600); err != nil {
+			t.Fatalf("write torn checkpoint: %v", err)
+		}
+		recovered, err := Open(dir)
+		if err != nil {
+			t.Fatalf("Open with a torn WAL must recover, got %v", err)
+		}
+		defer closeStore(t, recovered)
+		if _, err := os.Stat(walPath); !os.IsNotExist(err) {
+			t.Fatalf("torn WAL companion survived corruption recovery: %v", err)
+		}
+		if _, err := os.Stat(ckptPath); !os.IsNotExist(err) {
+			t.Fatalf("torn checkpoint artifact survived corruption recovery: %v", err)
+		}
+		if !recovered.TableExists("Component") {
+			t.Fatal("recovery did not rehydrate the Component table from metadata")
+		}
+	})
+
+	t.Run("corrupt main.lbug with torn WAL companions recovers", func(t *testing.T) {
+		dir := setupDB(t)
+		dbPath := filepath.Join(dir, "main.lbug")
+		walPath := dbPath + ".wal"
+		ckptPath := dbPath + ".wal.checkpoint"
+		if err := os.WriteFile(dbPath, []byte("not a ladybug database"), 0600); err != nil {
+			t.Fatalf("corrupt main.lbug: %v", err)
+		}
+		if err := os.WriteFile(walPath, []byte("torn wal"), 0600); err != nil {
+			t.Fatalf("write torn WAL: %v", err)
+		}
+		if err := os.WriteFile(ckptPath, []byte("torn checkpoint"), 0600); err != nil {
+			t.Fatalf("write torn checkpoint: %v", err)
+		}
+		recovered, err := Open(dir)
+		if err != nil {
+			t.Fatalf("Open after corrupt main + torn WAL must recover, got %v", err)
+		}
+		defer closeStore(t, recovered)
+		if _, err := os.Stat(walPath); !os.IsNotExist(err) {
+			t.Fatalf("torn WAL companion survived corruption recovery: %v", err)
+		}
+		if _, err := os.Stat(ckptPath); !os.IsNotExist(err) {
+			t.Fatalf("torn checkpoint artifact survived corruption recovery: %v", err)
+		}
+		if !recovered.TableExists("Component") {
+			t.Fatal("recovery did not rehydrate the Component table from metadata")
+		}
+	})
+}
+
 // A catalog table with NO schema-metadata entry must fail closed on reopen:
 // validateMetadataAgainstCatalog rejects any catalog type absent from the
 // metadata. ApplySchema publishes the metadata before the DDL loop
@@ -8816,7 +8795,7 @@ func TestApplySchema_MidMultiTableDDLFailureFailsClosedOnReopen(t *testing.T) {
 // dropped on the re-hydration read path with no error (learnings rule: never
 // silently drop a row or swallow a not-exist on a read path).
 func TestRehydrateMainFromFiles_EdgeWithMissingEndpointFailsLoudly(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -8865,7 +8844,7 @@ func TestRehydrateFiles_WrongLabelEndpointFailsLoudly(t *testing.T) {
 		{"branch", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			s, err := OpenInMemory()
+			s, err := openInMemory()
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -8938,7 +8917,7 @@ func TestRehydrateFiles_CrossPairEndpointFailsLoudly(t *testing.T) {
 		{"branch", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			s, err := OpenInMemory()
+			s, err := openInMemory()
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -9014,7 +8993,7 @@ func TestRehydrateFiles_CrossPairEndpointFailsLoudly(t *testing.T) {
 // entity/edge files through the gitstore write path, re-hydrates them through
 // the store load path, and asserts the persisted timestamps survive untouched.
 func TestRehydrateMainFromFiles_PersistedTimestampsSurvive(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -9119,7 +9098,7 @@ func TestRehydrateFiles_MissingIDFailsLoudly(t *testing.T) {
 		{"branch edge", true, true, store.ErrInvalidEdgeDir},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			s, err := OpenInMemory()
+			s, err := openInMemory()
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -9190,7 +9169,7 @@ func TestRehydrateFiles_IOErrorFailsLoudly(t *testing.T) {
 		{"branch edge", true, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			s, err := OpenInMemory()
+			s, err := openInMemory()
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -9268,7 +9247,7 @@ func TestRehydrateFiles_MissingTypeFailsLoudly(t *testing.T) {
 		{"branch entity", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			s, err := OpenInMemory()
+			s, err := openInMemory()
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -9334,7 +9313,7 @@ func TestRehydrateFiles_MissingEdgeKeysFailsLoudly(t *testing.T) {
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			s, err := OpenInMemory()
+			s, err := openInMemory()
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -9390,7 +9369,7 @@ func TestRehydrateFiles_UnparseableJSONFailsLoudly(t *testing.T) {
 		{"branch edge", true, true, store.ErrInvalidEdgeDir},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			s, err := OpenInMemory()
+			s, err := openInMemory()
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -9463,7 +9442,7 @@ func TestRehydrateFiles_CrossTypeDuplicateIDFailsLoudly(t *testing.T) {
 		{"branch", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			s, err := OpenInMemory()
+			s, err := openInMemory()
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -9538,7 +9517,7 @@ func TestRehydrateFiles_EmbeddedIDConflictsWithFilenameFailsLoudly(t *testing.T)
 		{"branch edge", true, true, store.ErrInvalidEdgeDir},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			s, err := OpenInMemory()
+			s, err := openInMemory()
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -9628,7 +9607,7 @@ func TestRehydrateFiles_NonCanonicalUUIDFailsLoudly(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			for _, id := range nonCanonicalUUIDSpellings {
 				t.Run(id, func(t *testing.T) {
-					s, err := OpenInMemory()
+					s, err := openInMemory()
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -9701,7 +9680,7 @@ func TestRehydrateFiles_InferredTypeWithAppliedSchema(t *testing.T) {
 		{"branch edge", true, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			s, err := OpenInMemory()
+			s, err := openInMemory()
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -9935,7 +9914,7 @@ func TestInvalidateBranchState_RejectPathTraversalTxID(t *testing.T) {
 // store, never silently return state or perform I/O).
 func TestBranchState_ClosedOrFailedStoreReturnsNotReady(t *testing.T) {
 	t.Run("closed store", func(t *testing.T) {
-		s, err := OpenInMemory()
+		s, err := openInMemory()
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -9951,7 +9930,7 @@ func TestBranchState_ClosedOrFailedStoreReturnsNotReady(t *testing.T) {
 		}
 	})
 	t.Run("failed store", func(t *testing.T) {
-		s, err := OpenInMemory()
+		s, err := openInMemory()
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -9972,7 +9951,7 @@ func TestBranchState_ClosedOrFailedStoreReturnsNotReady(t *testing.T) {
 // surface ErrDatabaseNotReady from ListMainEntityTypes rather than silently
 // reporting an empty type list with a nil error.
 func TestListMainEntityTypes_FailedStoreReturnsSentinel(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -9997,7 +9976,7 @@ func TestListMainEntityTypes_FailedStoreReturnsSentinel(t *testing.T) {
 // present in a rule's canConnectTo but the edge type absent from that rule's
 // using).
 func TestCreateEdge_RuleComposition(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -10067,7 +10046,7 @@ func TestCreateEdge_RuleComposition(t *testing.T) {
 // rel table has a single FROM label — LadybugDB rejects a rel table whose
 // endpoint clauses bind multiple node labels.)
 func TestCreateEdge_TargetRulesNotEvaluated(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -10126,7 +10105,7 @@ func TestCreateEdge_TargetRulesNotEvaluated(t *testing.T) {
 // (TestEmbeddingBootstrap_FirstEntityNoEmbedding) applies only until the first
 // embedding establishes the dimension.
 func TestCreateEntity_PostBootstrapNilEmbeddingStoresNULL(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -10168,7 +10147,7 @@ func TestCreateEntity_PostBootstrapNilEmbeddingStoresNULL(t *testing.T) {
 // entity's Embedding and a subsequent GetEntity's embedding are both nil
 // (accept-and-discard).
 func TestCreateEntity_NonIndexedTypeDiscardsEmbedding(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -10201,7 +10180,7 @@ func TestCreateEntity_NonIndexedTypeDiscardsEmbedding(t *testing.T) {
 // hasNewEmb` guard (crud.go:249) is skipped, so the supplied embedding is
 // neither bootstrapped nor written to the SET clause, and the update succeeds.
 func TestUpdateEntity_NonIndexedTypeDiscardsEmbedding(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -10243,11 +10222,8 @@ func TestUpdateEntity_NonIndexedTypeDiscardsEmbedding(t *testing.T) {
 	if got.Embedding != nil {
 		t.Fatalf("expected non-indexed type to discard the update embedding, got %v", got.Embedding)
 	}
-	if ok, err := s.IsVectorIndexBootstrapped(ctx, "Document", ""); err != nil {
-		t.Fatalf("IsVectorIndexBootstrapped: %v", err)
-	} else if ok {
-		t.Fatal("expected Document to have no vector index after an embedding-bearing update")
-	}
+	assertVectorIndexState(t, s, "Document", "", false,
+		"expected Document to have no vector index after an embedding-bearing update")
 }
 
 // SPEC:345-346: before the first ApplySchema (or on a graph with no
@@ -10257,7 +10233,7 @@ func TestUpdateEntity_NonIndexedTypeDiscardsEmbedding(t *testing.T) {
 // with a nil error, mirroring SearchNeighbors' empty-graph behavior.
 func TestFullTextSearch_WildcardEmptyGraph_Succeeds(t *testing.T) {
 	t.Run("no schema applied", func(t *testing.T) {
-		s, err := OpenInMemory()
+		s, err := openInMemory()
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -10274,7 +10250,7 @@ func TestFullTextSearch_WildcardEmptyGraph_Succeeds(t *testing.T) {
 	})
 
 	t.Run("schema with no string-property types", func(t *testing.T) {
-		s, err := OpenInMemory()
+		s, err := openInMemory()
 		if err != nil {
 			t.Fatal(err)
 		}

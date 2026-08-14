@@ -88,7 +88,13 @@ func Open(path string) (store.Store, error) {
 		// destroy data that was never corrupt; in that case we classify and
 		// fail without touching the file.
 		if corruptionCandidates(dbPath) {
-			if rmErr := os.Remove(dbPath); rmErr != nil && !os.IsNotExist(rmErr) {
+			// The engine's write-ahead-log companions (<db>.lbug.wal and
+			// <db>.lbug.wal.checkpoint) are the artifacts a crash tears
+			// alongside the main file; remove them with it so the fresh
+			// re-open below does not replay a still-torn WAL and fail again
+			// (the crash loop that would otherwise never reach the SPEC R8 git
+			// re-hydration).
+			if rmErr := removeCorruptedMain(dbPath); rmErr != nil {
 				return nil, fmt.Errorf("remove corrupted database: %w", rmErr)
 			}
 			database, err = lbug.OpenDatabase(dbPath, lbug.DefaultSystemConfig())
@@ -165,26 +171,33 @@ func corruptionCandidates(dbPath string) bool {
 	return true
 }
 
-// OpenInMemory opens an ephemeral in-memory LadybugDB for tests.
-func OpenInMemory() (store.Store, error) {
-	database, err := lbug.OpenInMemoryDatabase(lbug.DefaultSystemConfig())
-	if err != nil {
-		return nil, fmt.Errorf("open in-memory database: %w", err)
+// removeCorruptedMain deletes a corrupted main.lbug together with the engine's
+// write-ahead-log companions — <db>.lbug.wal and <db>.lbug.wal.checkpoint (the
+// library's WAL_FILE_SUFFIX/CHECKPOINT_WAL_FILE_SUFFIX, lbug.hpp). The open
+// failure that triggered SPEC R8 recovery can originate from a torn WAL rather
+// than the main file itself (the WAL is replayed on open), so removing only
+// main.lbug would leave the torn WAL to be replayed by the fresh re-open —
+// failing again into a permanent crash loop that never reaches the R8 git
+// re-hydration. Missing companions are not an error (a clean close leaves no
+// WAL behind).
+func removeCorruptedMain(dbPath string) error {
+	for _, p := range []string{
+		dbPath,
+		dbPath + ".wal",
+		dbPath + ".wal.checkpoint",
+	} {
+		if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+			return err
+		}
 	}
-
-	conn, err := lbug.OpenConnection(database)
-	if err != nil {
-		database.Close()
-		return nil, fmt.Errorf("open connection: %w", err)
-	}
-
-	return newLadybugDB("", database, conn)
+	return nil
 }
 
 // newLadybugDB builds the ladybugDB struct around an opened database and
 // connection and runs the shared post-open sequence (extension load and
-// schema-cache rebuild) that both Open and OpenInMemory require. On any
-// failure the partially-built store is closed before the error is returned.
+// schema-cache rebuild) that Open and the in-memory test constructor require.
+// On any failure the partially-built store is closed before the error is
+// returned.
 func newLadybugDB(path string, database *lbug.Database, conn *lbug.Connection) (*ladybugDB, error) {
 	ldb := &ladybugDB{
 		path:              path,
