@@ -43,20 +43,20 @@ const DefaultGitOperationTimeout = 5 * time.Minute
 
 // SyncWorker manages background remote synchronisation.
 type SyncWorker struct {
-	// pushNeeded is the externally-visible "a push is pending" signal, written
-	// by SetPushNeeded and cleared by the worker after a push delivers. It is
-	// a bool view over the monotonic pushGeneration counter: clearing is
-	// conditional on the generation being unchanged since the push began, so a
-	// concurrent SetPushNeeded can never be wiped by a clear (SPEC R10 WithAck
-	// contract — see SetPushNeeded and doSyncCycle).
-	pushNeeded atomic.Bool
-	// pushGeneration counts SetPushNeeded calls. A successful push clears
-	// pushNeeded only when no new request arrived while the push was in
-	// flight; the generation snapshot is how the worker detects that arrival.
-	pushGeneration atomic.Uint64
-	wakeCh         chan struct{}
-	stopCh         chan struct{}
-	doneCh         chan struct{} // closed when the worker loop exits
+	// pushGeneration counts SetPushNeeded calls — the "a push is pending"
+	// signal. lastPushedGeneration is the request-generation watermark whose
+	// push has been delivered to the remote. "Push needed" is DERIVED as
+	// pushGeneration != lastPushedGeneration (pushNeeded), so there is no
+	// separate boolean to wipe: a successful push stores the generation
+	// snapshot taken before the attempt, and a SetPushNeeded that lands
+	// anywhere in the window leaves the generation ahead of the watermark —
+	// the follow-up cycle still pushes (SPEC R10 WithAck contract — see
+	// SetPushNeeded, pushNeeded, and doSyncCycle).
+	pushGeneration       atomic.Uint64
+	lastPushedGeneration atomic.Uint64
+	wakeCh               chan struct{}
+	stopCh               chan struct{}
+	doneCh               chan struct{} // closed when the worker loop exits
 	// stopOnce guards the stopCh close: Stop() may be called from multiple
 	// goroutines (shutdown path plus t.Cleanup), so the signal must be closed
 	// exactly once — the select/default close-once idiom is a data race (two
@@ -178,16 +178,24 @@ func NewSyncWorker(
 }
 
 // SetPushNeeded flags that a commit needs pushing. Called by CommitTransaction,
-// MergeCompleted, and WipeGraph. Bumping the monotonic pushGeneration lets the
-// worker detect that a new request arrived while a push was in flight, so a
-// successful push only clears the flag when no request landed since it began —
-// a lost SetPushNeeded would let WakeAndWait/WithAck report success for a
-// commit never delivered to the remote, with no later timer cycle delivering
-// it (SPEC R10 WithAck: "If the cycle ends with the flag cleared (push
-// delivered), the call returns success").
+// MergeCompleted, and WipeGraph. Bumping the monotonic pushGeneration is the
+// whole request: "push needed" is derived (pushNeeded) from the generation
+// having advanced past the last-pushed watermark, so a request can never be
+// wiped by the cycle's clear — a lost request would let WakeAndWait/WithAck
+// report success for a commit never delivered to the remote, with no later
+// timer cycle delivering it (SPEC R10 WithAck: "If the cycle ends with the
+// flag cleared (push delivered), the call returns success").
 func (w *SyncWorker) SetPushNeeded() {
 	w.pushGeneration.Add(1)
-	w.pushNeeded.Store(true)
+}
+
+// pushNeeded reports whether a push is pending: the push-request generation
+// has advanced past the generation whose push was last delivered. Derived
+// state — there is no separate boolean to wipe, so the cycle's clear (storing
+// lastPushedGeneration after a successful push) can never lose a concurrent
+// SetPushNeeded (SPEC R10 WithAck contract).
+func (w *SyncWorker) pushNeeded() bool {
+	return w.pushGeneration.Load() != w.lastPushedGeneration.Load()
 }
 
 // cycleResult is the outcome of one sync cycle.
@@ -351,19 +359,17 @@ func (w *SyncWorker) doSyncCycle() cycleResult {
 	// 2. If push needed, push to remote. Each attempt runs under the
 	// configurable per-operation deadline (gitOp — SPEC R10 / SPEC:978), so a
 	// hung remote aborts with DEADLINE_EXCEEDED instead of wedging the worker.
-	if !w.pushNeeded.Load() {
+	if !w.pushNeeded() {
 		return cycleResult{}
 	}
-	// Snapshot the push-request generation before the attempt: SetPushNeeded
-	// bumps it, so after a successful push the flag is cleared only when no
-	// new request arrived while the push was in flight. An unconditional clear
-	// would lose a concurrent SetPushNeeded (CommitTransaction, MergeCompleted,
-	// WipeGraph) landing between push success and the clear — WakeAndWait/
-	// WithAck would report success for a commit never delivered to the remote,
-	// and no later timer cycle would deliver it (SPEC R10 WithAck contract). A
-	// request that arrives while the push is in flight leaves the flag set; the
-	// next cycle (the wake its WithAck caller triggers, or the next timer tick)
-	// delivers it.
+	// Snapshot the push-request generation before the attempt: a successful
+	// push stores this snapshot as the delivered watermark, so a SetPushNeeded
+	// (CommitTransaction, MergeCompleted, WipeGraph) that lands while the push
+	// is in flight leaves the generation ahead of the watermark and the
+	// follow-up cycle (the wake its WithAck caller triggers, or the next timer
+	// tick) delivers it. An unconditional or re-read-based watermark store
+	// would report success for a commit never delivered to the remote, with no
+	// later timer cycle delivering it (SPEC R10 WithAck contract).
 	gen := w.pushGeneration.Load()
 
 	pushErr := w.gitstore.WithGitLock(func() error {
@@ -407,13 +413,13 @@ func (w *SyncWorker) doSyncCycle() cycleResult {
 		}
 	}
 
-	// Push succeeded — clear the flag only if no new push request arrived while
-	// the push was in flight (the generation snapshot above). A request that
-	// raced the push stays pending and is delivered by the next cycle instead
-	// of being silently lost.
-	if w.pushGeneration.Load() == gen {
-		w.pushNeeded.Store(false)
-	}
+	// Push succeeded — mark the snapshot generation as delivered. A request
+	// that raced the push (SetPushNeeded landing while the push was in flight)
+	// leaves pushGeneration ahead of this watermark, so the next cycle delivers
+	// it instead of it being silently lost. This is a single atomic store —
+	// no check-then-act — so a SetPushNeeded landing anywhere around it can
+	// never be wiped (SPEC R10 WithAck contract).
+	w.lastPushedGeneration.Store(gen)
 	return cycleResult{}
 }
 

@@ -3096,7 +3096,7 @@ func TestSyncWorkerFetchAndPushCycle(t *testing.T) {
 	sw := NewSyncWorker("https://example.com/repo.git", pushGit, base, RealClock{}, SyncWorkerWithAuditPublisher(mockPub))
 	sw.SetPushNeeded()
 	sw.runSyncCycle()
-	if sw.pushNeeded.Load() {
+	if sw.pushNeeded() {
 		t.Fatal("push flag not cleared after successful push")
 	}
 	pushGit.mu.Lock()
@@ -3376,7 +3376,7 @@ func TestSyncWorkerPushFailureLeavesFlagSet(t *testing.T) {
 			sw.backoffFn = func(int) time.Duration { return 0 }
 			sw.SetPushNeeded()
 			sw.runSyncCycle()
-			if !sw.pushNeeded.Load() {
+			if !sw.pushNeeded() {
 				t.Fatal("push flag cleared despite push failure")
 			}
 			pushGit.mu.Lock()
@@ -3623,7 +3623,7 @@ func TestSyncWorker_PushSucceedsOnNextCycle(t *testing.T) {
 	waitFor(t, func() bool { return fc.tickers() >= 1 }, "startup cycle")
 
 	sw.SetPushNeeded()
-	if !sw.pushNeeded.Load() {
+	if !sw.pushNeeded() {
 		t.Fatal("push flag not set after SetPushNeeded")
 	}
 
@@ -3636,7 +3636,7 @@ func TestSyncWorker_PushSucceedsOnNextCycle(t *testing.T) {
 		return syncGit.pushCalls >= 1
 	}, "push on ticker cycle")
 
-	if sw.pushNeeded.Load() {
+	if sw.pushNeeded() {
 		t.Fatal("push flag not cleared after successful push")
 	}
 	syncGit.mu.Lock()
@@ -3696,7 +3696,7 @@ func TestSyncWorker_WithAck_BlocksUntilPush(t *testing.T) {
 	if err := <-wakeDone; err != nil {
 		t.Fatalf("WakeAndWait returned error: %v", err)
 	}
-	if sw.pushNeeded.Load() {
+	if sw.pushNeeded() {
 		t.Fatal("push flag not cleared after successful push")
 	}
 }
@@ -3762,7 +3762,7 @@ func TestSyncWorker_WithAck_ConcurrentWaitersBothComplete(t *testing.T) {
 			t.Fatalf("waiter %d returned error: %v", i, err)
 		}
 	}
-	if sw.pushNeeded.Load() {
+	if sw.pushNeeded() {
 		t.Fatal("push flag not cleared after successful push")
 	}
 }
@@ -3818,7 +3818,7 @@ func TestSyncWorker_WithAck_TimerCycleInFlightDoesNotSatisfyFreshWaiter(t *testi
 	if err := <-wakeDone; err != nil {
 		t.Fatalf("WakeAndWait returned error: %v", err)
 	}
-	if sw.pushNeeded.Load() {
+	if sw.pushNeeded() {
 		t.Fatal("push flag not cleared after the push was delivered")
 	}
 }
@@ -3850,7 +3850,7 @@ func TestSyncWorker_RecoverableError_RetriesAndGivesUp(t *testing.T) {
 	if pushCalls != 0 {
 		t.Fatalf("expected no push attempts after fetch failure, got %d", pushCalls)
 	}
-	if !sw.pushNeeded.Load() {
+	if !sw.pushNeeded() {
 		t.Fatal("push flag cleared despite recoverable fetch failure")
 	}
 	sw.cycleMu.Lock()
@@ -3887,7 +3887,7 @@ func TestSyncWorker_NonRecoverableError_LogsAndLeavesFlag(t *testing.T) {
 	if pushCalls != 0 {
 		t.Fatalf("expected no push attempts after fetch failure, got %d", pushCalls)
 	}
-	if !sw.pushNeeded.Load() {
+	if !sw.pushNeeded() {
 		t.Fatal("push flag cleared despite non-recoverable failure")
 	}
 	sw.cycleMu.Lock()
@@ -3920,7 +3920,7 @@ func TestSyncWorker_StartupCatchUpPush(t *testing.T) {
 		return syncGit.pushCalls >= 1
 	}, "startup catch-up push")
 
-	if sw.pushNeeded.Load() {
+	if sw.pushNeeded() {
 		t.Fatal("push flag not cleared after startup catch-up push")
 	}
 	syncGit.mu.Lock()
@@ -4085,7 +4085,7 @@ func TestSync_WakesWorkerAndBlocks(t *testing.T) {
 		if err := <-syncDone; err != nil {
 			t.Fatalf("Sync returned error: %v", err)
 		}
-		if srv.syncWorker.pushNeeded.Load() {
+		if srv.syncWorker.pushNeeded() {
 			t.Fatal("push flag not cleared after successful sync")
 		}
 	})
@@ -4438,7 +4438,7 @@ func TestCommitTransaction_WithSyncWorker_AckWaitsForPush(t *testing.T) {
 	if pushCalls != 1 {
 		t.Fatalf("expected exactly 1 push for the acked commit, got %d", pushCalls)
 	}
-	if srv.syncWorker.pushNeeded.Load() {
+	if srv.syncWorker.pushNeeded() {
 		t.Fatal("push flag not cleared after the acked push")
 	}
 }
@@ -4481,7 +4481,7 @@ func TestCommitTransaction_WithSyncWorker_AckPushFailureSurfacesMappedError(t *t
 	if status.Code(err) != codes.FailedPrecondition {
 		t.Fatalf("expected FailedPrecondition for a rejected push, got %v (%v)", status.Code(err), err)
 	}
-	if !srv.syncWorker.pushNeeded.Load() {
+	if !srv.syncWorker.pushNeeded() {
 		t.Fatal("push flag cleared despite the rejected push")
 	}
 }
@@ -4527,7 +4527,7 @@ func TestCommitTransaction_WithSyncWorker_AckPushRetriesExhaustedSurfacesUnavail
 	if status.Code(err) != codes.Unavailable {
 		t.Fatalf("expected Unavailable for an unreachable remote, got %v (%v)", status.Code(err), err)
 	}
-	if !srv.syncWorker.pushNeeded.Load() {
+	if !srv.syncWorker.pushNeeded() {
 		t.Fatal("push flag cleared despite the unreachable remote")
 	}
 }
@@ -4581,7 +4581,7 @@ func TestCommitTransaction_WithSyncWorker_AckCallerDeadlineSurfacesDeadlineExcee
 	if elapsed := time.Since(start); elapsed > 5*time.Second {
 		t.Fatalf("acked commit took %v to surface the deadline", elapsed)
 	}
-	if !srv.syncWorker.pushNeeded.Load() {
+	if !srv.syncWorker.pushNeeded() {
 		t.Fatal("push flag cleared despite the timed-out ack wait")
 	}
 }
@@ -4647,7 +4647,7 @@ func TestCommitTransaction_WithSyncWorker_NoAckReturnsWithoutBlocking(t *testing
 	if pushCalls != 0 {
 		t.Fatalf("non-acked commit ran the sync cycle (%d push attempts)", pushCalls)
 	}
-	if !srv.syncWorker.pushNeeded.Load() {
+	if !srv.syncWorker.pushNeeded() {
 		t.Fatal("push flag not set after the non-acked commit")
 	}
 
@@ -4660,7 +4660,7 @@ func TestCommitTransaction_WithSyncWorker_NoAckReturnsWithoutBlocking(t *testing
 		defer syncGit.mu.Unlock()
 		return syncGit.pushCalls >= 1
 	}, "push on the next cycle after the non-acked commit")
-	if srv.syncWorker.pushNeeded.Load() {
+	if srv.syncWorker.pushNeeded() {
 		t.Fatal("push flag not cleared after the next cycle delivered the push")
 	}
 }
@@ -4940,7 +4940,7 @@ func TestEmptyTransaction_CommitNoOpCreatesNoGitCommitAndNoPush(t *testing.T) {
 	if countingGit.commits != 0 {
 		t.Fatalf("zero-mutation commit created %d git commits, want 0", countingGit.commits)
 	}
-	if sw.pushNeeded.Load() {
+	if sw.pushNeeded() {
 		t.Fatal("zero-mutation commit set the sync-worker push-needed flag")
 	}
 }
@@ -5784,7 +5784,7 @@ func TestCommitTransaction_MergePersistFailureSetsPushNeededOnRetry(t *testing.T
 	}); err == nil || !strings.Contains(err.Error(), "state write failure") {
 		t.Fatalf("CommitTransaction error=%v", err)
 	}
-	if sw.pushNeeded.Load() {
+	if sw.pushNeeded() {
 		t.Fatal("push flag set on the failed first attempt before any retry")
 	}
 	// Retry: the MergeCompleted path finishes the cleanup and must flag the
@@ -5794,7 +5794,7 @@ func TestCommitTransaction_MergePersistFailureSetsPushNeededOnRetry(t *testing.T
 	}); err != nil {
 		t.Fatalf("retry CommitTransaction: %v", err)
 	}
-	if !sw.pushNeeded.Load() {
+	if !sw.pushNeeded() {
 		t.Fatal("locally-merged commit never flagged for push after the retry")
 	}
 	if _, err = base.GetEntity(ctx, created.EntityId, "main"); err != nil {
@@ -8051,12 +8051,12 @@ func TestWipeGraph_SetsPushNeeded(t *testing.T) {
 	if _, err := srv.WipeGraph(ctx, &flowv1.WipeGraphRequest{}); err != nil {
 		t.Fatalf("WipeGraph: %v", err)
 	}
-	if !srv.syncWorker.pushNeeded.Load() {
+	if !srv.syncWorker.pushNeeded() {
 		t.Fatal("push flag not set after WipeGraph's wipe commit")
 	}
 	// The next timer cycle must deliver the push and clear the flag.
 	fc.FireTicker()
-	waitFor(t, func() bool { return !srv.syncWorker.pushNeeded.Load() }, "push flag cleared after cycle")
+	waitFor(t, func() bool { return !srv.syncWorker.pushNeeded() }, "push flag cleared after cycle")
 	syncGit.mu.Lock()
 	pushCalls := syncGit.pushCalls
 	syncGit.mu.Unlock()
@@ -12708,7 +12708,7 @@ func TestCommitTransaction_MergeCompletedAckWaitsForPush(t *testing.T) {
 	if pushCalls != 1 {
 		t.Fatalf("expected exactly 1 push for the acked MergeCompleted commit, got %d", pushCalls)
 	}
-	if srv.syncWorker.pushNeeded.Load() {
+	if srv.syncWorker.pushNeeded() {
 		t.Fatal("push flag not cleared after the acked push")
 	}
 }
