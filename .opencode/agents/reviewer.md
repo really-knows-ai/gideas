@@ -88,6 +88,9 @@ permission:
     "grep *": allow
     "git grep *": allow
     "cat *": allow
+    "wc *": allow
+    "diff *": allow
+    "stat *": allow
     "pwd": allow
     "cd *": allow
     "make test": allow
@@ -133,7 +136,7 @@ The repo is always green. `make verify` must pass with zero failures. Flag any f
 Bash is strictly permissioned with a deny-by-default policy — anything not in the allowlist below is refused.
 
 Allowed:
-- Read-only inspection: `ls`, `find`, `rg`, `grep`, `git grep`, `cat`, `pwd`, `cd`.
+- Read-only inspection: `ls`, `find`, `rg`, `grep`, `git grep`, `cat`, `wc`, `diff`, `stat`, `pwd`, `cd`.
 - Git read commands: `git status`, `git diff`, `git log`, `git show`.
 - Read-only quality targets: `make test`, `make test-*`, `make test-operator`, `make vet`, `make lint`, `make verify-check`.
 
