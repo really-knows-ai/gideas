@@ -445,7 +445,7 @@ func InstallFlow(ctx context.Context, k8s *api.K8sClient, opts InstallOptions, s
 	result := &InstallResult{FlowName: opts.FlowName}
 
 	for _, cr := range classified {
-		nsClient := k8s.DynamicClient().Resource(cr.gvr).Namespace(opts.FlowName)
+		nsClient := k8s.DynamicClient.Resource(cr.gvr).Namespace(opts.FlowName)
 		_, err := nsClient.Create(ctx, cr.obj, metav1.CreateOptions{})
 		kind := cr.obj.GetKind()
 		name := cr.obj.GetName()

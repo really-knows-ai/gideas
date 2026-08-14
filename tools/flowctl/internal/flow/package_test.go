@@ -55,7 +55,11 @@ func newPackageFakeClient(t *testing.T, crdObjects []runtime.Object, coreObjects
 	dyn := dynamicfake.NewSimpleDynamicClient(scheme, crdObjects...)
 	core := k8sfake.NewSimpleClientset(coreObjects...)
 	crdClient := crdfake.NewClientBuilder().WithScheme(scheme).WithRuntimeObjects(crdObjects...).Build()
-	return api.NewK8sClientWithComponents(dyn, core, crdClient, scheme)
+	return &api.K8sClient{
+		CoreClient:    core,
+		CRDClient:     crdClient,
+		DynamicClient: dyn,
+	}
 }
 
 // ─── Unstructured builders ───────────────────────────────────────────────

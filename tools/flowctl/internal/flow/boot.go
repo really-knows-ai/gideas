@@ -402,7 +402,7 @@ func Bootstrap(ctx context.Context, kubeconfigPath, version string, dryRun bool,
 		return err
 	}
 
-	dynamicClient := k8s.DynamicClient()
+	dynamicClient := k8s.DynamicClient
 	coreClient := k8s.CoreClient
 
 	// ── Apply CRDs ──────────────────────────────────────────────────────
