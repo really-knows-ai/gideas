@@ -352,6 +352,12 @@ func TestCodification_RoundTripPreservation(t *testing.T) {
 
 	pet := storedPetition(t, spy)
 
+	// Verify petition_id survived (used for T4-5 dispute records by
+	// law-applicator; codification must not drop it on re-marshal).
+	if pet.Petition.PetitionID != "pet-test-123" {
+		t.Errorf("petition_id = %q, want pet-test-123", pet.Petition.PetitionID)
+	}
+
 	// Verify context survived.
 	if pet.Petition.Context.Trigger != "deadlock-resolution" {
 		t.Errorf("trigger = %q, want deadlock-resolution", pet.Petition.Context.Trigger)
@@ -588,7 +594,7 @@ func TestNeedsCodification(t *testing.T) {
 	}
 	for _, tc := range cases {
 		c := petitionChange{Action: tc.action}
-		if got := c.needsCodification(); got != tc.want {
+		if got := needsCodification(&c); got != tc.want {
 			t.Errorf("needsCodification(%q) = %v, want %v", tc.action, got, tc.want)
 		}
 	}

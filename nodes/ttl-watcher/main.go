@@ -212,48 +212,11 @@ func lawTimestamp(law *flowv1.Law) *timestamppb.Timestamp {
 
 // handleHearing is the SDK handler entry point for hearing workitems.
 func handleHearing(ctx context.Context, wctx *flowv1.WorkitemContext) error {
-	client, workitem, err := nodeutil.SetupHandler(ctx, wctx, "ttl-watcher: handler")
-	if err != nil {
-		return err
-	}
-	defer func() { _ = client.Close() }()
-
-	return processHearing(workitem, wctx)
+	return nodeutil.HandleHearing(ctx, wctx, "ttl-watcher")
 }
 
 // processHearing performs the core handler logic: validate metadata, heartbeat,
 // store law-reference artefact, and route to default output.
 func processHearing(workitem *flow.Workitem, wctx *flowv1.WorkitemContext) error {
-	lawID := wctx.GetMetadata()["law_id"]
-	if lawID == "" {
-		return fmt.Errorf("ttl-watcher: handler: missing law_id in metadata")
-	}
-
-	slog.Info("ttl-watcher: handling hearing",
-		"workitem_id", wctx.GetWorkitemId(),
-		"law_id", lawID,
-	)
-
-	if err := workitem.Heartbeat(); err != nil {
-		return fmt.Errorf("ttl-watcher: handler: heartbeat: %w", err)
-	}
-
-	lawRef, err := workitem.GetArtefact("law-reference")
-	if err != nil {
-		return fmt.Errorf("ttl-watcher: handler: get law-reference: %w", err)
-	}
-	if err := lawRef.Store([]byte(lawID)); err != nil {
-		return fmt.Errorf("ttl-watcher: handler: store law-reference: %w", err)
-	}
-
-	slog.Info("ttl-watcher: stored law-reference artefact", "law_id", lawID)
-
-	if err := workitem.RouteTo("default"); err != nil {
-		return fmt.Errorf("ttl-watcher: handler: route: %w", err)
-	}
-
-	slog.Info("ttl-watcher: routed to default output",
-		"workitem_id", wctx.GetWorkitemId())
-
-	return nil
+	return nodeutil.ProcessHearing(workitem, wctx, "ttl-watcher")
 }

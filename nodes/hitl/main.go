@@ -187,77 +187,18 @@ func handleHITL(
 		}
 	}
 
-	// ── Step 3: Enqueue and pause ───────────────────────────────────
-	if err := qm.Enqueue(ctx, workitemID); err != nil {
-		return fmt.Errorf("hitl: enqueue: %w", err)
-	}
-
-	if err := workitem.PauseTimer(); err != nil {
-		return fmt.Errorf("hitl: pause timer: %w", err)
-	}
-
-	// ── Step 4: Wait for human decision ─────────────────────────────
-	slog.Info("hitl: awaiting human decision", "workitem_id", workitemID)
-	choice, err := qm.WaitForDecision(ctx, workitemID)
+	// ── Steps 3-6: Enqueue, pause, wait, validate, resume ───────────
+	choice, err := nodeutil.AwaitHumanDecision(ctx, qm, workitem, workitemID, "hitl", behaviour.validChoices)
 	if err != nil {
-		return fmt.Errorf("hitl: wait for decision: %w", err)
-	}
-
-	// Empty choice indicates QueueManager shutdown (not a human decision).
-	if choice == "" {
-		return fmt.Errorf("hitl: received empty choice (queue manager shut down before decision)")
-	}
-
-	// ── Step 5: Validate choice ─────────────────────────────────────
-	if !behaviour.validChoices[choice] {
-		return fmt.Errorf("hitl: invalid choice %q: not in valid set", choice)
-	}
-
-	slog.Info("hitl: human decision received", "workitem_id", workitemID, "choice", choice)
-
-	// ── Step 6: Resume timer ────────────────────────────────────────
-	if err := workitem.ResumeTimer(); err != nil {
-		return fmt.Errorf("hitl: resume timer: %w", err)
+		return err
 	}
 
 	// ── Step 7: Dispatch ────────────────────────────────────────────
 	if choice == choiceCancel {
-		return completeWithCancelled(workitem)
+		return nodeutil.CompleteCancelled(workitem, "hitl")
 	}
 
-	return stampAndRoute(workitem, behaviour, choice)
-}
-
-// completeWithCancelled calls Complete with COMPLETION_REASON_CANCELLED.
-func completeWithCancelled(workitem *flow.Workitem) error {
-	if err := workitem.Complete(flow.WithReason(flowv1.CompletionReason_COMPLETION_REASON_CANCELLED)); err != nil {
-		return fmt.Errorf("hitl: complete (cancelled): %w", err)
-	}
-	return nil
-}
-
-// stampAndRoute applies any stamp capabilities and routes to the chosen output.
-func stampAndRoute(
-	workitem *flow.Workitem,
-	behaviour *derivedBehaviour,
-	choice string,
-) error {
-	// Stamp all governed artefacts.
-	for _, sc := range behaviour.stamps {
-		art, err := workitem.GetArtefact(sc.GovernedArtefact)
-		if err != nil {
-			return fmt.Errorf("hitl: get artefact %s: %w", sc.GovernedArtefact, err)
-		}
-		if err := art.Stamp(sc.StampName); err != nil {
-			return fmt.Errorf("hitl: stamp %s/%s: %w", sc.GovernedArtefact, sc.StampName, err)
-		}
-	}
-
-	// Route to the chosen output.
-	if err := workitem.RouteTo(choice); err != nil {
-		return fmt.Errorf("hitl: route to output %q: %w", choice, err)
-	}
-	return nil
+	return nodeutil.StampAndRoute(workitem, behaviour.stamps, "hitl", choice)
 }
 
 // ---------------------------------------------------------------------------
