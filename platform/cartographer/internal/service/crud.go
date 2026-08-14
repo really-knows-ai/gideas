@@ -60,11 +60,7 @@ func (s *CartographerServer) ExecuteCypher(
 	defer unlockTx()
 	var params map[string]any
 	if req.Params != nil {
-		if s := req.Params.GetStructValue(); s != nil {
-			params = s.AsMap()
-		} else {
-			return nil, errCypherParamsNotAStruct()
-		}
+		params = req.Params.AsMap()
 	}
 	rows, err := s.store.ExecuteCypher(ctx, req.Cypher, params, req.TransactionId)
 	if err != nil {

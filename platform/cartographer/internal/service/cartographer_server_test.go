@@ -31,6 +31,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/structpb"
 )
@@ -1549,35 +1550,49 @@ func TestExecuteCypher_EmptyQuery(t *testing.T) {
 	}
 }
 
-// TestExecuteCypher_ParamsNotAStruct asserts the errCypherParamsNotAStruct
-// branch: when req.Params is present but not a *structpb.StructValue (a JSON
-// object), ExecuteCypher rejects the request with INVALID_ARGUMENT. Per SPEC
-// R2 the params must decode from a JSON object; a list/unset-wrapped value is
-// the untested divergence from that contract.
-func TestExecuteCypher_ParamsNotAStruct(t *testing.T) {
+// TestExecuteCypher_Params pins the SPEC R2 params contract: params must
+// decode from a JSON object, and the wire type is google.protobuf.Struct per
+// the SPEC error-table row "ExecuteCypher params not a JSON object". A Struct
+// payload flows through the handler to the store; a scalar or list params
+// value is structurally inexpressible in a parsed request — protobuf unmarshal
+// rejects it before handler code runs (the same annotation the store makes for
+// non-string property values, store.go:55-62). The protojson round-trip below
+// pins that rejection: it fails if the wire type ever regresses to
+// google.protobuf.Value, whose kind-oneof would accept a scalar or list.
+func TestExecuteCypher_Params(t *testing.T) {
 	srv, _ := newTestServer(t)
 	ctx := testCtx()
-	// Schema is applied so the statement parses server-side; the params
-	// validation then fires (the SPEC check order runs the parse before the
-	// capability/params gates, so an unparseable statement would otherwise
-	// surface its syntax error first).
 	applyTestSchema(ctx, t, srv.store)
 
-	// Wrap a list in Params: GetStructValue() is nil for a list, hitting the
-	// not-a-struct branch rather than an absent-Params fast path.
-	nonStructParams := structpb.NewListValue(&structpb.ListValue{})
-	_, err := srv.ExecuteCypher(ctx, &flowv1.ExecuteCypherRequest{
-		Cypher: "MATCH (n:Component) RETURN n",
-		Params: nonStructParams,
+	// Positive: a Struct params payload is passed through to the store.
+	ent, err := srv.store.CreateEntity(ctx, "Component", "",
+		map[string]string{"name": "param-test"}, nil, "")
+	if err != nil {
+		t.Fatalf("CreateEntity: %v", err)
+	}
+	resp, err := srv.ExecuteCypher(ctx, &flowv1.ExecuteCypherRequest{
+		Cypher: "MATCH (n:Component {id: $id}) RETURN n.name AS name",
+		Params: &structpb.Struct{Fields: map[string]*structpb.Value{
+			"id": structpb.NewStringValue(ent.Id),
+		}},
 	})
-	if err == nil {
-		t.Fatal("expected error for non-struct params, got nil")
+	if err != nil {
+		t.Fatalf("ExecuteCypher with struct params failed: %v", err)
 	}
-	if status.Code(err) != codes.InvalidArgument {
-		t.Fatalf("expected InvalidArgument, got %v (%v)", status.Code(err), err)
+	if len(resp.Rows) != 1 || len(resp.Rows[0].Values) != 1 || resp.Rows[0].Values[0] != "param-test" {
+		t.Fatalf("unexpected rows for params query: %+v", resp.Rows)
 	}
-	if got, want := status.Convert(err).Message(), "cypher query parameters must be a JSON object"; got != want {
-		t.Fatalf("expected message %q, got %q", want, got)
+
+	// Negative: a scalar or list params value cannot decode into the Struct
+	// wire field (SPEC error-table row "ExecuteCypher params not a JSON
+	// object") — protojson rejects it at the wire boundary.
+	for _, payload := range []string{
+		`{"cypher": "MATCH (n) RETURN n", "params": [1, 2, 3]}`,
+		`{"cypher": "MATCH (n) RETURN n", "params": "scalar"}`,
+	} {
+		if err := protojson.Unmarshal([]byte(payload), &flowv1.ExecuteCypherRequest{}); err == nil {
+			t.Fatalf("expected scalar/list params to be rejected at the wire boundary, got nil for %s", payload)
+		}
 	}
 }
 
