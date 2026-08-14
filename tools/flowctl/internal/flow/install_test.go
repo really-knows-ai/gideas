@@ -61,7 +61,11 @@ func newInstallFakeClient(t *testing.T, crdObjects []runtime.Object, coreObjects
 	dyn := dynamicfake.NewSimpleDynamicClient(scheme, crdObjects...)
 	core := &readyDiscoveryCoreClient{Clientset: k8sfake.NewSimpleClientset(coreObjects...)}
 	crdClient := crdfake.NewClientBuilder().WithScheme(scheme).WithRuntimeObjects(crdObjects...).Build()
-	return api.NewK8sClientWithComponents(dyn, core, crdClient, scheme)
+	return &api.K8sClient{
+		CoreClient:    core,
+		CRDClient:     crdClient,
+		DynamicClient: dyn,
+	}
 }
 
 // readyDiscoveryCoreClient wraps a fake Clientset and overrides Discovery()
@@ -444,7 +448,7 @@ func TestInstall_SuccessMultipleResources(t *testing.T) {
 	}
 
 	// Verify resource exists in namespace with correct metadata
-	dyn := k8s.DynamicClient()
+	dyn := k8s.DynamicClient
 	_, err = dyn.Resource(schema.GroupVersionResource{Group: "flow.foundry.io", Version: "v1", Resource: "governedartefacts"}).Namespace(testFlowName).Get(context.Background(), "haiku", metav1.GetOptions{})
 	if err != nil {
 		t.Errorf("GovernedArtefact not found: %v", err)
@@ -534,7 +538,7 @@ func TestInstall_ForceStuckNamespace(t *testing.T) {
 		Clientset:     k8sfake.NewSimpleClientset(),
 		namespaceName: testFlowName,
 	}
-	k8s := api.NewK8sClientWithComponents(dyn, core, crdClient, scheme)
+	k8s := &api.K8sClient{CoreClient: core, CRDClient: crdClient, DynamicClient: dyn}
 
 	dir := writeTestDir(t, &Manifest{
 		Name:    testFlowName,
@@ -684,7 +688,7 @@ func TestInstall_MissingCRDs(t *testing.T) {
 	scheme := installFakeScheme()
 	dyn := dynamicfake.NewSimpleDynamicClient(scheme)
 	crdClient := crdfake.NewClientBuilder().WithScheme(scheme).Build()
-	k8s := api.NewK8sClientWithComponents(dyn, core, crdClient, scheme)
+	k8s := &api.K8sClient{CoreClient: core, CRDClient: crdClient, DynamicClient: dyn}
 
 	var stdout, stderr bytes.Buffer
 	_, err := InstallFlow(context.Background(), k8s, InstallOptions{
@@ -724,7 +728,7 @@ func TestInstall_PartialFailure(t *testing.T) {
 	}
 	core := &readyDiscoveryCoreClient{Clientset: k8sfake.NewSimpleClientset()}
 	crdClient := crdfake.NewClientBuilder().WithScheme(scheme).Build()
-	k8s := api.NewK8sClientWithComponents(failingDyn, core, crdClient, scheme)
+	k8s := &api.K8sClient{CoreClient: core, CRDClient: crdClient, DynamicClient: failingDyn}
 
 	var stdout, stderr bytes.Buffer
 	result, err := InstallFlow(context.Background(), k8s, InstallOptions{
@@ -807,7 +811,7 @@ func TestInstall_RewrittenFields(t *testing.T) {
 		t.Fatalf("unexpected failures: %v", result.Errors)
 	}
 
-	dyn := k8s.DynamicClient()
+	dyn := k8s.DynamicClient
 	gvr := schema.GroupVersionResource{Group: "flow.foundry.io", Version: "v1", Resource: "foundryflows"}
 
 	// FoundryFlow .metadata.name == "my-flow"
@@ -876,7 +880,7 @@ func TestInstall_NonRewrittenFields(t *testing.T) {
 		t.Fatalf("unexpected failures: %v", result.Errors)
 	}
 
-	dyn := k8s.DynamicClient()
+	dyn := k8s.DynamicClient
 	nodeGVR := schema.GroupVersionResource{Group: "flow.foundry.io", Version: "v1", Resource: "foundrynodes"}
 
 	// FoundryNode .spec.outputs[0].target should still be "appraise"

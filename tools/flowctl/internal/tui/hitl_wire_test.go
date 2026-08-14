@@ -373,26 +373,6 @@ func (m *mockPortForwarder) CloseAll() error {
 	return nil
 }
 
-func (m *mockPortForwarder) CloseHITLForward() error {
-	return nil
-}
-
-func (m *mockPortForwarder) SetHITLForward(namespace, podName string, remotePort int) error {
-	return nil
-}
-
-func (m *mockPortForwarder) ActiveForwards() []string {
-	keys := make([]string, 0, len(m.forwards))
-	for k := range m.forwards {
-		keys = append(keys, k)
-	}
-	return keys
-}
-
-func (m *mockPortForwarder) GetHITLLocalPort() (int, bool) {
-	return 0, false
-}
-
 func (m *mockPortForwarder) IsOpen(fid string) bool {
 	return m.forwards[fid]
 }

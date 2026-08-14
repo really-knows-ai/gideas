@@ -59,11 +59,7 @@ func (m *mockPFMWiring) Close(forwardID string) error {
 	return nil
 }
 
-func (m *mockPFMWiring) CloseAll() error                          { return nil }
-func (m *mockPFMWiring) CloseHITLForward() error                   { return nil }
-func (m *mockPFMWiring) SetHITLForward(namespace, podName string, remotePort int) error { return nil }
-func (m *mockPFMWiring) ActiveForwards() []string                 { return nil }
-func (m *mockPFMWiring) GetHITLLocalPort() (int, bool)            { return 0, false }
+func (m *mockPFMWiring) CloseAll() error { return nil }
 
 // ─── Mock Archivist gRPC Server ────────────────────────────────────────────
 

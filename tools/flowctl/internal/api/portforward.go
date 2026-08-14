@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"sort"
 	"sync"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -31,7 +30,6 @@ type PortForwardManager struct {
 	clientset     kubernetes.Interface
 	forwards      map[string]*forwardState // key: "namespace/podName:remotePort"
 	spdyForwarder SPDYForwarder            // production or mock SPDY forwarder
-	hitlKey       string                   // key of the active HITL forward, if any
 }
 
 // SPDYForwarder abstracts the SPDY port-forward creation for testability.
@@ -46,10 +44,6 @@ type PortForwarder interface {
 	ForwardPod(ctx context.Context, namespace, podName string, remotePort int) (forwardID string, localPort int, err error)
 	Close(forwardID string) error
 	CloseAll() error
-	CloseHITLForward() error
-	SetHITLForward(namespace, podName string, remotePort int) error
-	ActiveForwards() []string
-	GetHITLLocalPort() (int, bool)
 }
 
 // Compile-time check that *PortForwardManager implements PortForwarder.
@@ -210,12 +204,6 @@ func (m *PortForwardManager) Close(forwardID string) error {
 
 	state.stopFunc()
 
-	m.mu.Lock()
-	if m.hitlKey == forwardID {
-		m.hitlKey = ""
-	}
-	m.mu.Unlock()
-
 	return nil
 }
 
@@ -237,81 +225,9 @@ func (m *PortForwardManager) CloseAll() error {
 
 	m.mu.Lock()
 	m.forwards = make(map[string]*forwardState)
-	m.hitlKey = ""
 	m.mu.Unlock()
 
 	return firstErr
-}
-
-// CloseHITLForward closes only the forward registered as the HITL forward.
-func (m *PortForwardManager) CloseHITLForward() error {
-	m.mu.Lock()
-	key := m.hitlKey
-	m.mu.Unlock()
-
-	if key == "" {
-		return fmt.Errorf("no active HITL forward")
-	}
-	return m.Close(key)
-}
-
-// SetHITLForward registers the given forward as the HITL forward.
-// If a HITL forward is already active, it is closed first.
-func (m *PortForwardManager) SetHITLForward(namespace, podName string, remotePort int) error {
-	key := fmt.Sprintf("%s/%s:%d", namespace, podName, remotePort)
-
-	m.mu.Lock()
-	// Check that the forward exists
-	if _, ok := m.forwards[key]; !ok {
-		m.mu.Unlock()
-		return fmt.Errorf("forward %q does not exist", key)
-	}
-
-	// Close previous HITL forward if different
-	oldKey := m.hitlKey
-	m.mu.Unlock()
-
-	if oldKey != "" && oldKey != key {
-		if err := m.Close(oldKey); err != nil {
-			m.mu.Lock()
-			m.hitlKey = key
-			m.mu.Unlock()
-			return err
-		}
-	}
-
-	m.mu.Lock()
-	m.hitlKey = key
-	m.mu.Unlock()
-	return nil
-}
-
-// ActiveForwards returns the keys of all active forwards.
-func (m *PortForwardManager) ActiveForwards() []string {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	keys := make([]string, 0, len(m.forwards))
-	for k := range m.forwards {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
-}
-
-// GetHITLLocalPort returns the local port of the active HITL forward.
-func (m *PortForwardManager) GetHITLLocalPort() (int, bool) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if m.hitlKey == "" {
-		return 0, false
-	}
-	state, ok := m.forwards[m.hitlKey]
-	if !ok {
-		return 0, false
-	}
-	return state.localPort, true
 }
 
 

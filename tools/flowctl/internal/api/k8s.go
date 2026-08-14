@@ -41,7 +41,7 @@ type K8sClient struct {
 	CRDClient     client.Client        // controller-runtime for CRDs
 	RESTConfig    *rest.Config         // stored for port-forward creation
 	scheme        *runtime.Scheme      // scheme with flow.foundry.io types
-	dynamicClient dynamic.Interface    // client-go dynamic for watch/status
+	DynamicClient dynamic.Interface    // client-go dynamic for watch/status
 }
 
 // WatchOptions controls WatchWithBackoff behavior.
@@ -95,7 +95,7 @@ func NewForConfig(config *rest.Config) (*K8sClient, error) {
 		CRDClient:     crdClient,
 		RESTConfig:    config,
 		scheme:        scheme,
-		dynamicClient: dynamicClient,
+		DynamicClient: dynamicClient,
 	}, nil
 }
 
@@ -187,7 +187,7 @@ func (c *K8sClient) ListWorkitems(ctx context.Context, namespace string) ([]Work
 
 // WatchWorkitems returns a watch.Interface for Workitems in the namespace.
 func (c *K8sClient) WatchWorkitems(ctx context.Context, namespace string) (watch.Interface, error) {
-	return c.dynamicClient.Resource(workitemGVR).Namespace(namespace).Watch(ctx, metav1.ListOptions{})
+	return c.DynamicClient.Resource(workitemGVR).Namespace(namespace).Watch(ctx, metav1.ListOptions{})
 }
 
 // WatchWithBackoff watches Workitems in namespace, calling handler for each event.
@@ -447,7 +447,7 @@ func (c *K8sClient) CreateWorkitem(ctx context.Context, namespace string, name s
 func (c *K8sClient) UpdateWorkitemStatus(ctx context.Context, namespace string, name string, phase string, assignee string) error {
 	// Use dynamic client for both read and write to ensure consistency
 	// (controller-runtime and dynamic fake clients are not backed by the same store).
-	wiClient := c.dynamicClient.Resource(workitemGVR).Namespace(namespace)
+	wiClient := c.DynamicClient.Resource(workitemGVR).Namespace(namespace)
 
 	getObj, err := wiClient.Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
@@ -568,22 +568,6 @@ func (c *K8sClient) ResolveNamespace(ctx context.Context, labelSelector string) 
 // RESTConfig returns the underlying *rest.Config for port-forward creation.
 func (c *K8sClient) GetRESTConfig() *rest.Config {
 	return c.RESTConfig
-}
-
-// DynamicClient returns the underlying dynamic.Interface for direct CRD operations.
-func (c *K8sClient) DynamicClient() dynamic.Interface {
-	return c.dynamicClient
-}
-
-// NewK8sClientWithComponents creates a K8sClient from pre-built clients.
-// Used by test code to inject fake clients.
-func NewK8sClientWithComponents(dyn dynamic.Interface, core kubernetes.Interface, crd client.Client, scheme *runtime.Scheme) *K8sClient {
-	return &K8sClient{
-		CoreClient:    core,
-		CRDClient:     crd,
-		dynamicClient: dyn,
-		scheme:        scheme,
-	}
 }
 
 // CheckConnectivity performs a 5-second API server reachability probe.

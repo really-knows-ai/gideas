@@ -386,7 +386,7 @@ func (g *prodGraphExporter) lookupFoundryGraph(ctx context.Context, namespace, n
 		Version:  "v1",
 		Resource: "foundrygraphs",
 	}
-	fgClient := g.k8s.DynamicClient().Resource(fgGVR).Namespace(namespace)
+	fgClient := g.k8s.DynamicClient.Resource(fgGVR).Namespace(namespace)
 	_, err := fgClient.Get(ctx, name, metav1.GetOptions{})
 	return err
 }

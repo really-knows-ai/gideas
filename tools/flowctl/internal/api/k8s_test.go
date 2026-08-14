@@ -295,7 +295,7 @@ func TestWatchWorkitems(t *testing.T) {
 	scheme := newFakeScheme()
 	dynamicClient := dynamicfake.NewSimpleDynamicClient(scheme)
 
-	k8s := &K8sClient{dynamicClient: dynamicClient}
+	k8s := &K8sClient{DynamicClient: dynamicClient}
 	watcher, err := k8s.WatchWorkitems(context.Background(), "default")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -412,7 +412,7 @@ func TestUpdateWorkitemStatus(t *testing.T) {
 	dynamicClient := dynamicfake.NewSimpleDynamicClient(scheme,
 		makeWorkitemUnstructured("wi-test", "", ""),
 	)
-	k8s := &K8sClient{CRDClient: crdClient, dynamicClient: dynamicClient, scheme: scheme}
+	k8s := &K8sClient{CRDClient: crdClient, DynamicClient: dynamicClient, scheme: scheme}
 	err := k8s.UpdateWorkitemStatus(context.Background(), "default", "wi-test", "Pending", "forge")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -489,7 +489,7 @@ func TestWatchWithBackoffReconnects(t *testing.T) {
 
 	scheme := newFakeScheme()
 	dynamicClient := dynamicfake.NewSimpleDynamicClient(scheme)
-	k8s := &K8sClient{dynamicClient: dynamicClient}
+	k8s := &K8sClient{DynamicClient: dynamicClient}
 
 	var connectCount, disconnectCount int
 	var mu sync.Mutex

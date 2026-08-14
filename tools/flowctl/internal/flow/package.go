@@ -183,7 +183,7 @@ func PackageFlow(ctx context.Context, k8s *api.K8sClient, opts PackageOptions) (
 		return nil, fmt.Errorf("either OutputPath or OutputDir must be set")
 	}
 
-	dyn := k8s.DynamicClient()
+	dyn := k8s.DynamicClient
 	ns := opts.FlowName
 
 	// Step 1: Discover FoundryFlow
