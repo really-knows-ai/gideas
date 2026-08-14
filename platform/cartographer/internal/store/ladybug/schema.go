@@ -150,6 +150,84 @@ func (db *ladybugDB) getTableProperties(tableName, tableType string, vectorIndex
 	return tablePropertiesOnConn(db.conn, tableName, tableType, vectorIndexed)
 }
 
+func vectorIndexesOnConn(conn *lbug.Connection) (map[string]bool, error) {
+	indexes := make(map[string]bool)
+	result, err := conn.Query("CALL show_indexes() RETURN *;")
+	if err != nil {
+		// Propagate, never swallow: every caller (rebuildBranchSchemaCache,
+		// captureVectorState) treats a nil error as authoritative vector state,
+		// so a catalog-read failure returning (empty map, nil) would silently
+		// strip vector state from every type read on branch reopen. The
+		// callers all propagate this error already, so the read path fails
+		// loudly instead of silently marking every type non-vector.
+		return nil, err
+	}
+	defer result.Close()
+	for result.HasNext() {
+		tuple, err := result.Next()
+		if err != nil {
+			return nil, err
+		}
+		values, err := tuple.GetAsSlice()
+		tuple.Close()
+		if err != nil {
+			return nil, err
+		}
+		if len(values) >= 3 && strings.EqualFold(fmt.Sprint(values[2]), "hnsw") {
+			indexes[fmt.Sprint(values[0])] = true
+		}
+	}
+	return indexes, nil
+}
+
+// tablePropertiesOnConn reads a table's column definitions via table_info.
+// It is the shared helper for both the main schema-cache rebuild
+// (getTableProperties delegates here) and the branch schema rebuild
+// (rebuildBranchSchemaCache). Structural column skipping is table-kind
+// dependent: REL tables skip their from/to/type endpoint columns;
+// vector-indexed NODE tables skip their embedding column. SPEC-valid entity
+// properties named from/to/type (or embedding on a non-vector entity type)
+// are real properties and are retained. vectorIndexed reports whether the
+// NODE table carries an HNSW vector index (the embedding column and its index
+// are bootstrapped together, so an index implies a structural embedding
+// column).
+func tablePropertiesOnConn(
+	conn *lbug.Connection, table, tableType string, vectorIndexed bool,
+) ([]store.PropertyDef, error) {
+	result, err := conn.Query(fmt.Sprintf("CALL table_info('%s') RETURN *;", table))
+	if err != nil {
+		return nil, err
+	}
+	defer result.Close()
+	skip := map[string]bool{"id": true}
+	switch strings.ToUpper(tableType) {
+	case "NODE":
+		if vectorIndexed {
+			skip["embedding"] = true
+		}
+	case "REL":
+		skip["from"] = true
+		skip["to"] = true
+		skip["type"] = true
+	}
+	properties := []store.PropertyDef{}
+	for result.HasNext() {
+		tuple, err := result.Next()
+		if err != nil {
+			return nil, err
+		}
+		values, err := tuple.GetAsSlice()
+		tuple.Close()
+		if err != nil {
+			return nil, err
+		}
+		if len(values) >= 3 && !skip[fmt.Sprint(values[1])] {
+			properties = append(properties, store.PropertyDef{Name: fmt.Sprint(values[1]), Type: fmt.Sprint(values[2])})
+		}
+	}
+	return properties, nil
+}
+
 // quoteID quotes a Cypher identifier using backticks. LadybugDB/Cypher uses
 // backticks for escaped identifiers; double quotes are string literals.
 // Names that pass schema validation ([a-zA-Z_][a-zA-Z0-9_]*) do not need
@@ -243,8 +321,8 @@ func (db *ladybugDB) ApplySchema(ctx context.Context, s *flowv1.Schema) error {
 
 	// Apply edge types — new tables or additive ALTER.
 	for _, et := range s.EdgeTypes {
-		if existing, exists := db.edgeTypeDefs[et.Name]; exists {
-			if err := db.alterRelTable(et, existing); err != nil {
+		if _, exists := db.edgeTypeDefs[et.Name]; exists {
+			if err := db.alterRelTable(et); err != nil {
 				return fmt.Errorf("alter rel table %q: %w", et.Name, err)
 			}
 		} else {
@@ -462,9 +540,24 @@ func branchPropertiesCompatible(typeName, kind string, branchProps, currentProps
 // alterNodeTable applies additive ALTER DDL for new properties on an existing
 // node table. It does not handle destructive changes (those are rejected by
 // diffSchemaAgainstCatalog).
+//
+// The diff runs against the LIVE catalog columns, not the in-memory def.
+// ApplySchema converges db.entityTypeDefs only after the full DDL loop
+// succeeds, so a retried ApplySchema after a mid-loop error diffs against a
+// stale cache and would re-issue the non-idempotent ALTER TABLE ADD against a
+// column the catalog already holds — failing again on every retry until a pod
+// restart (the crash case is converged by restoreMainSchemaMetadataLocked; the
+// in-process retry was not). Skipping catalog-present columns — mirroring
+// createNodeTableOnConn's IF NOT EXISTS guard — makes the retry converge, and
+// the FTS rebuild derives its string set from the same live columns so a
+// string column a partial run added before it failed is still covered.
 func (db *ladybugDB) alterNodeTable(et *flowv1.EntityType, existing *store.EntityTypeDef) error {
-	existingProps := make(map[string]bool, len(existing.Properties))
-	for _, p := range existing.Properties {
+	props, err := db.getTableProperties(et.Name, tableTypeNode, existing.EnableVectorIndex)
+	if err != nil {
+		return fmt.Errorf("read catalog columns for %q: %w", et.Name, err)
+	}
+	existingProps := make(map[string]bool, len(props))
+	for _, p := range props {
 		existingProps[p.Name] = true
 	}
 	var newStringProps []string
@@ -482,11 +575,25 @@ func (db *ladybugDB) alterNodeTable(et *flowv1.EntityType, existing *store.Entit
 			newStringProps = append(newStringProps, p.Name)
 		}
 	}
-	// Rebuild FTS index with all string properties (existing + new) so that
-	// the index covers every string column, not just the newly added one.
-	if len(newStringProps) > 0 {
+	// Rebuild the FTS index over the full string-property set whenever the
+	// catalog's string columns grew beyond the in-memory def's record — either
+	// from this call's ALTERs or from a partial run that added string columns
+	// before it failed (whose index rebuild never ran) — so a retried
+	// ApplySchema also converges the index.
+	known := make(map[string]bool, len(existing.Properties))
+	for _, p := range existing.Properties {
+		known[p.Name] = true
+	}
+	staleString := false
+	for _, p := range props {
+		if ladybugType(p.Type) == colTypeString && !known[p.Name] {
+			staleString = true
+			break
+		}
+	}
+	if len(newStringProps) > 0 || staleString {
 		var allStringProps []string
-		for _, p := range existing.Properties {
+		for _, p := range props {
 			if ladybugType(p.Type) == colTypeString {
 				allStringProps = append(allStringProps, p.Name)
 			}
@@ -509,9 +616,17 @@ func (db *ladybugDB) alterNodeTable(et *flowv1.EntityType, existing *store.Entit
 // unchanged, so it needs no defensive re-check. The failure mode stays loud:
 // the caller sees ErrDestructiveSchemaChange before a single DDL statement
 // executes, never a silent partial apply.
-func (db *ladybugDB) alterRelTable(et *flowv1.EdgeType, existing *store.EdgeTypeDef) error {
-	existingProps := make(map[string]bool, len(existing.Properties))
-	for _, p := range existing.Properties {
+func (db *ladybugDB) alterRelTable(et *flowv1.EdgeType) error {
+	// Same live-catalog diff as alterNodeTable: a retried ApplySchema after a
+	// mid-loop error would otherwise re-issue the non-idempotent ALTER TABLE
+	// ADD against a column the catalog already holds. Rel tables carry no FTS
+	// index, so the guard alone converges the retry.
+	props, err := db.getTableProperties(et.Name, tableTypeRel, false)
+	if err != nil {
+		return fmt.Errorf("read catalog columns for %q: %w", et.Name, err)
+	}
+	existingProps := make(map[string]bool, len(props))
+	for _, p := range props {
 		existingProps[p.Name] = true
 	}
 	for _, p := range et.Properties {
@@ -626,6 +741,110 @@ func propsFromEdge(et *flowv1.EdgeType) []store.PropertyDef {
 		props = append(props, store.PropertyDef{Name: p.Name, Type: p.Type, Required: p.Required})
 	}
 	return props
+}
+
+// --------------------------------------------------------------------------
+// Internal helpers — table DDL on an arbitrary connection
+// --------------------------------------------------------------------------
+
+func createNodeTableOnConn(conn *lbug.Connection, name string,
+	properties []store.PropertyDef) error {
+	cols := make([]string, 0, 1+len(properties)+1)
+	cols = append(cols, "id STRING PRIMARY KEY")
+	stringProps := make([]string, 0, len(properties))
+	for _, p := range properties {
+		propertyType := ladybugType(p.Type)
+		cols = append(cols, quoteID(p.Name)+" "+propertyType)
+		if propertyType == colTypeString {
+			stringProps = append(stringProps, p.Name)
+		}
+	}
+	// ponytail: embedding column and vector index are bootstrapped lazily
+	// on first CreateEntity with an embedding; no FLOAT[n] column or index
+	// is created at table creation time. Consequences until that first
+	// bootstrap write: (1) a pre-bootstrap CreateEntity that omits the
+	// embedding fails with ErrVectorBootstrap (SPEC R7/error-table row
+	// "Vector dimension bootstrap failed") — the first entity for a
+	// vector-indexed type must carry an embedding; (2) the type's vector
+	// search silently returns empty — searchIndexedType skips any type
+	// whose dimension is still 0, so SearchNeighbors over the type (or a
+	// wildcard search covering it) reports no results and no error, which
+	// can mask "no embeddings written yet" as "no neighbors found"; and
+	// (3) the FLOAT[n] dimension is permanently locked at the first
+	// bootstrap — a later embedding of a different dimension is rejected
+	// with ErrEmbeddingDimension, and re-dimensioning a bootstrapped type
+	// is possible only through a destructive schema change (drop the type,
+	// wipe, re-apply). Deployment risk: clients that never write embeddings
+	// to a vector-enabled type observe the type as permanently empty to
+	// search while the bootstrap contract silently degrades their writes
+	// to FAILED_PRECONDITION. The laziness is SPEC-mandated (R7/ApplySchema:
+	// the dimension is unknowable until the first embedding), so this is a
+	// documented ceiling, not a divergence.
+	ddl := fmt.Sprintf("CREATE NODE TABLE IF NOT EXISTS %s (%s);", quoteID(name), strings.Join(cols, ", "))
+	r, err := conn.Query(ddl)
+	if err != nil {
+		return err
+	}
+	r.Close()
+	// Create FTS index on all string properties.
+	if len(stringProps) > 0 {
+		// Whether the table was freshly created or already existed (this builder
+		// runs CREATE NODE TABLE IF NOT EXISTS on every table (re)creation at
+		// hydration / schema-load), its FTS index — also not idempotent to
+		// create — may already exist. Skip only when the index is known present,
+		// so a genuine index-creation error propagates and cannot silently skip
+		// the type's FullTextSearch coverage (query.go silently skips index-less
+		// types), rather than error-matching the library's "already exists" text.
+		if ok, err := ftsIndexExists(conn, name); err != nil {
+			return fmt.Errorf("check FTS index for %q: %w", name, err)
+		} else if !ok {
+			propsList := "'" + strings.Join(stringProps, "', '") + "'"
+			ftsDDL := fmt.Sprintf("CALL CREATE_FTS_INDEX('%s', '%s_fts', [%s], stemmer := 'porter');",
+				name, name, propsList)
+			r, err := conn.Query(ftsDDL)
+			if err != nil {
+				return fmt.Errorf("create FTS index for %q: %w", name, err)
+			}
+			r.Close()
+		}
+	}
+	return nil
+}
+
+func createRelTableOnConn(conn *lbug.Connection, name string,
+	properties []store.PropertyDef, pairs []fromToPair) error {
+	var clauses []string
+	if len(pairs) > 0 {
+		for _, p := range pairs {
+			clauses = append(clauses, fmt.Sprintf("FROM %s TO %s", quoteID(p.From), quoteID(p.To)))
+		}
+	} else {
+		// Need at least one FROM/TO pair; create a placeholder _untyped node table.
+		// The rel table's endpoint clauses reference this table by name, so a
+		// failure here would otherwise surface only second-hand (and unreliably)
+		// when the rel-table DDL references the missing table. Propagate it now.
+		stmt := "CREATE NODE TABLE IF NOT EXISTS " + untypedTableName + " (id STRING PRIMARY KEY);"
+		r, err := conn.Query(stmt)
+		if err != nil {
+			return fmt.Errorf("create placeholder %s node table: %w", untypedTableName, err)
+		}
+		r.Close()
+		clauses = append(clauses, "FROM "+untypedTableName+" TO "+untypedTableName)
+	}
+
+	cols := make([]string, 0, 2+len(properties)+1)
+	cols = append(cols, strings.Join(clauses, ", "))
+	cols = append(cols, "id STRING")
+	for _, p := range properties {
+		cols = append(cols, quoteID(p.Name)+" "+ladybugType(p.Type))
+	}
+	ddl := fmt.Sprintf("CREATE REL TABLE IF NOT EXISTS %s (%s);", quoteID(name), strings.Join(cols, ", "))
+	r, err := conn.Query(ddl)
+	if err != nil {
+		return err
+	}
+	r.Close()
+	return nil
 }
 
 // fromToPair describes a single FROM → TO clause for a rel table. The json tags
