@@ -37,8 +37,7 @@ type CartographerServer struct {
 	txManager   *TransactionManager
 	txAdmission sync.RWMutex
 
-	writeLock       sync.Mutex
-	beforeWriteLock func() // test barrier; nil in production
+	writeLock sync.Mutex
 
 	dbReady atomic.Bool
 
@@ -148,8 +147,5 @@ func (s *CartographerServer) withGitLock(fn func() error) error {
 }
 
 func (s *CartographerServer) lockMainStore() {
-	if s.beforeWriteLock != nil {
-		s.beforeWriteLock()
-	}
 	s.writeLock.Lock()
 }
