@@ -67,12 +67,6 @@ func NewTelemetryBuffer(client flowv1.FlowEventBusServiceClient, size int) *Tele
 	}
 }
 
-// NewTelemetryBufferFromClient creates a buffer from a
-// [flowv1.FlowEventBusServiceClient].
-func NewTelemetryBufferFromClient(client flowv1.FlowEventBusServiceClient, size int) *TelemetryBuffer {
-	return NewTelemetryBuffer(client, size)
-}
-
 // Submit enqueues an event for async delivery. Non-blocking: if the
 // buffer for the event's priority is full, the event is dropped.
 func (tb *TelemetryBuffer) Submit(evt Event) {
@@ -91,16 +85,6 @@ func (tb *TelemetryBuffer) Stop() {
 	// Stop both publishers concurrently. Both drain independently.
 	tb.highPub.Stop()
 	tb.normalPub.Stop()
-}
-
-// DroppedNormal returns the number of dropped normal-priority events.
-func (tb *TelemetryBuffer) DroppedNormal() int64 {
-	return tb.normalPub.Dropped()
-}
-
-// DroppedHigh returns the number of dropped high-priority events.
-func (tb *TelemetryBuffer) DroppedHigh() int64 {
-	return tb.highPub.Dropped()
 }
 
 // eventToPublishRequest converts a domain Event into a [flowv1.PublishRequest].

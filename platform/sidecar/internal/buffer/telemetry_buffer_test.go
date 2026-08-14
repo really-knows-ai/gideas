@@ -146,7 +146,7 @@ func TestTelemetryBuffer_DropNormalWhenFull(t *testing.T) {
 	// Give a moment for drain to start.
 	time.Sleep(50 * time.Millisecond)
 
-	if tb.DroppedNormal() == 0 {
+	if tb.normalPub.Dropped() == 0 {
 		t.Fatal("expected at least 1 dropped normal event")
 	}
 
@@ -167,7 +167,7 @@ func TestTelemetryBuffer_DropHighWhenFull(t *testing.T) {
 
 	time.Sleep(50 * time.Millisecond)
 
-	if tb.DroppedHigh() == 0 {
+	if tb.highPub.Dropped() == 0 {
 		t.Fatal("expected at least 1 dropped high event")
 	}
 
@@ -280,7 +280,7 @@ func TestTelemetryBuffer_RetryOnFailure(t *testing.T) {
 	tb.Stop()
 
 	// Should not have been dropped.
-	if tb.DroppedNormal() != 0 {
-		t.Fatalf("expected 0 drops (retried), got %d", tb.DroppedNormal())
+	if tb.normalPub.Dropped() != 0 {
+		t.Fatalf("expected 0 drops (retried), got %d", tb.normalPub.Dropped())
 	}
 }

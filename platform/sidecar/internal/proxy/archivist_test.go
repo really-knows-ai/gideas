@@ -312,8 +312,7 @@ func TestArchivistProxy_ListArtefacts_ForwardsTargetWorkitemID(t *testing.T) {
 // --- GetArtefact authorization ---
 
 func TestArchivistProxy_GetArtefact_CrossWorkitem_Allowed(t *testing.T) {
-	auth := service.NewSidecarServer("ns", "node", "")
-	auth.InjectSessionForTest(parentWIStr, "node")
+	auth := newSidecarWithSession(t)
 	auth.TrackChild(parentWIStr, childWIStr)
 	proxy, capture := setupArchivistProxyWithAuth(t, auth)
 
@@ -338,8 +337,7 @@ func TestArchivistProxy_GetArtefact_CrossWorkitem_Allowed(t *testing.T) {
 }
 
 func TestArchivistProxy_GetArtefact_CrossWorkitem_Denied(t *testing.T) {
-	auth := service.NewSidecarServer("ns", "node", "")
-	auth.InjectSessionForTest(parentWIStr, "node")
+	auth := newSidecarWithSession(t)
 	auth.TrackChild(parentWIStr, "other-child") // Session has children, but not "rogue-wi"
 	proxy, _ := setupArchivistProxyWithAuth(t, auth)
 
@@ -361,8 +359,7 @@ func TestArchivistProxy_GetArtefact_CrossWorkitem_Denied(t *testing.T) {
 }
 
 func TestArchivistProxy_GetArtefact_CrossWorkitem_Unknown_PassesThrough(t *testing.T) {
-	auth := service.NewSidecarServer("ns", "node", "")
-	auth.InjectSessionForTest(parentWIStr, "node")
+	auth := newSidecarWithSession(t)
 	// No children added — session exists but has no children → ChildAccessUnknown.
 	proxy, capture := setupArchivistProxyWithAuth(t, auth)
 
@@ -420,8 +417,7 @@ func TestArchivistProxy_GetArtefact_NilAuth_PassesThrough(t *testing.T) {
 // --- ListArtefacts authorization ---
 
 func TestArchivistProxy_ListArtefacts_CrossWorkitem_Allowed(t *testing.T) {
-	auth := service.NewSidecarServer("ns", "node", "")
-	auth.InjectSessionForTest(parentWIStr, "node")
+	auth := newSidecarWithSession(t)
 	auth.TrackChild(parentWIStr, childWIStr)
 	proxy, capture := setupArchivistProxyWithAuth(t, auth)
 
@@ -444,8 +440,7 @@ func TestArchivistProxy_ListArtefacts_CrossWorkitem_Allowed(t *testing.T) {
 }
 
 func TestArchivistProxy_ListArtefacts_CrossWorkitem_Denied(t *testing.T) {
-	auth := service.NewSidecarServer("ns", "node", "")
-	auth.InjectSessionForTest(parentWIStr, "node")
+	auth := newSidecarWithSession(t)
 	auth.TrackChild(parentWIStr, "other-child")
 	proxy, _ := setupArchivistProxyWithAuth(t, auth)
 
@@ -486,8 +481,7 @@ func TestArchivistProxy_StoreArtefact_SameWorkitem_NoAuth(t *testing.T) {
 }
 
 func TestArchivistProxy_StoreArtefact_ChildWorkitem_Allowed(t *testing.T) {
-	auth := service.NewSidecarServer("ns", "node", "")
-	auth.InjectSessionForTest(parentWIStr, "node")
+	auth := newSidecarWithSession(t)
 	auth.TrackChild(parentWIStr, childWIStr)
 	proxy, capture := setupArchivistProxyWithAuth(t, auth)
 
@@ -509,8 +503,7 @@ func TestArchivistProxy_StoreArtefact_ChildWorkitem_Allowed(t *testing.T) {
 }
 
 func TestArchivistProxy_StoreArtefact_ChildWorkitem_Denied(t *testing.T) {
-	auth := service.NewSidecarServer("ns", "node", "")
-	auth.InjectSessionForTest(parentWIStr, "node")
+	auth := newSidecarWithSession(t)
 	auth.TrackChild(parentWIStr, "other-child")
 	proxy, _ := setupArchivistProxyWithAuth(t, auth)
 
@@ -533,8 +526,7 @@ func TestArchivistProxy_StoreArtefact_ChildWorkitem_Denied(t *testing.T) {
 }
 
 func TestArchivistProxy_StoreArtefact_ChildWorkitem_Unknown_Denied(t *testing.T) {
-	auth := service.NewSidecarServer("ns", "node", "")
-	auth.InjectSessionForTest(parentWIStr, "node")
+	auth := newSidecarWithSession(t)
 	// No children — ChildAccessUnknown but StoreArtefact treats Unknown as Denied for writes.
 	proxy, _ := setupArchivistProxyWithAuth(t, auth)
 

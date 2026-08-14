@@ -183,23 +183,6 @@ func (s *SidecarServer) LookupSession(workitemID string) *SessionIdentity {
 	}
 }
 
-// InjectSessionForTest creates a session for the given workitem ID
-// without going through the full AssignWork RPC flow. This is exposed
-// for testing so that proxy-package tests can exercise TrackChild
-// and AuthorizeChildAccess.
-//
-// ponytail: exists because proxy tests are in a different package and
-// cannot access unexported session fields. Should be replaced if
-// AssignWork ever exposes session creation separately.
-func (s *SidecarServer) InjectSessionForTest(workitemID, nodeID string) {
-	ctx := context.Background()
-	sess, _ := newSession(ctx, workitemID, nodeID, s.timeout())
-	sess.stop() // Prevent timer goroutine from leaking.
-	s.mu.Lock()
-	s.sessions[workitemID] = sess
-	s.mu.Unlock()
-}
-
 // Heartbeat resets the Sidecar's inactivity timer for the specified
 // Workitem assignment. If no active session exists for the workitem_id,
 // the heartbeat is acknowledged but has no timer effect.

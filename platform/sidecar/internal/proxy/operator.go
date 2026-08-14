@@ -11,6 +11,7 @@ import (
 	"log/slog"
 
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
+	flowmeta "github.com/foundry/flow/pkg/metadata"
 	"github.com/foundry/flow/sidecar/internal/service"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
@@ -62,9 +63,9 @@ func (p *OperatorProxy) SubmitResult(
 ) (*flowv1.SubmitResultResponse, error) {
 	// Log propagated metadata keys for debugging namespace propagation.
 	md, _ := metadata.FromIncomingContext(ctx)
-	nsKeys := md.Get("x-flow-namespace")
-	wKeys := md.Get("x-flow-workitem-id")
-	nKeys := md.Get("x-flow-node-id")
+	nsKeys := md.Get(flowmeta.MetadataKeyNamespace)
+	wKeys := md.Get(flowmeta.MetadataKeyWorkitemID)
+	nKeys := md.Get(flowmeta.MetadataKeyNodeID)
 	actionStr := "nil"
 	if req.GetAction() != nil {
 		actionStr = fmt.Sprintf("%T", req.GetAction())
