@@ -26,22 +26,9 @@ import (
 
 const (
 	// defaultGraphName is the conventional singleton FoundryGraph resource
-	// name (SPEC R1).
-	//
-	// ponytail: "flow-graph" is an operational knob duplicated across two
-	// surfaces — this CLI constant and the operator proxy's defaultGraphName
-	// (platform/operator/internal/controller/foundrygraph_proxyserver.go:82).
-	// The two live in separate Go modules, and the operator's constant sits
-	// in an internal package, so a shared source of truth would require
-	// exporting a new non-internal constant and adding a cross-module
-	// dependency. The CLI sends this value as x-flow-graph-name metadata and
-	// the proxy falls back to its own constant only when the metadata is
-	// absent, so a drift between the two is not caught at the constant level:
-	// it surfaces late as a confusing "FoundryGraph <name> not found"
-	// FAILED_PRECONDITION from the CLI's CR lookup (or a proxy route miss).
-	// Upgrade path: export the operator's constant into a shared non-internal
-	// package and reference it from both binaries.
-	defaultGraphName = "flow-graph"
+	// name (SPEC R1), shared via pkg/metadata so the CLI and the operator
+	// proxy reference the same wire value.
+	defaultGraphName = flowmeta.DefaultGraphName
 
 	// operatorProxyPort is the default operator gRPC proxy port forwarded to
 	// by the CLI.
@@ -60,12 +47,13 @@ const (
 	// truth for the port, instead of the env var + hard-coded fallback.
 	operatorProxyPort = 50053
 
-	// supportedExportFormats matches the Cartographer's accepted formats
-	// (see platform/cartographer/internal/service/export.go). The format is a
-	// plain string on the wire, so the CLI must mirror the server's set to fail
-	// fast instead of burning the whole port-forward/gRPC flow.
-	formatJSON    = "json"
-	formatGraphML = "graphml"
+	// supportedExportFormats mirrors the Cartographer's accepted formats,
+	// shared via pkg/metadata where the ExportGraph wire contract is defined
+	// once (platform/pkg/metadata/metadata.go). The format is a plain string
+	// on the wire, so the CLI must mirror the server's set to fail fast
+	// instead of burning the whole port-forward/gRPC flow.
+	formatJSON    = flowmeta.ExportFormatJSON
+	formatGraphML = flowmeta.ExportFormatGraphML
 )
 
 // exportStreamTimeout bounds the whole ExportGraph stream lifetime (lazy

@@ -79,8 +79,9 @@ func (s *ProxyServer) proxyUnimplemented(method string) error {
 
 // defaultGraphName is the conventional singleton FoundryGraph name (SPEC R1: the
 // singleton is conventionally named "flow-graph"; other components reference this
-// conventional name).
-const defaultGraphName = "flow-graph"
+// conventional name). The value is shared via pkg/metadata so the CLI and the
+// operator proxy reference the same wire value.
+const defaultGraphName = flowmeta.DefaultGraphName
 
 // extractRoutingMetadata reads x-flow-namespace and x-flow-graph-name from gRPC metadata.
 func (s *ProxyServer) extractRoutingMetadata(ctx context.Context) (namespace, name string, err error) {
@@ -168,7 +169,7 @@ func (s *ProxyServer) authorize(ctx context.Context, namespace, name string) err
 // signedCapabilities holds capability metadata for forwarding requests.
 type signedCapabilities struct {
 	capabilities string
-	signedBy     string // always "operator"
+	signedBy     string // always the operator signer identity (flowmeta.SignerIdentityOperator)
 	signedAt     string // Unix timestamp as string
 	signature    string // base64-encoded Ed25519 signature
 }
@@ -187,7 +188,7 @@ func (s *ProxyServer) signCapabilities(capabilities string) (*signedCapabilities
 	sig := ed25519.Sign(ed25519.PrivateKey(s.operatorSigningKey), []byte(payload))
 	return &signedCapabilities{
 		capabilities: capabilities,
-		signedBy:     "operator",
+		signedBy:     flowmeta.SignerIdentityOperator,
 		signedAt:     now,
 		signature:    base64.StdEncoding.EncodeToString(sig),
 	}, nil

@@ -10,11 +10,12 @@ import (
 	"sort"
 
 	"github.com/foundry/flow/cartographer/internal/store"
+	flowmeta "github.com/foundry/flow/pkg/metadata"
 )
 
 const (
-	ExportFormatJSON    = "json"
-	ExportFormatGraphML = "graphml"
+	ExportFormatJSON    = flowmeta.ExportFormatJSON
+	ExportFormatGraphML = flowmeta.ExportFormatGraphML
 )
 
 type graphNode struct {
@@ -37,15 +38,8 @@ type graphJSON struct {
 }
 
 // collectExportData collects and serialises the full graph.
-// acceptCtx is the optional gRPC context for cancellation; uses context.Background() if nil.
-// ponytail: a nil acceptCtx silently loses cancellation/timing. The handler always passes a
-// valid context today, so this is harmless. If that invariant ever changes, either require
-// a non-nil context or derive one with a timeout before the fallback.
-func collectExportData(s *CartographerServer, acceptCtx context.Context, format string) ([]byte, error) {
-	ctx := acceptCtx
-	if ctx == nil {
-		ctx = context.Background()
-	}
+// ctx is the gRPC context for cancellation.
+func collectExportData(s *CartographerServer, ctx context.Context, format string) ([]byte, error) {
 	var allEntities []store.Entity
 	entityTypes, err := s.store.ListMainEntityTypes()
 	if err != nil {
