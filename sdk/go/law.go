@@ -41,14 +41,6 @@ func (l *Law) GetTier() int32 {
 	return int32(l.pb.GetTier())
 }
 
-// GetGroup returns the group name from the proto.
-func (l *Law) GetGroup() string {
-	if l.pb == nil {
-		return ""
-	}
-	return l.pb.GetGroup()
-}
-
 // GetRepresentations returns the representation list from the proto.
 func (l *Law) GetRepresentations() []*flowv1.Representation {
 	if l.pb == nil {

@@ -16,9 +16,6 @@ type Workitem struct {
 	session   *session
 	id        string
 	namespace string
-	// ponytail: local cache only; stale if resumed externally.
-	// No IsSuspended RPC exists in the proto contract (non-goal).
-	suspended bool
 }
 
 // ID returns the workitem identifier.
@@ -73,7 +70,6 @@ func (w *Workitem) Suspend(opts ...SuspendOption) error {
 	if err != nil {
 		return fmt.Errorf("flow sdk: suspend failed: %w", err)
 	}
-	w.suspended = true
 	return nil
 }
 
@@ -110,14 +106,6 @@ func (w *Workitem) ResumeTimer() error {
 	return nil
 }
 
-// IsSuspended returns the locally cached suspension state. Returns false
-// if this Workitem was never suspended or was resumed through this SDK
-// instance. Does NOT make an RPC. If the workitem was resumed externally
-// (outside this SDK instance), the cached value may be stale.
-func (w *Workitem) IsSuspended() (bool, error) {
-	return w.suspended, nil
-}
-
 // ---------------------------------------------------------------------------
 // Artefacts
 // ---------------------------------------------------------------------------
@@ -145,22 +133,6 @@ func (w *Workitem) GetArtefact(governedArtefact string) (*Artefact, error) {
 // persist the first version.
 func (w *Workitem) NewArtefact(governedArtefact string) *Artefact {
 	return newArtefact(w.session, governedArtefact, governedArtefact, nil, "")
-}
-
-// FindArtefact looks up a specific artefact by its unique artefact ID
-// (e.g. "art-abc-123"). Returns a domain *Artefact wired with the session.
-func (w *Workitem) FindArtefact(artefactID string) (*Artefact, error) {
-	resp, err := w.session.Archivist.GetArtefact(context.Background(), &flowv1.GetArtefactRequest{
-		WorkitemId: w.id,
-		ArtefactId: artefactID,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("flow sdk: find artefact failed: %w", err)
-	}
-	return newArtefact(
-		w.session, artefactID,
-		resp.GetGovernedArtefact(), resp.GetContent(), resp.GetVersionHash(),
-	), nil
 }
 
 // ---------------------------------------------------------------------------

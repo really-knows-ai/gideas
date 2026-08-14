@@ -339,18 +339,6 @@ func TestLaw_GetTier(t *testing.T) {
 	}
 }
 
-func TestLaw_GetGroup(t *testing.T) {
-	law := newLaw(&flowv1.Law{Group: "security"}, nil)
-	if law.GetGroup() != "security" {
-		t.Fatalf("expected GetGroup()=security, got %q", law.GetGroup())
-	}
-
-	lawEmpty := newLaw(&flowv1.Law{}, nil)
-	if lawEmpty.GetGroup() != "" {
-		t.Fatalf("expected empty GetGroup(), got %q", lawEmpty.GetGroup())
-	}
-}
-
 func TestLaw_GetRepresentations(t *testing.T) {
 	reps := []*flowv1.Representation{
 		{Type: "text/markdown", Content: "# doc"},
@@ -379,9 +367,6 @@ func TestLaw_NilProto(t *testing.T) {
 	}
 	if law.GetTier() != 0 {
 		t.Fatalf("expected GetTier()=0 for nil proto, got %d", law.GetTier())
-	}
-	if law.GetGroup() != "" {
-		t.Fatalf("expected empty GetGroup() for nil proto, got %q", law.GetGroup())
 	}
 	if law.GetRepresentations() != nil {
 		t.Fatalf("expected nil GetRepresentations() for nil proto")

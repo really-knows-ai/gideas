@@ -13,7 +13,6 @@ const (
 	testPetitionID    = "petition"
 	testArtefactID    = "artefact-001"
 	testArtefactID2   = "artefact-002"
-	testArtXYZ        = "art-xyz-001"
 	testNextOutput    = "next-output"
 	testLaw1          = "law-1"
 	testLaw2          = "law-2"
@@ -153,11 +152,6 @@ func TestWorkitem_Suspend_NoOptions(t *testing.T) {
 	if suspend.Suspend.GetTimeout() != nil {
 		t.Fatalf("expected nil timeout, got %v", suspend.Suspend.GetTimeout())
 	}
-
-	// Verify local cache was set.
-	if !wi.suspended {
-		t.Fatal("expected wi.suspended=true after Suspend()")
-	}
 }
 
 func TestWorkitem_Suspend_WithCondition(t *testing.T) {
@@ -259,53 +253,6 @@ func TestWorkitem_ResumeTimer(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Lifecycle — IsSuspended (local cache)
-// ---------------------------------------------------------------------------
-
-func TestWorkitem_IsSuspended_DefaultFalse(t *testing.T) {
-	wi, _ := setupWorkitemTestEnv(t, "wi-issuspended-false-001")
-
-	suspended, err := wi.IsSuspended()
-	if err != nil {
-		t.Fatalf("IsSuspended() returned error: %v", err)
-	}
-	if suspended {
-		t.Fatal("expected IsSuspended()=false by default")
-	}
-}
-
-func TestWorkitem_IsSuspended_AfterSuspend(t *testing.T) {
-	wi, _ := setupWorkitemTestEnv(t, "wi-issuspended-true-001")
-
-	// Simulate a successful suspend — the local cache should be set.
-	wi.suspended = true
-
-	suspended, err := wi.IsSuspended()
-	if err != nil {
-		t.Fatalf("IsSuspended() returned error: %v", err)
-	}
-	if !suspended {
-		t.Fatal("expected IsSuspended()=true after Suspend()")
-	}
-}
-
-func TestWorkitem_IsSuspended_AfterResume(t *testing.T) {
-	wi, _ := setupWorkitemTestEnv(t, "wi-issuspended-resume-001")
-
-	// Simulate suspend then resume.
-	wi.suspended = true
-	wi.suspended = false
-
-	suspended, err := wi.IsSuspended()
-	if err != nil {
-		t.Fatalf("IsSuspended() returned error: %v", err)
-	}
-	if suspended {
-		t.Fatal("expected IsSuspended()=false after Resume()")
-	}
-}
-
-// ---------------------------------------------------------------------------
 // Artefacts — GetArtefact
 // ---------------------------------------------------------------------------
 
@@ -333,9 +280,6 @@ func TestWorkitem_GetArtefact(t *testing.T) {
 	}
 
 	// Verify the returned domain object has correct fields.
-	if art.ID() != testPetitionID {
-		t.Fatalf("Artefact.ID() = %q, want %q", art.ID(), testPetitionID)
-	}
 	if art.GovernedArtefact() != testTestArtefact {
 		t.Fatalf("Artefact.GovernedArtefact() = %q, want %q", art.GovernedArtefact(), testTestArtefact)
 	}
@@ -350,11 +294,6 @@ func TestWorkitem_GetArtefact_SessionWired(t *testing.T) {
 		t.Fatalf("GetArtefact() returned error: %v", err)
 	}
 
-	// ID() is a local getter — no RPC needed.
-	if art.ID() != testPetitionID {
-		t.Fatalf("Artefact.ID() = %q, want %q", art.ID(), testPetitionID)
-	}
-
 	// GetContent() makes an RPC through the session — verifies the session is wired.
 	content, err := art.GetContent()
 	if err != nil {
@@ -362,35 +301,6 @@ func TestWorkitem_GetArtefact_SessionWired(t *testing.T) {
 	}
 	if string(content) != testTestContent {
 		t.Fatalf("content = %q, want %q", string(content), "test-content")
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Artefacts — FindArtefact
-// ---------------------------------------------------------------------------
-
-func TestWorkitem_FindArtefact(t *testing.T) {
-	const wantID = "wi-findartefact-001"
-	wi, env := setupWorkitemTestEnv(t, wantID)
-
-	art, err := wi.FindArtefact(testArtXYZ)
-	if err != nil {
-		t.Fatalf("FindArtefact() returned error: %v", err)
-	}
-	if art == nil {
-		t.Fatal("expected non-nil Artefact")
-	}
-
-	req := env.spy.lastGetArtefactReq
-	if req == nil {
-		t.Fatal("GetArtefact was not called on the server")
-	}
-	if req.GetArtefactId() != testArtXYZ {
-		t.Fatalf("artefact_id = %q, want %q", req.GetArtefactId(), "art-xyz-001")
-	}
-
-	if art.ID() != testArtXYZ {
-		t.Fatalf("Artefact.ID() = %q, want %q", art.ID(), testArtXYZ)
 	}
 }
 

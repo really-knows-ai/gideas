@@ -99,7 +99,8 @@ func (c *EmbassyClient) PreflightManifest(
 		return nil, fmt.Errorf("flow sdk: embassy client: no embassy connection (set EMBASSY_ADDRESS)")
 	}
 
-	// ponytail: uses context.Background() per call.
+	// ponytail: uses context.Background() per call. If per-client timeout
+	// configuration is needed later, EmbassyClient can store a base context.
 	ctx := context.Background()
 	resp, err := c.embassy.PreflightManifest(ctx, &flowv1.PreflightManifestRequest{
 		Manifest:   manifest,
@@ -119,7 +120,8 @@ func (c *EmbassyClient) StreamPackage(
 		return nil, fmt.Errorf("flow sdk: embassy client: no embassy connection (set EMBASSY_ADDRESS)")
 	}
 
-	// ponytail: uses context.Background() per call.
+	// ponytail: uses context.Background() per call. If per-client timeout
+	// configuration is needed later, EmbassyClient can store a base context.
 	ctx := context.Background()
 	stream, err := c.embassy.StreamPackage(ctx)
 	if err != nil {

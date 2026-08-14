@@ -46,11 +46,6 @@ type Artefact struct {
 	session          *session
 }
 
-// ID returns the artefact identifier from construction.
-func (a *Artefact) ID() string {
-	return a.artefactID
-}
-
 // GovernedArtefact returns the governed artefact name from construction.
 func (a *Artefact) GovernedArtefact() string {
 	return a.governedArtefact

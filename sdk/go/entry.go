@@ -89,7 +89,8 @@ func (e *EntryClient) CreateWorkitem(metadata map[string]string) (string, error)
 	if e.operator == nil {
 		return "", fmt.Errorf("flow sdk: entry client: no sidecar connection (set SIDECAR_ADDRESS)")
 	}
-	// ponytail: uses context.Background() per call.
+	// ponytail: uses context.Background() per call. If per-client timeout
+	// configuration is needed later, EntryClient can store a base context.
 	ctx := context.Background()
 	resp, err := e.operator.CreateWorkitem(ctx, &flowv1.CreateWorkitemRequest{
 		Metadata: metadata,
@@ -127,7 +128,8 @@ func (e *EntryClient) QueryLaws(governedArtefact, representationType string) ([]
 	if e.librarian == nil {
 		return nil, fmt.Errorf("flow sdk: entry client: no sidecar connection for librarian (set SIDECAR_ADDRESS)")
 	}
-	// ponytail: uses context.Background() per call.
+	// ponytail: uses context.Background() per call. If per-client timeout
+	// configuration is needed later, EntryClient can store a base context.
 	ctx := context.Background()
 	var filter *flowv1.LawFilter
 	if governedArtefact != "" || representationType != "" {
@@ -150,7 +152,8 @@ func (e *EntryClient) RetireDisputeRecord(petitionID string) error {
 	if e.librarian == nil {
 		return fmt.Errorf("flow sdk: entry client: no sidecar connection for librarian (set SIDECAR_ADDRESS)")
 	}
-	// ponytail: uses context.Background() per call.
+	// ponytail: uses context.Background() per call. If per-client timeout
+	// configuration is needed later, EntryClient can store a base context.
 	ctx := context.Background()
 	_, err := e.librarian.RetireDisputeRecord(ctx, &flowv1.RetireDisputeRecordRequest{
 		PetitionId: petitionID,
@@ -166,7 +169,8 @@ func (e *EntryClient) ResumeWorkitem(workitemID string) error {
 	if e.operator == nil {
 		return fmt.Errorf("flow sdk: entry client: no sidecar connection (set SIDECAR_ADDRESS)")
 	}
-	// ponytail: uses context.Background() per call.
+	// ponytail: uses context.Background() per call. If per-client timeout
+	// configuration is needed later, EntryClient can store a base context.
 	ctx := context.Background()
 	_, err := e.operator.ResumeWorkitem(ctx, &flowv1.ResumeWorkitemRequest{
 		WorkitemId: workitemID,
@@ -184,7 +188,8 @@ func (e *EntryClient) ListSuspendedWorkitems(conditionContains string) ([]string
 	if e.operator == nil {
 		return nil, fmt.Errorf("flow sdk: entry client: no sidecar connection (set SIDECAR_ADDRESS)")
 	}
-	// ponytail: uses context.Background() per call.
+	// ponytail: uses context.Background() per call. If per-client timeout
+	// configuration is needed later, EntryClient can store a base context.
 	ctx := context.Background()
 	resp, err := e.operator.ListSuspendedWorkitems(ctx, &flowv1.ListSuspendedWorkitemsRequest{
 		ConditionContains: conditionContains,
