@@ -161,55 +161,14 @@ func extractLawID(evt *flowv1.FlowEvent) string {
 // ---------------------------------------------------------------------------
 
 // handleHearing is the SDK handler entry point for hearing workitems.
-// It creates an SDK client and delegates to processHearing.
 func handleHearing(ctx context.Context, wctx *flowv1.WorkitemContext) error {
-	client, workitem, err := nodeutil.SetupHandler(ctx, wctx, "friction-watcher: handler")
-	if err != nil {
-		return err
-	}
-	defer func() { _ = client.Close() }()
-
-	return processHearing(workitem, wctx)
+	return nodeutil.HandleHearing(ctx, wctx, "friction-watcher")
 }
 
 // processHearing performs the core handler logic: validate metadata, heartbeat,
 // store law-reference artefact, and route to default output.
 func processHearing(workitem *flow.Workitem, wctx *flowv1.WorkitemContext) error {
-	lawID := wctx.GetMetadata()["law_id"]
-	if lawID == "" {
-		return fmt.Errorf("friction-watcher: handler: missing law_id in metadata")
-	}
-
-	slog.Info("friction-watcher: handling hearing",
-		"workitem_id", wctx.GetWorkitemId(),
-		"law_id", lawID,
-	)
-
-	// Send a heartbeat to signal liveness.
-	if err := workitem.Heartbeat(); err != nil {
-		return fmt.Errorf("friction-watcher: handler: heartbeat: %w", err)
-	}
-
-	// Store law-reference artefact.
-	lawRef, err := workitem.GetArtefact("law-reference")
-	if err != nil {
-		return fmt.Errorf("friction-watcher: handler: get law-reference: %w", err)
-	}
-	if err := lawRef.Store([]byte(lawID)); err != nil {
-		return fmt.Errorf("friction-watcher: handler: store law-reference: %w", err)
-	}
-
-	slog.Info("friction-watcher: stored law-reference artefact", "law_id", lawID)
-
-	// Route to default output (-> tribunal).
-	if err := workitem.RouteTo("default"); err != nil {
-		return fmt.Errorf("friction-watcher: handler: route: %w", err)
-	}
-
-	slog.Info("friction-watcher: routed to default output",
-		"workitem_id", wctx.GetWorkitemId())
-
-	return nil
+	return nodeutil.ProcessHearing(workitem, wctx, "friction-watcher")
 }
 
 // ---------------------------------------------------------------------------

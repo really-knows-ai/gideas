@@ -28,6 +28,7 @@ import (
 
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
 	"github.com/foundry/flow/nodes/internal/nodeutil"
+	petitionpkg "github.com/foundry/flow/nodes/internal/petition"
 	flow "github.com/foundry/flow/sdk/go"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -44,41 +45,15 @@ const (
 )
 
 // ---------------------------------------------------------------------------
-// Petition (read from artefact, produced by Clerk)
+// Petition (read from artefact, produced by Clerk) — shared JSON contract
+// defined once in nodes/internal/petition.
 // ---------------------------------------------------------------------------
 
-type petition struct {
-	Petition petitionBody `json:"petition"`
-}
-
-type petitionBody struct {
-	PetitionID         string           `json:"petition_id"`
-	Context            petitionContext  `json:"context"`
-	Changes            []petitionChange `json:"changes"`
-	ProseJustification string           `json:"prose_justification"`
-}
-
-type petitionContext struct {
-	Trigger        string `json:"trigger"`
-	SourceWorkitem string `json:"source_workitem"` //nolint:tagliatelle // JSON convention
-	Verdict        string `json:"verdict"`
-	Justification  string `json:"justification"`
-}
-
-type petitionChange struct {
-	Action          string        `json:"action"`
-	Tier            int32         `json:"tier,omitempty"`
-	Goal            string        `json:"goal,omitempty"`
-	AppliesTo       []string      `json:"applies_to,omitempty"`
-	LawID           string        `json:"law_id,omitempty"`
-	Justification   string        `json:"justification,omitempty"`
-	Representations []petitionRep `json:"representations,omitempty"`
-}
-
-type petitionRep struct {
-	Type    string `json:"type"`
-	Content string `json:"content"`
-}
+type petition = petitionpkg.Petition
+type petitionBody = petitionpkg.Body
+type petitionContext = petitionpkg.Context
+type petitionChange = petitionpkg.Change
+type petitionRep = petitionpkg.Rep
 
 // ---------------------------------------------------------------------------
 // Approval Stamp (stored as artefact on application)

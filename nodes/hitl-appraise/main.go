@@ -110,42 +110,19 @@ func handleAppraise(
 		return fmt.Errorf("hitl-appraise: read %s: %w", governedArtefact, err)
 	}
 
-	// Park the Workitem in the HITL queue.
-	if err := qm.Enqueue(ctx, workitemID); err != nil {
-		return fmt.Errorf("hitl-appraise: enqueue: %w", err)
+	// Park the Workitem in the HITL queue, wait for the human decision, and
+	// resume the timer. hitl-appraise accepts any decision (nil valid set).
+	if _, err := nodeutil.AwaitHumanDecision(ctx, qm, workitem, workitemID, "hitl-appraise", nil); err != nil {
+		return err
 	}
 
-	// Pause the Sidecar timer — we'll be waiting for a human.
-	if err := workitem.PauseTimer(); err != nil {
-		return fmt.Errorf("hitl-appraise: pause timer: %w", err)
-	}
-
-	// Block until the human decides (via POST /queue/{id}/decide).
-	slog.Info("hitl-appraise: awaiting human decision", "workitem_id", workitemID)
-	if _, err := qm.WaitForDecision(ctx, workitemID); err != nil {
-		return fmt.Errorf("hitl-appraise: wait for decision: %w", err)
-	}
-	slog.Info("hitl-appraise: human decision received", "workitem_id", workitemID)
-
-	// Resume the Sidecar timer.
-	if err := workitem.ResumeTimer(); err != nil {
-		return fmt.Errorf("hitl-appraise: resume timer: %w", err)
-	}
-
-	// Stamp the governed artefact.
-	art, err := workitem.GetArtefact(governedArtefact)
-	if err != nil {
-		return fmt.Errorf("hitl-appraise: get artefact %s: %w", governedArtefact, err)
-	}
-	if err := art.Stamp(stampName); err != nil {
-		return fmt.Errorf("hitl-appraise: stamp %s/%s: %w", governedArtefact, stampName, err)
-	}
-
-	// Route to default output (back to Sort).
-	if err := workitem.RouteTo("default"); err != nil {
-		return fmt.Errorf("hitl-appraise: route to output: %w", err)
-	}
-	return nil
+	// Stamp the governed artefact and route to default output (back to Sort).
+	return nodeutil.StampAndRoute(
+		workitem,
+		[]flow.StampCapability{{GovernedArtefact: governedArtefact, StampName: stampName}},
+		"hitl-appraise",
+		"default",
+	)
 }
 
 // discoverStamp queries the flow topology and extracts the node's stamp

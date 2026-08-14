@@ -152,55 +152,19 @@ func handleSort(
 		"stamp", cfg.Stamp,
 	)
 
-	// Park the Workitem in the HITL queue.
-	if err := qm.Enqueue(ctx, workitemID); err != nil {
-		return fmt.Errorf("hitl-sort: enqueue: %w", err)
-	}
-
-	// Pause the Sidecar timer — we'll be waiting for a human.
-	if err := workitem.PauseTimer(); err != nil {
-		return fmt.Errorf("hitl-sort: pause timer: %w", err)
-	}
-
-	// Block until the human picks a choice (via POST /queue/{id}/decide).
-	slog.Info("hitl-sort: awaiting human routing decision", "workitem_id", workitemID)
-	choice, err := qm.WaitForDecision(ctx, workitemID)
+	// Park the Workitem in the HITL queue, wait for the human decision,
+	// validate it, and resume the timer.
+	choice, err := nodeutil.AwaitHumanDecision(ctx, qm, workitem, workitemID, "hitl-sort", validChoices)
 	if err != nil {
-		return fmt.Errorf("hitl-sort: wait for decision: %w", err)
+		return err
 	}
 
-	// Validate the choice against configured humanChoices.
-	// An empty choice indicates QueueManager shutdown (not a human decision).
-	if choice == "" {
-		return fmt.Errorf("hitl-sort: received empty choice (queue manager shut down before decision)")
-	}
-	if !validChoices[choice] {
-		return fmt.Errorf("hitl-sort: invalid choice %q: must be one of the configured humanChoices", choice)
-	}
-
-	slog.Info("hitl-sort: human decision received", "workitem_id", workitemID, "choice", choice)
-
-	// Resume the Sidecar timer.
-	if err := workitem.ResumeTimer(); err != nil {
-		return fmt.Errorf("hitl-sort: resume timer: %w", err)
-	}
-
-	// Optionally stamp the governed artefact.
+	// Optionally stamp the governed artefact, then route to the chosen output.
+	var stamps []flow.StampCapability
 	if cfg.Stamp {
-		art, err := workitem.GetArtefact(governedArtefact)
-		if err != nil {
-			return fmt.Errorf("hitl-sort: get artefact %s: %w", governedArtefact, err)
-		}
-		if err := art.Stamp(stampName); err != nil {
-			return fmt.Errorf("hitl-sort: stamp %s/%s: %w", governedArtefact, stampName, err)
-		}
+		stamps = []flow.StampCapability{{GovernedArtefact: governedArtefact, StampName: stampName}}
 	}
-
-	// Route to the chosen output.
-	if err := workitem.RouteTo(choice); err != nil {
-		return fmt.Errorf("hitl-sort: route to output %q: %w", choice, err)
-	}
-	return nil
+	return nodeutil.StampAndRoute(workitem, stamps, "hitl-sort", choice)
 }
 
 // handleChoices returns the configured humanChoices as JSON so the Dashboard

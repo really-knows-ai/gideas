@@ -38,6 +38,7 @@ import (
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
 	"github.com/foundry/flow/nodes/internal/nodeconfig"
 	"github.com/foundry/flow/nodes/internal/nodeutil"
+	petitionpkg "github.com/foundry/flow/nodes/internal/petition"
 	flow "github.com/foundry/flow/sdk/go"
 )
 
@@ -100,45 +101,19 @@ func (c *codificationConfig) defaultOutputName() string {
 }
 
 // ---------------------------------------------------------------------------
-// Petition Types (same shape as law-applicator)
+// Petition Types — shared JSON contract defined once in nodes/internal/petition
+// (codification writes petitions; law-applicator reads them).
 // ---------------------------------------------------------------------------
 
-type petition struct {
-	Petition petitionBody `json:"petition"`
-}
-
-type petitionBody struct {
-	Context            petitionContext  `json:"context"`
-	Changes            []petitionChange `json:"changes"`
-	ProseJustification string           `json:"prose_justification"`
-}
-
-type petitionContext struct {
-	Trigger         string `json:"trigger"`
-	VerdictDecision string `json:"verdict_decision"` //nolint:tagliatelle // Matches petition schema
-	Justification   string `json:"justification"`
-}
-
-type petitionChange struct {
-	Action          string        `json:"action"`
-	Tier            int32         `json:"tier,omitempty"`
-	Goal            string        `json:"goal,omitempty"`
-	AppliesTo       []string      `json:"applies_to,omitempty"`
-	LawID           string        `json:"law_id,omitempty"`
-	FromTier        int32         `json:"from_tier,omitempty"`
-	ToTier          int32         `json:"to_tier,omitempty"`
-	Justification   string        `json:"justification,omitempty"`
-	Representations []petitionRep `json:"representations,omitempty"`
-}
-
-type petitionRep struct {
-	Type    string `json:"type"`
-	Content string `json:"content"`
-}
+type petition = petitionpkg.Petition
+type petitionBody = petitionpkg.Body
+type petitionContext = petitionpkg.Context
+type petitionChange = petitionpkg.Change
+type petitionRep = petitionpkg.Rep
 
 // needsCodification returns true if the change action requires formal
 // representations (create, update, demote). Retire is purely administrative.
-func (c *petitionChange) needsCodification() bool {
+func needsCodification(c *petitionChange) bool {
 	switch c.Action {
 	case actionCreate, actionUpdate, actionDemote:
 		return true
@@ -224,7 +199,7 @@ func handleCodification(client *flow.Client, workitem *flow.Workitem, cfg *codif
 	// -- Step 2: Partition changes into qualifying and skip ---------------
 	var qualifying []indexedChange
 	for i := range pet.Petition.Changes {
-		if pet.Petition.Changes[i].needsCodification() {
+		if needsCodification(&pet.Petition.Changes[i]) {
 			qualifying = append(qualifying, indexedChange{
 				originalIndex: i,
 				change:        &pet.Petition.Changes[i],

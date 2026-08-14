@@ -295,6 +295,7 @@ func setupCodificationTest(t *testing.T, spy *codificationSpy) (*flow.Client, *f
 func seedPetition(spy *codificationSpy, changes ...petitionChange) {
 	pet := petition{
 		Petition: petitionBody{
+			PetitionID: "pet-test-123",
 			Context: petitionContext{
 				Trigger:         "deadlock-resolution",
 				VerdictDecision: "favour_refiner",

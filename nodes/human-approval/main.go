@@ -91,74 +91,27 @@ func handleApproval(
 		return fmt.Errorf("human-approval: read petition: %w", err)
 	}
 
-	// Step 2: Enqueue and pause timer.
-	if err := qm.Enqueue(ctx, workitemID); err != nil {
-		return fmt.Errorf("human-approval: enqueue: %w", err)
-	}
-	if err := workitem.PauseTimer(); err != nil {
-		return fmt.Errorf("human-approval: pause timer: %w", err)
-	}
-
-	// Step 3: Wait for human decision.
-	slog.Info("human-approval: awaiting human decision", "workitem_id", workitemID)
-	choice, err := qm.WaitForDecision(ctx, workitemID)
+	// Step 2-5: Enqueue, pause, wait, validate, resume.
+	choice, err := nodeutil.AwaitHumanDecision(ctx, qm, workitem, workitemID, "human-approval", validChoices)
 	if err != nil {
-		return fmt.Errorf("human-approval: wait for decision: %w", err)
-	}
-
-	// Step 4: Validate choice (before resuming timer — invalid choices
-	// leave the timer paused so the operator can retry).
-	if choice == "" {
-		return fmt.Errorf("human-approval: empty choice (queue manager shut down before decision)")
-	}
-	if !validChoices[choice] {
-		return fmt.Errorf("human-approval: invalid choice %q", choice)
-	}
-
-	slog.Info("human-approval: human decision received",
-		"workitem_id", workitemID, "choice", choice,
-	)
-
-	// Step 5: Resume timer.
-	if err := workitem.ResumeTimer(); err != nil {
-		return fmt.Errorf("human-approval: resume timer: %w", err)
+		return err
 	}
 
 	// Step 6: Dispatch based on choice.
 	switch choice {
 	case choiceCancel:
-		return completeWithCancelled(workitem)
+		return nodeutil.CompleteCancelled(workitem, "human-approval")
 	case choiceApprove:
-		return stampAndRoute(workitem)
+		return nodeutil.StampAndRoute(
+			workitem,
+			[]flow.StampCapability{{GovernedArtefact: "haiku", StampName: "approval"}},
+			"human-approval",
+			"approve",
+		)
 	default:
 		// Unreachable after validation, but guard against logic drift.
 		return fmt.Errorf("human-approval: unreachable choice %q", choice)
 	}
-}
-
-// completeWithCancelled calls Complete with COMPLETION_REASON_CANCELLED.
-func completeWithCancelled(workitem *flow.Workitem) error {
-	if err := workitem.Complete(flow.WithReason(flowv1.CompletionReason_COMPLETION_REASON_CANCELLED)); err != nil {
-		return fmt.Errorf("human-approval: complete (cancelled): %w", err)
-	}
-	return nil
-}
-
-// stampAndRoute stamps "approval" on the haiku artefact and routes to "approve".
-func stampAndRoute(workitem *flow.Workitem) error {
-	art, err := workitem.GetArtefact("haiku")
-	if err != nil {
-		return fmt.Errorf("human-approval: get haiku artefact: %w", err)
-	}
-	if err := art.Stamp("approval"); err != nil {
-		return fmt.Errorf("human-approval: stamp approval: %w", err)
-	}
-	slog.Info("human-approval: approval stamp applied")
-
-	if err := workitem.RouteTo("approve"); err != nil {
-		return fmt.Errorf("human-approval: route to approve: %w", err)
-	}
-	return nil
 }
 
 // ---------------------------------------------------------------------------
