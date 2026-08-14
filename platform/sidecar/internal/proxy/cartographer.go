@@ -81,11 +81,7 @@ func nodeCapabilities(ctx context.Context) []string {
 	}
 	caps := []string{}
 	for _, c := range md.Get(flowmeta.MetadataKeyCapabilities) {
-		for cap := range strings.SplitSeq(c, ",") {
-			if cap = strings.TrimSpace(cap); cap != "" {
-				caps = append(caps, cap)
-			}
-		}
+		caps = append(caps, flowmeta.NormalizeCapabilities(c)...)
 	}
 	return caps
 }

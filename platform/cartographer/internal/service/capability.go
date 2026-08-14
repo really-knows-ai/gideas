@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"slices"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/foundry/flow/cartographer/internal/uuidutil"
@@ -104,9 +103,18 @@ func (v *CapabilityVerifier) verify(ctx context.Context) (context.Context, error
 	}
 
 	capsList := md.Get(flowmeta.MetadataKeyCapabilities)
-	if len(capsList) == 0 || capsList[0] == "" {
+	if len(capsList) == 0 {
 		// No capabilities metadata = system-to-system call (Operator).
 		return ctx, nil
+	}
+	if len(flowmeta.NormalizeCapabilities(capsList[0])) == 0 {
+		// Present-but-empty capabilities metadata (empty or whitespace-only):
+		// the request claims a capability attestation but carries no capability
+		// entries. Fail closed like any other unverifiable attestation instead
+		// of reclassifying the request as a system-to-system pass-through that
+		// skips signature and staleness verification (interceptor contract
+		// above).
+		return nil, errInvalidCapabilitySignature()
 	}
 	capsStr := capsList[0]
 
@@ -163,24 +171,23 @@ func (v *CapabilityVerifier) verify(ctx context.Context) (context.Context, error
 			return nil, errStaleCapability()
 		}
 		elapsed := time.Since(time.Unix(signedAt, 0))
-		if elapsed > v.stalenessWindow {
+		// Two-sided staleness (SPEC error table "Stale capability signature
+		// (anti-replay)"): a future-dated signed-at (elapsed < 0) is as stale
+		// as one past the window — a captured attestation replayed with a
+		// forged future timestamp must never outlive the anti-replay window.
+		if elapsed < 0 || elapsed > v.stalenessWindow {
 			return nil, errStaleCapability()
 		}
 	}
 
-	// Store verified capabilities in context. Each comma-separated entry is
-	// trimmed and empty entries dropped, matching the sibling capability gates
-	// (Sidecar nodeCapabilities and Operator checkCapability) so the
-	// authoritative exact-match checks here agree with those gates on the same
-	// capability string (SPEC R3 / Capability Authorisation Chain).
-	var capEntries []string
-	for cap := range strings.SplitSeq(capsStr, ",") {
-		if cap = strings.TrimSpace(cap); cap != "" {
-			capEntries = append(capEntries, cap)
-		}
-	}
+	// Store verified capabilities in context. The shared NormalizeCapabilities
+	// helper (pkg/metadata) trims each comma-separated entry and drops empty
+	// entries, matching the sibling capability gates (Sidecar nodeCapabilities
+	// and SDK CheckCapability) so the authoritative exact-match checks here
+	// agree with those gates on the same capability string (SPEC R3 /
+	// Capability Authorisation Chain).
 	caps := &Capabilities{
-		Caps:     capEntries,
+		Caps:     flowmeta.NormalizeCapabilities(capsStr),
 		SignedBy: signedBy,
 	}
 	ctx = StoreCapabilitiesInContext(ctx, caps)

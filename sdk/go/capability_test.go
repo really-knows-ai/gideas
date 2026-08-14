@@ -198,6 +198,17 @@ func TestCheckCapability(t *testing.T) {
 		t.Fatalf("expected pass with matching capability, got %v", err)
 	}
 
+	// Node-originated with whitespace-padded and empty entries — the shared
+	// capability-string normalization (pkg/metadata.NormalizeCapabilities)
+	// trims each entry and drops empty entries before matching.
+	md = metadata.Pairs(
+		MetadataKeyNodeID, "node-1",
+		MetadataKeyCapabilities, " WRITE:artefact , READ:flow ,, ",
+	)
+	if err := CheckCapability(metadata.NewIncomingContext(context.Background(), md), "READ:flow"); err != nil {
+		t.Fatalf("expected pass with whitespace-padded capability, got %v", err)
+	}
+
 	// Node-originated without the required capability — denied.
 	md = metadata.Pairs(
 		MetadataKeyNodeID, "node-1",
