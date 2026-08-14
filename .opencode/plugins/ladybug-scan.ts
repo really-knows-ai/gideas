@@ -55,15 +55,15 @@ export const LadybugScanPlugin: Plugin = async () => {
         async execute(args, context) {
           const root = resolveProjectRoot(context)
           if (!root) {
-          return `Error: scanner binary not found. Tried roots:\n  ${[
-            context.directory,
-            process.cwd(),
-            context.worktree,
-            path.resolve(import.meta.dir, "..", ".."),
-            path.join(process.env.HOME ?? "", "apg"),
-          ]
-            .filter(Boolean)
-            .join("\n  ")}\nBuild it with: cargo build --release`
+            return `Error: scanner binary not found. Tried roots:\n  ${[
+              context.directory,
+              process.cwd(),
+              context.worktree,
+              path.resolve(import.meta.dir, "..", ".."),
+              path.join(process.env.HOME ?? "", "apg"),
+            ]
+              .filter(Boolean)
+              .join("\n  ")}\nBuild it with: cargo build --release`
           }
 
           const dir = args.directory ?? root
