@@ -3,13 +3,17 @@ package service
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/foundry/flow/cartographer/internal/gitstore"
 	"github.com/foundry/flow/cartographer/internal/store/ladybug"
+	flowv1 "github.com/foundry/flow/gen/flow/v1"
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/google/uuid"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -212,8 +216,11 @@ func TestSyncWorkerGitOpDeadline_HungPushAbortsWithDeadlineExceeded(t *testing.T
 		t.Fatalf("OpenInMemory: %v", err)
 	}
 	t.Cleanup(func() { _ = base.Close() })
-	sw := NewSyncWorker("https://example.com/repo.git", hung, base, RealClock{},
-		SyncWorkerWithGitOperationTimeout(50*time.Millisecond))
+	// The git-op deadline is fixed at the SPEC default (DefaultGitOperationTimeout)
+	// in production (the option seam was deleted); the test shortens the deadline
+	// directly to keep the hung-push assertion fast.
+	sw := NewSyncWorker("https://example.com/repo.git", hung, base, RealClock{})
+	sw.gitOpTimeout = 50 * time.Millisecond
 	sw.backoffFn = func(int) time.Duration { return 0 }
 	sw.SetPushNeeded()
 
@@ -295,5 +302,170 @@ func TestSyncWorkerStop_ConcurrentCalls(t *testing.T) {
 	case <-w.doneCh:
 	default:
 		t.Fatal("worker loop did not exit after Stop()")
+	}
+}
+
+// TestSyncWorker_RehydrateFailureKeepsMainConsistent pins the SPEC error-table
+// row "Sync re-hydration failed" atomicity from the worker's perspective: a
+// post-fetch re-hydration that fails on a corrupt source (e.g. a corrupt merged
+// JSON) must leave main serving its pre-fetch graph — the DETACH DELETE must
+// not run before the file tree is proven loadable. Without this, the cycle
+// returns with main serving a silently-wiped graph and the R8 "automatic
+// recovery on next startup" escape hatch has no consistent graph to recover.
+func TestSyncWorker_RehydrateFailureKeepsMainConsistent(t *testing.T) {
+	ctx := context.Background()
+	gs, err := gitstore.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("gitstore.New: %v", err)
+	}
+	// A non-empty repo with a corrupt tracked file: commit a valid entity, then
+	// a corrupt JSON file under the same type directory (tracked so the
+	// worker's CleanUntracked cannot remove it before re-hydration).
+	now := time.Now().UTC().Round(time.Millisecond)
+	if err := gs.WithGitLock(func() error {
+		if err := gs.WriteEntityFiles(ctx, "Component", []gitstore.Entity{
+			{ID: "11111111-1111-4111-8111-111111111111", Type: "Component", CreatedAt: now, UpdatedAt: now},
+		}); err != nil {
+			return err
+		}
+		if err := gs.AddAll(ctx, "."); err != nil {
+			return err
+		}
+		if err := gs.Commit(ctx, "transaction:seed"); err != nil {
+			return err
+		}
+		entitiesDir, _ := gs.HydrationDirs()
+		compDir := filepath.Join(entitiesDir, "Component")
+		if err := os.WriteFile(filepath.Join(compDir, "corrupt.json"), []byte("not json"), 0644); err != nil {
+			return err
+		}
+		if err := gs.AddAll(ctx, "."); err != nil {
+			return err
+		}
+		return gs.Commit(ctx, "corrupt-merge")
+	}); err != nil {
+		t.Fatalf("seed git tree: %v", err)
+	}
+
+	base, err := ladybug.OpenInMemory()
+	if err != nil {
+		t.Fatalf("OpenInMemory: %v", err)
+	}
+	t.Cleanup(func() { _ = base.Close() })
+	if err := base.ApplySchema(ctx, &flowv1.Schema{
+		EntityTypes: []*flowv1.EntityType{{
+			Name:       "Component",
+			Properties: []*flowv1.Property{{Name: "name", Type: "string"}},
+		}},
+	}); err != nil {
+		t.Fatalf("ApplySchema: %v", err)
+	}
+	// A main-only entity: present in main.lbug but absent from the git tree, so
+	// a wipe-then-fail would destroy it and only the validation-first order
+	// keeps it.
+	mainOnlyID := uuid.NewString()
+	if _, err := base.CreateEntity(ctx, "Component", mainOnlyID,
+		map[string]string{"name": "main-only"}, nil, "main"); err != nil {
+		t.Fatalf("CreateEntity: %v", err)
+	}
+
+	preHead, err := gs.BranchHEAD(ctx, "main")
+	if err != nil {
+		t.Fatalf("BranchHEAD: %v", err)
+	}
+	fetchHash := "1" + preHead[1:]
+	if fetchHash == preHead {
+		fetchHash = "2" + preHead[1:]
+	}
+	syncGit := &syncMockGitStore{GitStore: gs, fetchHash: plumbing.NewHash(fetchHash)}
+	sw := NewSyncWorker("https://example.com/repo.git", syncGit, base, RealClock{})
+	sw.runSyncCycle()
+
+	sw.cycleMu.Lock()
+	cycleErr := sw.cycleErr
+	sw.cycleMu.Unlock()
+	if cycleErr == nil {
+		t.Fatal("expected the re-hydration failure to surface from the cycle")
+	}
+	got, err := base.GetEntity(ctx, mainOnlyID, "main")
+	if err != nil {
+		t.Fatalf("failed re-hydration wiped main.lbug: %v", err)
+	}
+	if got.Properties["name"] != "main-only" {
+		t.Fatalf("pre-fetch entity mutated by failed re-hydration: %v", got.Properties)
+	}
+}
+
+// TestSyncWorker_PushRequestLandedDuringPushIsNotLost pins the SPEC R10 WithAck
+// contract against the push-flag clear race: a SetPushNeeded (CommitTransaction,
+// MergeCompleted, WipeGraph) that lands while a push is in flight must not be
+// lost by the flag clear after that push succeeds. The buggy unconditional
+// clear acknowledged request 1's commit as delivered while dropping request 2,
+// with no subsequent cycle delivering it. The fixed clear is conditional on the
+// request generation being unchanged since the push began.
+func TestSyncWorker_PushRequestLandedDuringPushIsNotLost(t *testing.T) {
+	gs, err := gitstore.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("gitstore.New: %v", err)
+	}
+	syncGit := &syncMockGitStore{
+		GitStore:    gs,
+		pushEntered: make(chan struct{}),
+		pushRelease: make(chan struct{}),
+	}
+	base, err := ladybug.OpenInMemory()
+	if err != nil {
+		t.Fatalf("OpenInMemory: %v", err)
+	}
+	t.Cleanup(func() { _ = base.Close() })
+	sw := NewSyncWorker("https://example.com/repo.git", syncGit, base, RealClock{})
+	sw.backoffFn = func(int) time.Duration { return 0 }
+	t.Cleanup(syncGit.releasePush)
+
+	// Request 1 begins a cycle whose push blocks on the gate.
+	sw.SetPushNeeded()
+	cycleDone := make(chan struct{})
+	go func() {
+		sw.runSyncCycle()
+		close(cycleDone)
+	}()
+
+	// Wait for the push to enter the gate, then flag a second request while the
+	// push is in flight — the window in which an unconditional clear would lose
+	// it (SetPushNeeded between push success and clear is a subset of this).
+	select {
+	case <-syncGit.pushEntered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("push never entered the gate")
+	}
+	sw.SetPushNeeded()
+	syncGit.releasePush()
+
+	select {
+	case <-cycleDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("sync cycle did not complete")
+	}
+	if !sw.pushNeeded.Load() {
+		t.Fatal("a SetPushNeeded landing during a push was lost: push flag cleared " +
+			"without the second request being delivered")
+	}
+
+	// A follow-up cycle delivers the second request. Disable the gate first —
+	// the mock closes pushEntered exactly once, and a second gated push would
+	// double-close it.
+	syncGit.mu.Lock()
+	syncGit.pushEntered = nil
+	syncGit.pushRelease = nil
+	syncGit.mu.Unlock()
+	sw.runSyncCycle()
+	syncGit.mu.Lock()
+	pushCalls := syncGit.pushCalls
+	syncGit.mu.Unlock()
+	if pushCalls != 2 {
+		t.Fatalf("expected the follow-up cycle to deliver the second push request, got %d pushes", pushCalls)
+	}
+	if sw.pushNeeded.Load() {
+		t.Fatal("push flag not cleared after the follow-up cycle delivered the second request")
 	}
 }

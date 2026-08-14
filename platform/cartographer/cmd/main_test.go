@@ -857,6 +857,53 @@ func TestRehydrateMainAfterRecoveryRestoresCommittedGraph(t *testing.T) {
 	}
 }
 
+// TestStartupRehydrateFailureFatal pins the startup fatality gate for a failed
+// re-hydration (main.go's call site after rehydrateMainAfterRecovery): the
+// failure is fatal only when main.lbug holds no graph data. A healthy main.lbug
+// holding a complete graph must keep the process alive so the SPEC error-table
+// row "Sync re-hydration failed" escape hatch ("see R8 for automatic recovery
+// on next startup") stays reachable — the old unconditional os.Exit(1)
+// crash-looped a pod whose main.lbug was fine on the same corrupt files.
+func TestStartupRehydrateFailureFatal(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("non-fatal when main holds graph data", func(t *testing.T) {
+		s, err := ladybug.OpenInMemory()
+		if err != nil {
+			t.Fatalf("OpenInMemory: %v", err)
+		}
+		t.Cleanup(func() { _ = s.Close() })
+		if err := s.ApplySchema(ctx, &flowv1.Schema{
+			EntityTypes: []*flowv1.EntityType{{
+				Name:       "Component",
+				Properties: []*flowv1.Property{{Name: "name", Type: "string"}},
+			}},
+		}); err != nil {
+			t.Fatalf("ApplySchema: %v", err)
+		}
+		if _, err := s.CreateEntity(ctx, "Component", uuid.NewString(),
+			map[string]string{"name": "served"}, nil, "main"); err != nil {
+			t.Fatalf("CreateEntity: %v", err)
+		}
+		if startupRehydrateFailureFatal(ctx, s) {
+			t.Fatal("startup re-hydration failure must not be fatal while main.lbug holds a complete graph")
+		}
+	})
+
+	t.Run("fatal when main is empty", func(t *testing.T) {
+		s, err := ladybug.OpenInMemory()
+		if err != nil {
+			t.Fatalf("OpenInMemory: %v", err)
+		}
+		t.Cleanup(func() { _ = s.Close() })
+		// Fresh database — the state ladybug.Open's corruption recovery
+		// produces (delete main.lbug, re-open empty).
+		if !startupRehydrateFailureFatal(ctx, s) {
+			t.Fatal("startup re-hydration failure must stay fatal when main.lbug holds no graph data")
+		}
+	})
+}
+
 // TestRehydrateMainAfterRecoveryRestoresCurrentMainNotStaleBranch pins SPEC R8
 // with real components in the crash scenario that motivates the
 // restore-main-before-re-hydration step: a pod killed mid-transaction leaves

@@ -180,10 +180,7 @@ func main() {
 	// A failure here is fatal: serving an empty graph after a corrupt-reopen
 	// silently drops all committed data, so fail loudly instead.
 	if err := rehydrateMainAfterRecovery(context.Background(), dbStore, gs); err != nil {
-		slog.Error("Failed to re-hydrate main from git after open (SPEC R8 recovery)",
-			"error", err,
-		)
-		os.Exit(1)
+		handleStartupRehydrateFailure(context.Background(), dbStore, err)
 	}
 
 	// -----------------------------------------------------------------------
@@ -543,6 +540,61 @@ func rehydrateMainAfterRecovery(ctx context.Context, dbStore store.Store, gs git
 	}
 	slog.Info("Main re-hydrated from git working tree (SPEC R8 recovery)")
 	return nil
+}
+
+// mainServesGraph reports whether main.lbug currently holds at least one
+// entity — the signal that a failed startup re-hydration leaves a complete
+// graph to serve rather than a vacuous one. A graph with zero entities can
+// hold no edges (edges require endpoint entities), so the entity probe is the
+// completeness signal. Any probe error fails closed (reports "no graph") so
+// the caller keeps the conservative fatal behavior.
+func mainServesGraph(ctx context.Context, dbStore store.Store) bool {
+	types, err := dbStore.ListMainEntityTypes()
+	if err != nil {
+		return false
+	}
+	for _, entityType := range types {
+		if entities, _, err := dbStore.ListEntities(ctx, entityType, 1, "", "main"); err == nil && len(entities) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// startupRehydrateFailureFatal reports whether a startup re-hydration failure
+// (rehydrateMainAfterRecovery returning an error) must fail the process. It is
+// fatal only when main.lbug holds no graph data: serving a vacuous main while
+// git holds committed data hides that data (SPEC R8), but crash-looping a pod
+// whose main.lbug holds a complete graph would make the SPEC "Sync re-hydration
+// failed" row's R8 escape hatch unreachable. See handleStartupRehydrateFailure.
+func startupRehydrateFailureFatal(ctx context.Context, dbStore store.Store) bool {
+	return !mainServesGraph(ctx, dbStore)
+}
+
+// handleStartupRehydrateFailure applies the fatality decision to a failed
+// startup re-hydration. A failure here used to be unconditionally fatal: after
+// a corrupt-reopen main.lbug is empty, and serving it would silently drop
+// committed data. But the startup rebuild runs unconditionally (ponytail at the
+// call site in main()), so a failure on a HEALTHY main.lbug — e.g. a corrupt
+// remote merge whose files RehydrateMainFromFiles rejects without wiping main
+// (atomic re-hydration) — would crash-loop a pod whose main.lbug holds a
+// complete graph, making the SPEC error-table row "Sync re-hydration failed"
+// escape hatch ("see R8 for automatic recovery on next startup") unreachable.
+// The fatality is gated on main actually holding no data: a vacuous main.lbug
+// must never be served while git holds commits, but a healthy one is served
+// (loudly logged) while the sync worker's cycles retry the re-hydration.
+func handleStartupRehydrateFailure(ctx context.Context, dbStore store.Store, err error) {
+	if startupRehydrateFailureFatal(ctx, dbStore) {
+		slog.Error("Failed to re-hydrate main from git after open (SPEC R8 recovery); "+
+			"main.lbug holds no graph data — refusing to serve a vacuous graph",
+			"error", err,
+		)
+		os.Exit(1)
+	}
+	slog.Error("Re-hydration from git failed at startup; main.lbug holds a complete graph — "+
+		"serving it and deferring recovery to the sync worker (SPEC R8)",
+		"error", err,
+	)
 }
 
 // startupCatchUpPushNeeded reports whether the sync worker's first cycle must
