@@ -263,8 +263,14 @@ func (s *CartographerServer) rejectFullChangeLog(ctx context.Context, txID strin
 
 func durableTransactionState(state *TransactionState) store.BranchTransactionState {
 	return store.BranchTransactionState{
-		MainHeadAtLastSync:      state.MainHeadAtLastSync,
-		AppliedTimeout:          state.AppliedTimeout,
+		MainHeadAtLastSync: state.MainHeadAtLastSync,
+		AppliedTimeout:     state.AppliedTimeout,
+		// The absolute lifetime bounds are persisted at every timeout-affecting
+		// event (BeginTransaction, ExtendTimeout) so recovery restores the
+		// transaction's true lifetime instead of re-basing it from the restart
+		// instant (SPEC R9: "absolute lifetime from BeginTransaction").
+		CreatedAt:               state.CreatedAt,
+		ExpiresAt:               state.ExpiresAt,
 		SchemaHash:              state.SchemaHash,
 		CommitStarted:           state.CommitStarted,
 		CommitCreated:           state.CommitCreated,
@@ -298,7 +304,12 @@ func (s *CartographerServer) cleanupTransactionGitLocked(ctx context.Context, st
 	}
 	if state.MainRehydrated {
 		if s.ladybugPath == "" {
-			return status.Error(codes.FailedPrecondition,
+			// Restoring the main store after a partial commit is a re-hydration
+			// failure, classified INTERNAL by the SPEC error-table row "Commit
+			// serialisation or re-hydration failed". No error-table row assigns
+			// FAILED_PRECONDITION to this condition, so returning that code would
+			// be an unjustified wire status.
+			return status.Error(codes.Internal,
 				"cannot restore main store after partial commit without LADYBUG_DB_PATH")
 		}
 		s.lockMainStore()
@@ -480,20 +491,6 @@ func (s *CartographerServer) RecoverOpenTransactions(ctx context.Context) error 
 		// silently resetting to the 7-day hard maximum. A transaction whose branch
 		// record predates the persisted timeout (zero) still falls back to the hard
 		// maximum, matching the pre-persistence recovery behavior.
-		//
-		// IMPL-NOTE — SPEC divergence (R9 "absolute lifetime from BeginTransaction,
-		// not an idle timeout"): the restored timeout is re-based from the restart
-		// instant. txManager.Create sets ExpiresAt = now + AppliedTimeout and
-		// CreatedAt = now, so after each crash/restart the transaction's absolute
-		// lifetime AND its 7-day hard-maximum baseline (enforced against CreatedAt
-		// in ExtendTimeout, transaction_manager.go) reset from the restart moment —
-		// a transaction can live materially longer than 7 days measured from the
-		// original begin. This errs toward data preservation (a transaction is
-		// never killed early), so there is no silent data loss, but the SPEC's
-		// "absolute lifetime / hard maximum" guarantee holds per process lifetime,
-		// not per transaction lifetime. Closing the gap would require persisting
-		// CreatedAt (and the original begin instant) in the branch state and
-		// re-deriving ExpiresAt from it at recovery.
 		restoredTimeout := durableState.AppliedTimeout
 		if restoredTimeout <= 0 {
 			restoredTimeout = HardMaxTimeout
@@ -501,6 +498,27 @@ func (s *CartographerServer) RecoverOpenTransactions(ctx context.Context) error 
 		state, err := s.txManager.Create(txID, restoredTimeout, durableState.MainHeadAtLastSync)
 		if err != nil {
 			return fmt.Errorf("register recovered transaction %q: %w", txID, err)
+		}
+		// SPEC R9 ("the timeout is an absolute lifetime from BeginTransaction,
+		// not an idle timeout"): the durable record carries the original begin
+		// instant (CreatedAt) and the expiry granted by the last
+		// timeout-affecting event (ExpiresAt — set by BeginTransaction and
+		// updated by ExtendTimeout), so the recovered transaction keeps its
+		// absolute lifetime instead of re-basing both from the restart instant.
+		// Without this, every restart re-armed the 7-day hard-maximum baseline
+		// (enforced against CreatedAt in ExtendTimeout) from the restart moment,
+		// letting a transaction live materially longer than 7 days measured from
+		// the original begin. A transaction whose absolute lifetime has already
+		// elapsed at restart stays expired: its operations surface
+		// DEADLINE_EXCEEDED and the GC rolls it back within the cleanup grace
+		// period. A record that predates the persisted lifetime (zero CreatedAt)
+		// keeps the pre-persistence re-base fallback.
+		if !durableState.CreatedAt.IsZero() {
+			state.CreatedAt = durableState.CreatedAt
+			state.ExpiresAt = durableState.ExpiresAt
+			if state.ExpiresAt.IsZero() {
+				state.ExpiresAt = state.CreatedAt.Add(restoredTimeout)
+			}
 		}
 		state.ChangeLog = cl
 		state.RollbackOnly = durableState.RollbackOnly
@@ -2330,7 +2348,13 @@ func (s *CartographerServer) validateRefresh(
 // RecoverOpenTransactions' BranchRefreshInProgress guard).
 func (s *CartographerServer) resetBranchStoreFromWorkingTree(ctx context.Context, txID string) error {
 	if s.ladybugPath == "" {
-		return status.Error(codes.FailedPrecondition, "refresh requires LADYBUG_DB_PATH")
+		// Rebuilding the branch DB from the working tree is re-hydration work;
+		// the SPEC error-table row "Commit serialisation or re-hydration failed"
+		// assigns INTERNAL to re-hydration failures, and buildBranchStoreFromWorkingTree
+		// below already returns INTERNAL for the same work — an unset
+		// LADYBUG_DB_PATH is that failure mode surfacing before the first I/O, not
+		// a FAILED_PRECONDITION no error-table row assigns.
+		return status.Error(codes.Internal, "refresh requires LADYBUG_DB_PATH")
 	}
 	oldPath := filepath.Join(s.ladybugPath, "branches", txID+".lbug")
 	if _, err := os.Stat(oldPath); err != nil {
@@ -2830,7 +2854,7 @@ func (s *CartographerServer) Sync(ctx context.Context, req *flowv1.SyncRequest) 
 	// PERMISSION_DENIED regardless of whether a remote is configured; probing
 	// remoteURL first would disclose remote-configuration state (FAILED_PRECONDITION
 	// vs PERMISSION_DENIED) ahead of any authorization decision. Mirrors
-	// BeginTransaction (line 1596) and ExportGraph (line 2769), which gate first.
+	// BeginTransaction and ExportGraph, which also gate on capability first.
 	if err := s.checkWildcardEntityCap(ctx, "WRITE"); err != nil {
 		return nil, err
 	}

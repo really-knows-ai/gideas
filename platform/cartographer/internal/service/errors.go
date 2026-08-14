@@ -133,7 +133,15 @@ func mapStoreError(err error) error {
 	case errors.Is(err, store.ErrDatabaseNotReady):
 		return status.Error(codes.FailedPrecondition, err.Error())
 	case errors.Is(err, store.ErrBranchAlreadyExists):
-		return status.Error(codes.AlreadyExists, err.Error())
+		// Branch-creation failure (including an already-existing branch) maps to
+		// the SPEC error-table row "BeginTransaction resource exhausted"
+		// (RESOURCE_EXHAUSTED — "branch or LadybugDB creation failed"). No row
+		// assigns ALREADY_EXISTS to branch creation, so returning that code here
+		// would be an unjustified wire status. The BeginTransaction handler
+		// wraps this store error into errBeginTransactionResourceExhausted before
+		// it can reach mapStoreError, but the mapping stays SPEC-correct for any
+		// path that surfaces it directly (e.g. a refresh's branch rebuild).
+		return status.Error(codes.ResourceExhausted, err.Error())
 
 	// Schema errors (from schema package, surfaced through store)
 	case isSchemaError(err):

@@ -87,7 +87,8 @@ func TestExtendTimeout_DirectRejectsExpired(t *testing.T) {
 	ctx := testCtx()
 
 	fc := newFakeClock(time.Now())
-	srv.txManager = NewTransactionManager(7*24*time.Hour, 100000, WithClock(fc))
+	srv.txManager = NewTransactionManager(7*24*time.Hour, 100000)
+	srv.txManager.clock = fc
 	txID := beginTestTx(t, srv, ctx)
 
 	state, err := srv.txManager.Lookup(txID)

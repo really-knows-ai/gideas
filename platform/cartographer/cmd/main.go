@@ -70,9 +70,10 @@ func main() {
 	// SPEC R5 fail-fast guard: a non-positive TRANSACTION_TIMEOUT parses
 	// cleanly but makes every BeginTransaction fail at runtime with
 	// INVALID_ARGUMENT ("invalid transaction timeout duration: duration must be
-	// positive", transaction_manager.go:171 via errInvalidTransactionTimeoutDuration,
-	// errors.go:259-261), so it must fail startup just like an unparseable
-	// value. Mirrors the SYNC_INTERVAL positivity guard below.
+	// positive", surfaced by TransactionManager.Create via
+	// errInvalidTransactionTimeoutDuration in the service errors.go), so it
+	// must fail startup just like an unparseable value. Mirrors the
+	// SYNC_INTERVAL positivity guard below.
 	if transactionTimeout <= 0 {
 		slog.Error("invalid TRANSACTION_TIMEOUT", "value", transactionTimeout.String(),
 			"error", "must be a positive duration")
