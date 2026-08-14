@@ -15,10 +15,6 @@ import (
 	"google.golang.org/grpc/metadata"
 )
 
-// signerIdentitySidecar is the value carried in the x-flow-capabilities-signed-by
-// header for capabilities signed by the Sidecar's shared signing key.
-const signerIdentitySidecar = "sidecar"
-
 // IdentityInterceptor returns a gRPC unary server interceptor that enriches
 // incoming metadata with authoritative identity and capability fields.
 // It is the sole authority for runtime attribution on node-originated
@@ -191,7 +187,7 @@ func signCapabilities(md metadata.MD, capabilities string, signingKey ed25519.Pr
 	payload := []byte(capabilities + "|" + signedAt)
 	sig := ed25519.Sign(signingKey, payload)
 	md.Set(flowmeta.MetadataKeyCapabilitiesSignature, base64.StdEncoding.EncodeToString(sig))
-	md.Set(flowmeta.MetadataKeyCapabilitiesSignedBy, signerIdentitySidecar)
+	md.Set(flowmeta.MetadataKeyCapabilitiesSignedBy, flowmeta.SignerIdentitySidecar)
 	md.Set(flowmeta.MetadataKeyCapabilitiesSignedAt, signedAt)
 	return md, nil
 }

@@ -134,9 +134,9 @@ func (v *CapabilityVerifier) verify(ctx context.Context) (context.Context, error
 	// Select verification key.
 	var verificationKey ed25519.PublicKey
 	switch signedBy {
-	case "operator":
+	case flowmeta.SignerIdentityOperator:
 		verificationKey = v.operatorKey
-	case "sidecar":
+	case flowmeta.SignerIdentitySidecar:
 		verificationKey = v.sidecarKey
 	default:
 		return nil, errCapabilitySignedByUnrecognized(signedBy)
