@@ -569,7 +569,11 @@ func (db *ladybugDB) RehydrateFromBranch(ctx context.Context, txID string) error
 
 // RehydrateMainFromFiles loads entities/edges from JSON files into main.
 // It holds db.mu for the entire wipe-and-load cycle so that concurrent reads
-// never observe partially reconstructed state.
+// never observe partially reconstructed state. The load is atomic with respect
+// to the source: the entire file tree is validated into a throwaway database
+// before the DETACH DELETE below, so a corrupt source (e.g. a corrupt merged
+// JSON from the remote) fails with main untouched instead of wiping main first
+// and leaving it partially loaded.
 func (db *ladybugDB) RehydrateMainFromFiles(ctx context.Context, entitiesDir, edgesDir string) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
@@ -583,6 +587,22 @@ func (db *ladybugDB) RehydrateMainFromFiles(ctx context.Context, entitiesDir, ed
 	edgeDefs := make(map[string]*store.EdgeTypeDef)
 	maps.Copy(edgeDefs, db.edgeTypeDefs)
 
+	// Pre-flight: prove the entire file tree loads cleanly before main is
+	// touched. The wipe below precedes the loads, so without this a failure
+	// during the loads — the persistent case being a corrupt merged JSON pulled
+	// by the sync worker — leaves main.lbug partially wiped, and the caller's
+	// cycle returns with main serving a silently-incomplete graph (SPEC
+	// error-table row "Sync re-hydration failed" → INTERNAL; its R8
+	// "automatic recovery on next startup" escape hatch presupposes a
+	// consistent graph to serve, which a wiped main is not). The pre-flight
+	// runs the shared loaders against a throwaway in-memory database, so a
+	// corrupt source fails here with main untouched and the caller's recovery
+	// path (the worker's next-cycle retry, or R8 on the next startup) has the
+	// pre-existing graph to keep serving.
+	if err := db.validateRehydrateSource(entitiesDir, edgesDir); err != nil {
+		return err
+	}
+
 	// Wipe everything — use db.conn directly since we hold db.mu.
 	result, err := db.conn.Query("MATCH (n) DETACH DELETE n;")
 	if err != nil {
@@ -595,10 +615,8 @@ func (db *ladybugDB) RehydrateMainFromFiles(ctx context.Context, entitiesDir, ed
 		return err
 	}
 	// Fail if entities dir exists but edges dir does not (partial wipe).
-	if _, entErr := os.Stat(entitiesDir); entErr == nil {
-		if _, edgeErr := os.Stat(edgesDir); os.IsNotExist(edgeErr) {
-			return fmt.Errorf("%w: edges directory does not exist but entities directory exists", store.ErrInvalidEdgeDir)
-		}
+	if err := checkEdgesDirCompleteness(entitiesDir, edgesDir); err != nil {
+		return err
 	}
 	// Read edges from JSON files.
 	if err := db.loadEdgesFromDirOnConn(db.conn, edgesDir, edgeDefs); err != nil {
@@ -636,6 +654,94 @@ func (db *ladybugDB) RehydrateMainFromFiles(ctx context.Context, entitiesDir, ed
 	// while Health() reports SchemaApplied=false indefinitely (only ApplySchema
 	// and restoreMainSchemaMetadataLocked set the flag elsewhere).
 	db.schemaApplied = true
+	return nil
+}
+
+// checkEdgesDirCompleteness is the shared file-tree completeness guard: a
+// working tree where entities/ exists but edges/ was removed (SPEC R2 WipeGraph
+// mid-wipe failure → INTERNAL) must fail loudly instead of loading entities and
+// silently skipping every edge. Shared by RehydrateMainFromFiles (before the
+// wipe, inside validateRehydrateSource, and after the entity load) and
+// HydrateBranchFromFiles so the two hydration paths cannot diverge.
+func checkEdgesDirCompleteness(entitiesDir, edgesDir string) error {
+	if _, entErr := os.Stat(entitiesDir); entErr == nil {
+		if _, edgeErr := os.Stat(edgesDir); os.IsNotExist(edgeErr) {
+			return fmt.Errorf("%w: edges directory does not exist but entities directory exists", store.ErrInvalidEdgeDir)
+		}
+	}
+	return nil
+}
+
+// validateRehydrateSource dry-runs the file-tree load against a throwaway
+// in-memory database so RehydrateMainFromFiles can prove the source is fully
+// loadable before wiping main (see RehydrateMainFromFiles). It runs the same
+// loaders (parse → schema inference/DDL → insert) on isolated schema-definition
+// copies, so a corrupt source fails with no side effect on main. The defs are
+// deep-cloned because the loaders mutate them (registering inferred types,
+// promoting vector flags) and the real load must run from a pristine snapshot.
+//
+// ponytail: the pre-flight re-loads the whole tree (parse + insert into an
+// in-memory database) before the real load, doubling the CPU cost of every
+// re-hydration — paid on each remote pull and each startup rebuild. The cost
+// buys all-or-nothing re-hydration: without it, a load failure after the
+// DETACH DELETE leaves main partially wiped and the SPEC R8 "automatic recovery
+// on next startup" escape hatch serves a destroyed graph. Upgrade path: load
+// once into the staging database and swap it onto main on success, eliminating
+// the second pass.
+func (db *ladybugDB) validateRehydrateSource(entitiesDir, edgesDir string) error {
+	staging, err := lbug.OpenInMemoryDatabase(lbug.DefaultSystemConfig())
+	if err != nil {
+		return fmt.Errorf("open re-hydration staging database: %w", err)
+	}
+	defer staging.Close()
+	conn, err := lbug.OpenConnection(staging)
+	if err != nil {
+		return fmt.Errorf("open re-hydration staging connection: %w", err)
+	}
+	defer conn.Close()
+	if err := loadExtensionsOnConn(conn, "on re-hydration staging"); err != nil {
+		return err
+	}
+	entDefs := make(map[string]*store.EntityTypeDef, len(db.entityTypeDefs))
+	for name, def := range db.entityTypeDefs {
+		cloned := cloneEntityTypeDef(def)
+		entDefs[name] = &cloned
+	}
+	edgeDefs := make(map[string]*store.EdgeTypeDef, len(db.edgeTypeDefs))
+	for name, def := range db.edgeTypeDefs {
+		cloned := cloneEdgeTypeDef(def)
+		edgeDefs[name] = &cloned
+	}
+	// Mirror main's schema onto the staging connection before the load: a fresh
+	// staging DB has none of main's tables, and the loaders' DB-dependent checks
+	// (the cross-type ID probe in insertEntityOnConn, the edge endpoint
+	// resolution, connectionPairsOnConn) query every known type's table — a
+	// missing table fails with a Binder exception and the pre-flight would
+	// reject a tree the real load (on main, whose tables exist) accepts. The
+	// embedding column/vector index and inferred types are handled by the
+	// loaders themselves, exactly as on the real load.
+	for name, def := range entDefs {
+		if err := createNodeTableOnConn(conn, name, def.Properties); err != nil {
+			return fmt.Errorf("replicate entity table %q on re-hydration staging: %w", name, err)
+		}
+	}
+	for name, def := range edgeDefs {
+		if err := createRelTableOnConn(conn, name, def.Properties, db.edgePairs[name]); err != nil {
+			return fmt.Errorf("replicate edge table %q on re-hydration staging: %w", name, err)
+		}
+	}
+	// Mirror the real load's sequence exactly (entities → completeness guard →
+	// edges) so the pre-flight fails on precisely the same conditions the real
+	// load would — before main is touched.
+	if err := db.loadEntitiesFromDirOnConn(conn, entitiesDir, entDefs); err != nil {
+		return err
+	}
+	if err := checkEdgesDirCompleteness(entitiesDir, edgesDir); err != nil {
+		return err
+	}
+	if err := db.loadEdgesFromDirOnConn(conn, edgesDir, edgeDefs); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -704,10 +810,8 @@ func (db *ladybugDB) HydrateBranchFromFiles(ctx context.Context, txID, entitiesD
 	// where entities/ survived but edges/ was removed (SPEC R2 WipeGraph
 	// mid-wipe failure → INTERNAL), silently loading entities and skipping
 	// every edge would hydrate an incomplete graph with no signal.
-	if _, entErr := os.Stat(entitiesDir); entErr == nil {
-		if _, edgeErr := os.Stat(edgesDir); os.IsNotExist(edgeErr) {
-			return fmt.Errorf("%w: edges directory does not exist but entities directory exists", store.ErrInvalidEdgeDir)
-		}
+	if err := checkEdgesDirCompleteness(entitiesDir, edgesDir); err != nil {
+		return err
 	}
 	if err := db.loadEdgesFromDirOnConn(br.conn, edgesDir, br.edgeTypeDefs); err != nil {
 		return err

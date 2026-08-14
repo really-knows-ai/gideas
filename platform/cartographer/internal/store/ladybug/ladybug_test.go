@@ -5045,6 +5045,65 @@ func TestRehydrateMainFromFiles_EntitiesDirOnly_ReturnsError(t *testing.T) {
 	}
 }
 
+// TestRehydrateMainFromFiles_FailureKeepsMainConsistent pins the atomicity of
+// re-hydration against the source: the DETACH DELETE must not run before the
+// file tree is proven fully loadable. A corrupt source file (e.g. a corrupt
+// merged JSON pulled by the sync worker) must fail with the pre-existing main
+// graph untouched — otherwise the sync worker's cycle returns with main
+// serving a silently-wiped graph (SPEC error-table row "Sync re-hydration
+// failed": the R8 "automatic recovery on next startup" escape hatch
+// presupposes a consistent graph to serve).
+func TestRehydrateMainFromFiles_FailureKeepsMainConsistent(t *testing.T) {
+	s, err := OpenInMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeStore(t, s)
+	applyTestSchema(t, s)
+	ctx := context.Background()
+
+	// Pre-existing main graph: an entity that is NOT in the file tree, so a
+	// wipe-then-fail would destroy it and only the fixed validation-first
+	// order keeps it.
+	oldID := uuid.NewString()
+	old, err := s.CreateEntity(ctx, "Component", oldID,
+		map[string]string{"name": "old"}, nil, "main")
+	if err != nil {
+		t.Fatalf("CreateEntity: %v", err)
+	}
+
+	// A corrupt file tree: the Component type directory carries only an
+	// unparseable JSON file.
+	root := t.TempDir()
+	entitiesDir := filepath.Join(root, "entities")
+	edgesDir := filepath.Join(root, "edges")
+	if err := os.MkdirAll(filepath.Join(entitiesDir, "Component"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(entitiesDir, "Component", "corrupt.json"),
+		[]byte("not json"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(edgesDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	err = s.RehydrateMainFromFiles(ctx, entitiesDir, edgesDir)
+	if err == nil {
+		t.Fatal("expected the corrupt file tree to fail re-hydration")
+	}
+
+	// The failed re-hydration must leave the pre-existing graph intact.
+	got, err := s.GetEntity(ctx, oldID, "main")
+	if err != nil {
+		t.Fatalf("failed re-hydration wiped main.lbug: %v", err)
+	}
+	if got.Properties["name"] != old.Properties["name"] {
+		t.Fatalf("pre-existing entity mutated by failed re-hydration: got %v, want %v",
+			got.Properties, old.Properties)
+	}
+}
+
 // HydrateBranchFromFiles must apply the same partial-wipe completeness guard as
 // RehydrateMainFromFiles (branch.go:517-521): a working tree where entities/
 // exists but edges/ was removed (SPEC R2 WipeGraph mid-wipe failure →

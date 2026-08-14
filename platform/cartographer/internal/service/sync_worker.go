@@ -43,10 +43,20 @@ const DefaultGitOperationTimeout = 5 * time.Minute
 
 // SyncWorker manages background remote synchronisation.
 type SyncWorker struct {
+	// pushNeeded is the externally-visible "a push is pending" signal, written
+	// by SetPushNeeded and cleared by the worker after a push delivers. It is
+	// a bool view over the monotonic pushGeneration counter: clearing is
+	// conditional on the generation being unchanged since the push began, so a
+	// concurrent SetPushNeeded can never be wiped by a clear (SPEC R10 WithAck
+	// contract — see SetPushNeeded and doSyncCycle).
 	pushNeeded atomic.Bool
-	wakeCh     chan struct{}
-	stopCh     chan struct{}
-	doneCh     chan struct{} // closed when the worker loop exits
+	// pushGeneration counts SetPushNeeded calls. A successful push clears
+	// pushNeeded only when no new request arrived while the push was in
+	// flight; the generation snapshot is how the worker detects that arrival.
+	pushGeneration atomic.Uint64
+	wakeCh         chan struct{}
+	stopCh         chan struct{}
+	doneCh         chan struct{} // closed when the worker loop exits
 	// stopOnce guards the stopCh close: Stop() may be called from multiple
 	// goroutines (shutdown path plus t.Cleanup), so the signal must be closed
 	// exactly once — the select/default close-once idiom is a data race (two
@@ -101,8 +111,12 @@ type SyncWorker struct {
 
 	// gitOpTimeout bounds each git operation in the sync cycle (SPEC R10,
 	// SPEC:978: "a configurable deadline the worker derives per operation
-	// (default: 5 minutes)"). Defaults to DefaultGitOperationTimeout;
-	// overridable via SyncWorkerWithGitOperationTimeout.
+	// (default: 5 minutes)"). Defaults to DefaultGitOperationTimeout — the
+	// only source for the value: cmd/main.go's clone-on-init and pre-flight
+	// auth reads derive the same constant, so the worker and the init paths
+	// cannot silently diverge. The knob is not operator-configurable (no env
+	// var, no SyncWorkerOption): the SPEC defines only the default, and the
+	// wiring surface is kept to what production uses.
 	gitOpTimeout time.Duration
 }
 
@@ -137,18 +151,6 @@ func SyncWorkerWithSyncInterval(d time.Duration) SyncWorkerOption {
 	return func(w *SyncWorker) { w.syncInterval = d }
 }
 
-// SyncWorkerWithGitOperationTimeout sets the per-operation deadline for git
-// operations in the sync cycle (SPEC R10 / SPEC:978: "A git operation in the
-// sync worker cycle (FetchAndMerge, PushRemote) exceeded its configurable
-// deadline (default: 5 minutes)"). The default is DefaultGitOperationTimeout
-// (five minutes). The duration must be positive — a non-positive value makes
-// every operation abort immediately with DEADLINE_EXCEEDED — so any
-// operator-facing wiring that derives the value (mirroring SYNC_INTERVAL in
-// cmd/main.go) must validate it at startup.
-func SyncWorkerWithGitOperationTimeout(d time.Duration) SyncWorkerOption {
-	return func(w *SyncWorker) { w.gitOpTimeout = d }
-}
-
 // NewSyncWorker creates a new SyncWorker.
 func NewSyncWorker(
 	remoteURL string,
@@ -175,8 +177,16 @@ func NewSyncWorker(
 	return w
 }
 
-// SetPushNeeded flags that a commit needs pushing. Called by CommitTransaction.
+// SetPushNeeded flags that a commit needs pushing. Called by CommitTransaction,
+// MergeCompleted, and WipeGraph. Bumping the monotonic pushGeneration lets the
+// worker detect that a new request arrived while a push was in flight, so a
+// successful push only clears the flag when no request landed since it began —
+// a lost SetPushNeeded would let WakeAndWait/WithAck report success for a
+// commit never delivered to the remote, with no later timer cycle delivering
+// it (SPEC R10 WithAck: "If the cycle ends with the flag cleared (push
+// delivered), the call returns success").
 func (w *SyncWorker) SetPushNeeded() {
+	w.pushGeneration.Add(1)
 	w.pushNeeded.Store(true)
 }
 
@@ -344,6 +354,17 @@ func (w *SyncWorker) doSyncCycle() cycleResult {
 	if !w.pushNeeded.Load() {
 		return cycleResult{}
 	}
+	// Snapshot the push-request generation before the attempt: SetPushNeeded
+	// bumps it, so after a successful push the flag is cleared only when no
+	// new request arrived while the push was in flight. An unconditional clear
+	// would lose a concurrent SetPushNeeded (CommitTransaction, MergeCompleted,
+	// WipeGraph) landing between push success and the clear — WakeAndWait/
+	// WithAck would report success for a commit never delivered to the remote,
+	// and no later timer cycle would deliver it (SPEC R10 WithAck contract). A
+	// request that arrives while the push is in flight leaves the flag set; the
+	// next cycle (the wake its WithAck caller triggers, or the next timer tick)
+	// delivers it.
+	gen := w.pushGeneration.Load()
 
 	pushErr := w.gitstore.WithGitLock(func() error {
 		return w.gitOp(func(ctx context.Context) error {
@@ -386,8 +407,13 @@ func (w *SyncWorker) doSyncCycle() cycleResult {
 		}
 	}
 
-	// Push succeeded — clear the flag.
-	w.pushNeeded.Store(false)
+	// Push succeeded — clear the flag only if no new push request arrived while
+	// the push was in flight (the generation snapshot above). A request that
+	// raced the push stays pending and is delivered by the next cycle instead
+	// of being silently lost.
+	if w.pushGeneration.Load() == gen {
+		w.pushNeeded.Store(false)
+	}
 	return cycleResult{}
 }
 
