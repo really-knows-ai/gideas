@@ -694,13 +694,21 @@ func initTestKey() ed25519.PublicKey {
 	return pub
 }
 
-// newTestServer creates a CartographerServer with in-memory store and temp gitstore.
+// openTestStore is the service-test constructor for a real store. The exported
+// ladybug.OpenInMemory seam was removed as test-only dead production surface
+// (LEARNINGS: test-only callers do not justify a production surface), so
+// service tests open a temp-dir file-backed store instead.
+func openTestStore(t *testing.T) (store.Store, error) {
+	return ladybug.Open(t.TempDir())
+}
+
+// newTestServer creates a CartographerServer with a temp-dir store and temp gitstore.
 func newTestServer(t *testing.T) (*CartographerServer, store.Store) {
 	t.Helper()
 	scPub := initTestKey()
-	st, err := ladybug.OpenInMemory()
+	st, err := openTestStore(t)
 	if err != nil {
-		t.Fatalf("OpenInMemory: %v", err)
+		t.Fatalf("openTestStore: %v", err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
 	gs, err := gitstore.New(t.TempDir())
@@ -895,7 +903,7 @@ func cloneTestSchemaProvider(source testSchemaProvider) testSchemaProvider {
 func TestCapability_ValidSignature(t *testing.T) {
 	opPub, _ := generateTestKey()
 	scPub, scPriv := generateTestKey()
-	st, _ := ladybug.OpenInMemory()
+	st, _ := openTestStore(t)
 	t.Cleanup(func() { _ = st.Close() })
 	gs, _ := gitstore.New(t.TempDir())
 	srv := NewCartographerServer(st, gs, opPub, scPub, nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000)
@@ -929,7 +937,7 @@ func TestCapability_ValidSignature(t *testing.T) {
 func TestCapability_WhitespaceEntriesTrimmed(t *testing.T) {
 	opPub, _ := generateTestKey()
 	scPub, scPriv := generateTestKey()
-	st, _ := ladybug.OpenInMemory()
+	st, _ := openTestStore(t)
 	t.Cleanup(func() { _ = st.Close() })
 	gs, _ := gitstore.New(t.TempDir())
 	srv := NewCartographerServer(st, gs, opPub, scPub, nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000)
@@ -971,7 +979,7 @@ func TestCapability_WhitespaceEntriesTrimmed(t *testing.T) {
 func TestCapability_ValidOperatorSignature(t *testing.T) {
 	opPub, opPriv := generateTestKey()
 	scPub, _ := generateTestKey()
-	st, _ := ladybug.OpenInMemory()
+	st, _ := openTestStore(t)
 	t.Cleanup(func() { _ = st.Close() })
 	gs, _ := gitstore.New(t.TempDir())
 	srv := NewCartographerServer(st, gs, opPub, scPub, nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000)
@@ -1000,7 +1008,7 @@ func TestCapability_InvalidSignature(t *testing.T) {
 	opPub, _ := generateTestKey()
 	scPub, _ := generateTestKey()
 	_, wrongPriv := generateTestKey()
-	st, _ := ladybug.OpenInMemory()
+	st, _ := openTestStore(t)
 	t.Cleanup(func() { _ = st.Close() })
 	gs, _ := gitstore.New(t.TempDir())
 	srv := NewCartographerServer(st, gs, opPub, scPub, nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000)
@@ -1018,7 +1026,7 @@ func TestCapability_InvalidSignature(t *testing.T) {
 func TestCapability_MissingMetadata(t *testing.T) {
 	opPub, _ := generateTestKey()
 	scPub, _ := generateTestKey()
-	st, _ := ladybug.OpenInMemory()
+	st, _ := openTestStore(t)
 	t.Cleanup(func() { _ = st.Close() })
 	gs, _ := gitstore.New(t.TempDir())
 	srv := NewCartographerServer(st, gs, opPub, scPub, nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000)
@@ -1041,7 +1049,7 @@ func TestCapability_MissingMetadata(t *testing.T) {
 func TestCapability_UnrecognizedSigner(t *testing.T) {
 	opPub, _ := generateTestKey()
 	scPub, _ := generateTestKey()
-	st, _ := ladybug.OpenInMemory()
+	st, _ := openTestStore(t)
 	t.Cleanup(func() { _ = st.Close() })
 	gs, _ := gitstore.New(t.TempDir())
 	srv := NewCartographerServer(st, gs, opPub, scPub, nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000)
@@ -1066,7 +1074,7 @@ func TestCapability_UnrecognizedSigner(t *testing.T) {
 func TestCapability_MissingSignedBy(t *testing.T) {
 	opPub, _ := generateTestKey()
 	scPub, scPriv := generateTestKey()
-	st, _ := ladybug.OpenInMemory()
+	st, _ := openTestStore(t)
 	t.Cleanup(func() { _ = st.Close() })
 	gs, _ := gitstore.New(t.TempDir())
 	srv := NewCartographerServer(st, gs, opPub, scPub, nil, "",
@@ -1386,9 +1394,9 @@ func TestWipeGraph_ExpiredTxDoesNotBlock(t *testing.T) {
 // lands on main's history — otherwise the next sync-cycle RestoreMain brings
 // the pre-wipe files back and stale data silently survives the wipe.
 func TestWipeGraph_TreeOnTxBranchWipeLandsOnMain(t *testing.T) {
-	base, err := ladybug.OpenInMemory()
+	base, err := openTestStore(t)
 	if err != nil {
-		t.Fatalf("OpenInMemory: %v", err)
+		t.Fatalf("openTestStore: %v", err)
 	}
 	t.Cleanup(func() { _ = base.Close() })
 	ladybugPath := t.TempDir()
@@ -2899,9 +2907,9 @@ func TestTransaction_ChangeLogRollbackFailureIsExplicitAndRetryable(t *testing.T
 }
 
 func TestRollbackTransaction_RestoresMainAfterFailedMerge(t *testing.T) {
-	base, err := ladybug.OpenInMemory()
+	base, err := openTestStore(t)
 	if err != nil {
-		t.Fatalf("OpenInMemory: %v", err)
+		t.Fatalf("openTestStore: %v", err)
 	}
 	t.Cleanup(func() { _ = base.Close() })
 	ladybugPath := t.TempDir()
@@ -2955,9 +2963,9 @@ func TestRollbackTransaction_RestoresMainAfterFailedMerge(t *testing.T) {
 // FastForwardMerge surfaces gitstore.ErrMergeDiverged, the handler must map it
 // to INTERNAL — not the distinct "Refresh conflict → ABORTED" code.
 func TestCommitTransaction_MergeDivergedIsInternal(t *testing.T) {
-	base, err := ladybug.OpenInMemory()
+	base, err := openTestStore(t)
 	if err != nil {
-		t.Fatalf("OpenInMemory: %v", err)
+		t.Fatalf("openTestStore: %v", err)
 	}
 	t.Cleanup(func() { _ = base.Close() })
 	ladybugPath := t.TempDir()
@@ -3033,9 +3041,9 @@ func (s *pushTrackingGitStore) PushRemote(ctx context.Context) error {
 // one cycle performs FetchAndMerge then PushRemote, clears the flag, and emits
 // no push_failed telemetry.
 func TestSyncWorkerFetchAndPushCycle(t *testing.T) {
-	base, err := ladybug.OpenInMemory()
+	base, err := openTestStore(t)
 	if err != nil {
-		t.Fatalf("OpenInMemory: %v", err)
+		t.Fatalf("openTestStore: %v", err)
 	}
 	t.Cleanup(func() { _ = base.Close() })
 	gs, err := gitstore.New(t.TempDir())
@@ -3126,9 +3134,9 @@ func TestSyncWorker_RehydrateOnlyWhenNewDataPulled(t *testing.T) {
 		if err != nil {
 			t.Fatalf("gitstore.New: %v", err)
 		}
-		base, err := ladybug.OpenInMemory()
+		base, err := openTestStore(t)
 		if err != nil {
-			t.Fatalf("OpenInMemory: %v", err)
+			t.Fatalf("openTestStore: %v", err)
 		}
 		t.Cleanup(func() { _ = base.Close() })
 		syncGit := &syncMockGitStore{GitStore: gs} // ZeroHash = remote up-to-date
@@ -3149,9 +3157,9 @@ func TestSyncWorker_RehydrateOnlyWhenNewDataPulled(t *testing.T) {
 		if err != nil {
 			t.Fatalf("gitstore.New: %v", err)
 		}
-		base, err := ladybug.OpenInMemory()
+		base, err := openTestStore(t)
 		if err != nil {
-			t.Fatalf("OpenInMemory: %v", err)
+			t.Fatalf("openTestStore: %v", err)
 		}
 		t.Cleanup(func() { _ = base.Close() })
 		preHead, err := gs.BranchHEAD(context.Background(), "main")
@@ -3192,9 +3200,9 @@ func TestSyncWorker_RehydrateRetriesOnNextCycle(t *testing.T) {
 	if fetchHash == preHead {
 		fetchHash = "2" + preHead[1:]
 	}
-	base, err := ladybug.OpenInMemory()
+	base, err := openTestStore(t)
 	if err != nil {
-		t.Fatalf("OpenInMemory: %v", err)
+		t.Fatalf("openTestStore: %v", err)
 	}
 	t.Cleanup(func() { _ = base.Close() })
 	syncGit := &syncMockGitStore{GitStore: gs, fetchHash: plumbing.NewHash(fetchHash)}
@@ -3242,9 +3250,9 @@ func TestSyncWorker_RehydrateRestoresMainBeforeReadingTree(t *testing.T) {
 	if err != nil {
 		t.Fatalf("gitstore.New: %v", err)
 	}
-	base, err := ladybug.OpenInMemory()
+	base, err := openTestStore(t)
 	if err != nil {
-		t.Fatalf("OpenInMemory: %v", err)
+		t.Fatalf("openTestStore: %v", err)
 	}
 	t.Cleanup(func() { _ = base.Close() })
 
@@ -3311,9 +3319,9 @@ func TestSyncWorkerPushFailureLeavesFlagSet(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			base, err := ladybug.OpenInMemory()
+			base, err := openTestStore(t)
 			if err != nil {
-				t.Fatalf("OpenInMemory: %v", err)
+				t.Fatalf("openTestStore: %v", err)
 			}
 			t.Cleanup(func() { _ = base.Close() })
 			gs, err := gitstore.New(t.TempDir())
@@ -3365,9 +3373,9 @@ func TestSyncWorker_FailureEmitsTelemetry(t *testing.T) {
 			if err != nil {
 				t.Fatalf("gitstore.New: %v", err)
 			}
-			base, err := ladybug.OpenInMemory()
+			base, err := openTestStore(t)
 			if err != nil {
-				t.Fatalf("OpenInMemory: %v", err)
+				t.Fatalf("openTestStore: %v", err)
 			}
 			t.Cleanup(func() { _ = base.Close() })
 			syncGit := &syncMockGitStore{GitStore: gs, fetchErr: tc.fetchErr, pushErr: tc.pushErr}
@@ -3412,9 +3420,9 @@ func TestSyncWorker_NoRemote_ClassifiedNonRecoverable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("gitstore.New: %v", err)
 	}
-	base, err := ladybug.OpenInMemory()
+	base, err := openTestStore(t)
 	if err != nil {
-		t.Fatalf("OpenInMemory: %v", err)
+		t.Fatalf("openTestStore: %v", err)
 	}
 	t.Cleanup(func() { _ = base.Close() })
 	syncGit := &syncMockGitStore{GitStore: gs, fetchErr: gitstore.ErrNoRemote}
@@ -3525,9 +3533,9 @@ func (s *syncMockGitStore) releasePush() {
 // fetches).
 func newSyncWorker(t *testing.T, syncGit *syncMockGitStore, clock Clock) *SyncWorker {
 	t.Helper()
-	base, err := ladybug.OpenInMemory()
+	base, err := openTestStore(t)
 	if err != nil {
-		t.Fatalf("OpenInMemory: %v", err)
+		t.Fatalf("openTestStore: %v", err)
 	}
 	t.Cleanup(func() { _ = base.Close() })
 	return NewSyncWorker("https://example.com/repo.git", syncGit, base, clock)
@@ -3539,9 +3547,9 @@ func newSyncWorker(t *testing.T, syncGit *syncMockGitStore, clock Clock) *SyncWo
 // wake is consumed by a fresh cycle.
 func newSyncServer(t *testing.T, syncGit *syncMockGitStore) (*CartographerServer, *fakeClock) {
 	t.Helper()
-	base, err := ladybug.OpenInMemory()
+	base, err := openTestStore(t)
 	if err != nil {
-		t.Fatalf("OpenInMemory: %v", err)
+		t.Fatalf("openTestStore: %v", err)
 	}
 	t.Cleanup(func() { _ = base.Close() })
 	fc := newFakeClock(time.Now())
@@ -4186,9 +4194,9 @@ func TestSync_WakesWorkerAndBlocks(t *testing.T) {
 		if fetchHash == preHead {
 			fetchHash = "2" + preHead[1:]
 		}
-		base, err := ladybug.OpenInMemory()
+		base, err := openTestStore(t)
 		if err != nil {
-			t.Fatalf("OpenInMemory: %v", err)
+			t.Fatalf("openTestStore: %v", err)
 		}
 		t.Cleanup(func() { _ = base.Close() })
 		flaky := &flakyRehydrateStore{Store: base, failAt: 100000}
@@ -4222,9 +4230,9 @@ func TestSync_WakesWorkerAndBlocks(t *testing.T) {
 			t.Fatalf("gitstore.New: %v", err)
 		}
 		syncGit := &syncMockGitStore{GitStore: gs, fetchErr: gitstore.ErrRemoteUnreachable}
-		base, err := ladybug.OpenInMemory()
+		base, err := openTestStore(t)
 		if err != nil {
-			t.Fatalf("OpenInMemory: %v", err)
+			t.Fatalf("openTestStore: %v", err)
 		}
 		t.Cleanup(func() { _ = base.Close() })
 		fc := newFakeClock(time.Now())
@@ -4842,9 +4850,9 @@ func TestEmptyTransaction_CommitNoOp(t *testing.T) {
 // TestEmptyTransaction_CommitNoOp only asserts that the RPC succeeds; nothing
 // pins the git/push side of the no-op.
 func TestEmptyTransaction_CommitNoOpCreatesNoGitCommitAndNoPush(t *testing.T) {
-	base, err := ladybug.OpenInMemory()
+	base, err := openTestStore(t)
 	if err != nil {
-		t.Fatalf("OpenInMemory: %v", err)
+		t.Fatalf("openTestStore: %v", err)
 	}
 	t.Cleanup(func() { _ = base.Close() })
 	gs, err := gitstore.New(t.TempDir())
@@ -4898,9 +4906,9 @@ func TestEmptyTransaction_RollbackNoOp(t *testing.T) {
 }
 
 func TestEmptyTransaction_CommitWaitsForMutationCompletion(t *testing.T) {
-	base, err := ladybug.OpenInMemory()
+	base, err := openTestStore(t)
 	if err != nil {
-		t.Fatalf("OpenInMemory: %v", err)
+		t.Fatalf("openTestStore: %v", err)
 	}
 	t.Cleanup(func() { _ = base.Close() })
 	blocking := &mutationBlockingStore{Store: base, wrote: make(chan struct{}), release: make(chan struct{})}
@@ -4990,9 +4998,9 @@ func TestEmptyTransaction_CommitCleanupFailureRemainsRetryable(t *testing.T) {
 }
 
 func TestCommitTransaction_FileRehydrationUsesExactlyOnePath(t *testing.T) {
-	base, err := ladybug.OpenInMemory()
+	base, err := openTestStore(t)
 	if err != nil {
-		t.Fatalf("OpenInMemory: %v", err)
+		t.Fatalf("openTestStore: %v", err)
 	}
 	t.Cleanup(func() { _ = base.Close() })
 	counting := &hydrationCountingStore{Store: base}
@@ -5030,9 +5038,9 @@ func TestCommitTransaction_FileRehydrationUsesExactlyOnePath(t *testing.T) {
 }
 
 func TestCommitTransaction_RetryAfterCommitCreatedDoesNotDuplicateCommit(t *testing.T) {
-	base, err := ladybug.OpenInMemory()
+	base, err := openTestStore(t)
 	if err != nil {
-		t.Fatalf("OpenInMemory: %v", err)
+		t.Fatalf("openTestStore: %v", err)
 	}
 	t.Cleanup(func() { _ = base.Close() })
 	ladybugPath := t.TempDir()
@@ -5094,9 +5102,9 @@ func TestCommitTransaction_RetryAfterCommitCreatedDoesNotDuplicateCommit(t *test
 }
 
 func TestCommitTransaction_CommitFailureWithoutCommitAllowsRefreshAndRetry(t *testing.T) {
-	base, err := ladybug.OpenInMemory()
+	base, err := openTestStore(t)
 	if err != nil {
-		t.Fatalf("OpenInMemory: %v", err)
+		t.Fatalf("openTestStore: %v", err)
 	}
 	t.Cleanup(func() { _ = base.Close() })
 	ladybugPath := t.TempDir()
@@ -5259,9 +5267,9 @@ func TestRollbackTransaction_AfterReconciledCommitError(t *testing.T) {
 		{name: "commit created", failAfter: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			base, err := ladybug.OpenInMemory()
+			base, err := openTestStore(t)
 			if err != nil {
-				t.Fatalf("OpenInMemory: %v", err)
+				t.Fatalf("openTestStore: %v", err)
 			}
 			t.Cleanup(func() { _ = base.Close() })
 			gs, err := gitstore.New(t.TempDir())
@@ -5327,9 +5335,9 @@ func TestCommitTransaction_StateWriteFailureRemainsDiscoverableAndRetryable(t *t
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			base, err := ladybug.OpenInMemory()
+			base, err := openTestStore(t)
 			if err != nil {
-				t.Fatalf("OpenInMemory: %v", err)
+				t.Fatalf("openTestStore: %v", err)
 			}
 			t.Cleanup(func() { _ = base.Close() })
 			failingStore := &transactionStateFailingStore{Store: base, fail: tc.fail}
@@ -5592,9 +5600,9 @@ func TestRecoverOpenTransactionsPreservesDivergenceAndSchemaBaselines(t *testing
 }
 
 func TestCommitTransaction_RetryAfterMergeCompletedOnlyCleansUp(t *testing.T) {
-	base, err := ladybug.OpenInMemory()
+	base, err := openTestStore(t)
 	if err != nil {
-		t.Fatalf("OpenInMemory: %v", err)
+		t.Fatalf("openTestStore: %v", err)
 	}
 	t.Cleanup(func() { _ = base.Close() })
 	ladybugPath := t.TempDir()
@@ -5670,9 +5678,9 @@ func TestCommitTransaction_RetryAfterMergeCompletedOnlyCleansUp(t *testing.T) {
 // cleanup. Without the flag the locally-merged commit stays un-pushed until an
 // unrelated later commit sets it.
 func TestCommitTransaction_MergePersistFailureSetsPushNeededOnRetry(t *testing.T) {
-	base, err := ladybug.OpenInMemory()
+	base, err := openTestStore(t)
 	if err != nil {
-		t.Fatalf("OpenInMemory: %v", err)
+		t.Fatalf("openTestStore: %v", err)
 	}
 	t.Cleanup(func() { _ = base.Close() })
 	// Fail the one MergeCompleted state write (the "persist completed merge"
@@ -6142,9 +6150,9 @@ func TestReadMethods_BeforeFirstApplySchema(t *testing.T) {
 }
 
 func TestRefreshTransaction_NoConflicts(t *testing.T) {
-	base, err := ladybug.OpenInMemory()
+	base, err := openTestStore(t)
 	if err != nil {
-		t.Fatalf("OpenInMemory: %v", err)
+		t.Fatalf("openTestStore: %v", err)
 	}
 	t.Cleanup(func() { _ = base.Close() })
 	ladybugPath := t.TempDir()
@@ -6182,9 +6190,9 @@ func TestRefreshTransaction_NoConflicts(t *testing.T) {
 // inside Refresh (ExpiresAt = now + timeout) would keep the transaction alive
 // past its original absolute lifetime — this test fails if that happens.
 func TestRefreshTransaction_DoesNotResetTimeoutTimer(t *testing.T) {
-	base, err := ladybug.OpenInMemory()
+	base, err := openTestStore(t)
 	if err != nil {
-		t.Fatalf("OpenInMemory: %v", err)
+		t.Fatalf("openTestStore: %v", err)
 	}
 	t.Cleanup(func() { _ = base.Close() })
 	ladybugPath := t.TempDir()
@@ -6240,9 +6248,9 @@ func TestRefreshTransaction_DoesNotResetTimeoutTimer(t *testing.T) {
 // missing the interim entity, and the fast-forward merge failed with INTERNAL,
 // leaving main LadybugDB and git main divergent.
 func TestRefreshTransaction_EmptyRefreshThenMutateAndCommit(t *testing.T) {
-	base, err := ladybug.OpenInMemory()
+	base, err := openTestStore(t)
 	if err != nil {
-		t.Fatalf("OpenInMemory: %v", err)
+		t.Fatalf("openTestStore: %v", err)
 	}
 	t.Cleanup(func() { _ = base.Close() })
 	ladybugPath := t.TempDir()
@@ -6299,9 +6307,9 @@ func TestRefreshTransaction_EmptyRefreshThenMutateAndCommit(t *testing.T) {
 }
 
 func TestRefreshTransaction_ConcurrentCommitCannotUseStaleHead(t *testing.T) {
-	base, err := ladybug.OpenInMemory()
+	base, err := openTestStore(t)
 	if err != nil {
-		t.Fatalf("OpenInMemory: %v", err)
+		t.Fatalf("openTestStore: %v", err)
 	}
 	t.Cleanup(func() { _ = base.Close() })
 	blocking := &hydrationBlockingStore{Store: base, blocked: make(chan struct{}), release: make(chan struct{})}
@@ -6371,9 +6379,9 @@ func TestRefreshTransaction_ConcurrentCommitCannotUseStaleHead(t *testing.T) {
 }
 
 func TestRefreshTransaction_HydrationFailureDoesNotAdvanceSyncHead(t *testing.T) {
-	base, err := ladybug.OpenInMemory()
+	base, err := openTestStore(t)
 	if err != nil {
-		t.Fatalf("OpenInMemory: %v", err)
+		t.Fatalf("openTestStore: %v", err)
 	}
 	t.Cleanup(func() { _ = base.Close() })
 	release := make(chan struct{})
@@ -6420,12 +6428,12 @@ func TestRefreshTransaction_HydrationFailureDoesNotAdvanceSyncHead(t *testing.T)
 }
 
 func TestRefreshTransaction_ConflictLeavesCleanRefreshedBranch(t *testing.T) {
-	base, err := ladybug.OpenInMemory()
+	ladybugPath := t.TempDir()
+	base, err := ladybug.Open(ladybugPath)
 	if err != nil {
-		t.Fatalf("OpenInMemory: %v", err)
+		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(func() { _ = base.Close() })
-	ladybugPath := t.TempDir()
 	gs, err := gitstore.New(ladybugPath)
 	if err != nil {
 		t.Fatalf("gitstore.New: %v", err)
@@ -6494,12 +6502,12 @@ func TestRefreshTransaction_ConflictLeavesCleanRefreshedBranch(t *testing.T) {
 // rebuilt. The existing aborted-refresh tests assert the branch DB contents but
 // never call GetTransactionDiff.
 func TestRefreshTransaction_AbortedRefreshPreservesDiff(t *testing.T) {
-	base, err := ladybug.OpenInMemory()
+	ladybugPath := t.TempDir()
+	base, err := ladybug.Open(ladybugPath)
 	if err != nil {
-		t.Fatalf("OpenInMemory: %v", err)
+		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(func() { _ = base.Close() })
-	ladybugPath := t.TempDir()
 	gs, err := gitstore.New(ladybugPath)
 	if err != nil {
 		t.Fatalf("gitstore.New: %v", err)
@@ -6630,9 +6638,9 @@ func TestRefreshTransaction_EmbeddingDimensionConflict(t *testing.T) {
 // is untouched — the refresh must succeed and re-apply both entries so the
 // entity survives with its updated content.
 func TestRefreshTransaction_CreatedThenModifiedWithinTransaction(t *testing.T) {
-	base, err := ladybug.OpenInMemory()
+	base, err := openTestStore(t)
 	if err != nil {
-		t.Fatalf("OpenInMemory: %v", err)
+		t.Fatalf("openTestStore: %v", err)
 	}
 	t.Cleanup(func() { _ = base.Close() })
 	ladybugPath := t.TempDir()
@@ -6684,9 +6692,9 @@ func TestRefreshTransaction_CreatedThenModifiedWithinTransaction(t *testing.T) {
 // created inside the transaction), and with main untouched the refresh must
 // succeed and re-apply both entries, leaving the branch without the entity.
 func TestRefreshTransaction_CreatedThenDeletedWithinTransaction(t *testing.T) {
-	base, err := ladybug.OpenInMemory()
+	base, err := openTestStore(t)
 	if err != nil {
-		t.Fatalf("OpenInMemory: %v", err)
+		t.Fatalf("openTestStore: %v", err)
 	}
 	t.Cleanup(func() { _ = base.Close() })
 	ladybugPath := t.TempDir()
@@ -6734,12 +6742,12 @@ func TestRefreshTransaction_CreatedThenDeletedWithinTransaction(t *testing.T) {
 // step 3 UUID-overlap rule). The ChangeAddEntity entry is what detects the
 // overlap.
 func TestRefreshTransaction_CreatedThenDeleted_ConflictsWhenMainHasUUID(t *testing.T) {
-	base, err := ladybug.OpenInMemory()
+	ladybugPath := t.TempDir()
+	base, err := ladybug.Open(ladybugPath)
 	if err != nil {
-		t.Fatalf("OpenInMemory: %v", err)
+		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(func() { _ = base.Close() })
-	ladybugPath := t.TempDir()
 	gs, err := gitstore.New(ladybugPath)
 	if err != nil {
 		t.Fatalf("gitstore.New: %v", err)
@@ -6788,9 +6796,9 @@ func TestRefreshTransaction_CreatedThenDeleted_ConflictsWhenMainHasUUID(t *testi
 // silent data loss. The recreated entity must survive both the git tree and
 // main.
 func TestCommitTransaction_DeleteThenRecreateSameID_Survives(t *testing.T) {
-	base, err := ladybug.OpenInMemory()
+	base, err := openTestStore(t)
 	if err != nil {
-		t.Fatalf("OpenInMemory: %v", err)
+		t.Fatalf("openTestStore: %v", err)
 	}
 	t.Cleanup(func() { _ = base.Close() })
 	ladybugPath := t.TempDir()
@@ -6850,9 +6858,9 @@ func TestCommitTransaction_DeleteThenRecreateSameID_Survives(t *testing.T) {
 // committed tree — the same-ID resolution must not resurrect the deleted
 // entity.
 func TestCommitTransaction_CreateThenDeleteSameID_LeavesNoTrace(t *testing.T) {
-	base, err := ladybug.OpenInMemory()
+	base, err := openTestStore(t)
 	if err != nil {
-		t.Fatalf("OpenInMemory: %v", err)
+		t.Fatalf("openTestStore: %v", err)
 	}
 	t.Cleanup(func() { _ = base.Close() })
 	ladybugPath := t.TempDir()
@@ -7639,7 +7647,7 @@ func TestRecoverOpenTransactionsMainLookupFailuresAbort(t *testing.T) {
 	} {
 		t.Run(operation, func(t *testing.T) {
 			ctx := testCtx()
-			st, err := ladybug.OpenInMemory()
+			st, err := openTestStore(t)
 			if err != nil {
 				t.Fatalf("open store: %v", err)
 			}
@@ -7696,7 +7704,7 @@ func TestRecoverOpenTransactionsIdenticalCleanupIsRetryable(t *testing.T) {
 	for _, operation := range []string{"restore", "clean", "drop", "delete"} {
 		t.Run(operation, func(t *testing.T) {
 			ctx := testCtx()
-			st, err := ladybug.OpenInMemory()
+			st, err := openTestStore(t)
 			if err != nil {
 				t.Fatalf("open store: %v", err)
 			}
@@ -7788,7 +7796,7 @@ func TestDeleteEdge_Valid(t *testing.T) {
 func TestGetTransactionDiff_WrongCapability(t *testing.T) {
 	opPub, _ := generateTestKey()
 	scPub, scPriv := generateTestKey()
-	st, _ := ladybug.OpenInMemory()
+	st, _ := openTestStore(t)
 	t.Cleanup(func() { _ = st.Close() })
 	gs, _ := gitstore.New(t.TempDir())
 	srv := NewCartographerServer(st, gs, opPub, scPub, nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000)
@@ -7825,9 +7833,9 @@ func TestWipeGraph_Clean(t *testing.T) {
 func TestWipeGraph_CommitsDeletionWithMessageWipe(t *testing.T) {
 	opPub, _ := generateTestKey()
 	scPub, _ := generateTestKey()
-	st, err := ladybug.OpenInMemory()
+	st, err := openTestStore(t)
 	if err != nil {
-		t.Fatalf("OpenInMemory: %v", err)
+		t.Fatalf("openTestStore: %v", err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
 	gs, err := gitstore.New(t.TempDir())
@@ -7892,9 +7900,9 @@ func TestWipeGraph_SetsPushNeeded(t *testing.T) {
 }
 
 func TestWipeGraph_WaitsForBeginSetupAndSeesRegisteredTransaction(t *testing.T) {
-	base, err := ladybug.OpenInMemory()
+	base, err := openTestStore(t)
 	if err != nil {
-		t.Fatalf("OpenInMemory: %v", err)
+		t.Fatalf("openTestStore: %v", err)
 	}
 	t.Cleanup(func() { _ = base.Close() })
 	blocking := &beginSetupBlockingStore{Store: base, entered: make(chan struct{}), release: make(chan struct{})}
@@ -7944,9 +7952,9 @@ func TestWipeGraph_WaitsForBeginSetupAndSeesRegisteredTransaction(t *testing.T) 
 }
 
 func TestBeginTransaction_WaitsUntilWipeGraphCompletes(t *testing.T) {
-	base, err := ladybug.OpenInMemory()
+	base, err := openTestStore(t)
 	if err != nil {
-		t.Fatalf("OpenInMemory: %v", err)
+		t.Fatalf("openTestStore: %v", err)
 	}
 	t.Cleanup(func() { _ = base.Close() })
 	blocking := &wipeBlockingStore{
@@ -8295,9 +8303,9 @@ func TestExtendTimeout_AcceptedAt7DayBoundary(t *testing.T) {
 // in-memory/durable divergence exists (recovery on restart restores the
 // persisted, un-extended timeout — the in-memory state must match it).
 func TestExtendTimeout_PersistFailureRevertsInMemoryState(t *testing.T) {
-	base, err := ladybug.OpenInMemory()
+	base, err := openTestStore(t)
 	if err != nil {
-		t.Fatalf("OpenInMemory: %v", err)
+		t.Fatalf("openTestStore: %v", err)
 	}
 	t.Cleanup(func() { _ = base.Close() })
 	gs, err := gitstore.New(t.TempDir())
@@ -8381,7 +8389,7 @@ func TestRollbackTransaction_NotFound(t *testing.T) {
 func TestBeginTransaction_TimeoutValidation(t *testing.T) {
 	opPub, _ := generateTestKey()
 	scPub, _ := generateTestKey()
-	st, _ := ladybug.OpenInMemory()
+	st, _ := openTestStore(t)
 	t.Cleanup(func() { _ = st.Close() })
 	gs, _ := gitstore.New(t.TempDir())
 	srv := NewCartographerServer(st, gs, opPub, scPub, nil, "",
@@ -8423,7 +8431,7 @@ func TestBeginTransaction_TimeoutValidation(t *testing.T) {
 func TestBeginTransaction_ResourceExhausted(t *testing.T) {
 	opPub, _ := generateTestKey()
 	scPub := initTestKey()
-	st, _ := ladybug.OpenInMemory()
+	st, _ := openTestStore(t)
 	t.Cleanup(func() { _ = st.Close() })
 	gs, _ := gitstore.New(t.TempDir())
 	srv := NewCartographerServer(st, gs, opPub, scPub, nil, "",
@@ -8461,7 +8469,7 @@ func TestBeginTransaction_GitBranchCreationResourceExhausted(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			opPub, _ := generateTestKey()
 			scPub := initTestKey()
-			st, _ := ladybug.OpenInMemory()
+			st, _ := openTestStore(t)
 			t.Cleanup(func() { _ = st.Close() })
 			gs, _ := gitstore.New(t.TempDir())
 			srv := NewCartographerServer(st, gs, opPub, scPub, nil, "",
@@ -8554,7 +8562,7 @@ func (s *cleanupFailingGitStore) DeleteBranch(ctx context.Context, txID string) 
 func TestBeginTransaction_SurfacesDropBranchDBFailure(t *testing.T) {
 	opPub, _ := generateTestKey()
 	scPub := initTestKey()
-	st, _ := ladybug.OpenInMemory()
+	st, _ := openTestStore(t)
 	t.Cleanup(func() { _ = st.Close() })
 	gs, _ := gitstore.New(t.TempDir())
 	srv := NewCartographerServer(st, gs, opPub, scPub, nil, "",
@@ -8593,7 +8601,7 @@ func TestBeginTransaction_SurfacesCleanupFailures(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			opPub, _ := generateTestKey()
 			scPub := initTestKey()
-			st, _ := ladybug.OpenInMemory()
+			st, _ := openTestStore(t)
 			t.Cleanup(func() { _ = st.Close() })
 			gs, _ := gitstore.New(t.TempDir())
 			srv := NewCartographerServer(st, gs, opPub, scPub, nil, "",
@@ -8628,7 +8636,7 @@ func TestBeginTransaction_SurfacesCleanupFailures(t *testing.T) {
 func TestBeginTransaction_SurfacesMultipleCleanupFailures(t *testing.T) {
 	opPub, _ := generateTestKey()
 	scPub := initTestKey()
-	st, _ := ladybug.OpenInMemory()
+	st, _ := openTestStore(t)
 	t.Cleanup(func() { _ = st.Close() })
 	gs, _ := gitstore.New(t.TempDir())
 	srv := NewCartographerServer(st, gs, opPub, scPub, nil, "",
@@ -8669,7 +8677,7 @@ func TestBeginTransaction_SurfacesTxManagerCreateCleanupFailures(t *testing.T) {
 	// failures are surfaced by pre-registering the txID in the manager.
 	opPub, _ := generateTestKey()
 	scPub := initTestKey()
-	st, _ := ladybug.OpenInMemory()
+	st, _ := openTestStore(t)
 	t.Cleanup(func() { _ = st.Close() })
 	gs, _ := gitstore.New(t.TempDir())
 	srv := NewCartographerServer(st, gs, opPub, scPub, nil, "",
@@ -8701,7 +8709,7 @@ func TestBeginTransaction_PersistStateFailure_CleanupSuccess(t *testing.T) {
 	// Only the persist error should be returned.
 	opPub, _ := generateTestKey()
 	scPub := initTestKey()
-	st, _ := ladybug.OpenInMemory()
+	st, _ := openTestStore(t)
 	t.Cleanup(func() { _ = st.Close() })
 	gs, _ := gitstore.New(t.TempDir())
 	srv := NewCartographerServer(st, gs, opPub, scPub, nil, "",
@@ -8735,7 +8743,7 @@ func TestBeginTransaction_PersistStateFailure_CleanupFails(t *testing.T) {
 	// Both errors should be aggregated.
 	opPub, _ := generateTestKey()
 	scPub := initTestKey()
-	st, _ := ladybug.OpenInMemory()
+	st, _ := openTestStore(t)
 	t.Cleanup(func() { _ = st.Close() })
 	gs, _ := gitstore.New(t.TempDir())
 	srv := NewCartographerServer(st, gs, opPub, scPub, nil, "",
@@ -8819,9 +8827,9 @@ func (s *lockObservationStore) record() {
 // flow's only schema-def reads come from computeSchemaHash, so the observation
 // wrapper can assert they all happen under the git lock.
 func TestBeginTransaction_SchemaHashCapturedUnderGitLock(t *testing.T) {
-	st, err := ladybug.OpenInMemory()
+	st, err := openTestStore(t)
 	if err != nil {
-		t.Fatalf("OpenInMemory: %v", err)
+		t.Fatalf("openTestStore: %v", err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
 	gs, err := gitstore.New(t.TempDir())
@@ -9735,7 +9743,7 @@ func TestCreateEntity_VectorBootstrap(t *testing.T) {
 func TestWipeGraph_MidWipeFailure(t *testing.T) {
 	opPub, _ := generateTestKey()
 	scPub, _ := generateTestKey()
-	st, _ := ladybug.OpenInMemory()
+	st, _ := openTestStore(t)
 	t.Cleanup(func() { _ = st.Close() })
 	gs, _ := gitstore.New(t.TempDir())
 	srv := NewCartographerServer(st, gs, opPub, scPub, nil, "",
@@ -9774,7 +9782,7 @@ func TestWipeGraph_GitSideMidWipeFailure(t *testing.T) {
 		{"clean untracked", func(g *wipeFailingGitStore) { g.failClean = true }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			st, _ := ladybug.OpenInMemory()
+			st, _ := openTestStore(t)
 			t.Cleanup(func() { _ = st.Close() })
 			gs, _ := gitstore.New(t.TempDir())
 			failingGit := &wipeFailingGitStore{GitStore: gs}
@@ -9856,7 +9864,7 @@ func TestApplySchema_DestructiveChange(t *testing.T) {
 func TestApplySchema_BeforeDBReady(t *testing.T) {
 	opPub, _ := generateTestKey()
 	scPub, _ := generateTestKey()
-	st, _ := ladybug.OpenInMemory()
+	st, _ := openTestStore(t)
 	t.Cleanup(func() { _ = st.Close() })
 	gs, _ := gitstore.New(t.TempDir())
 	// Do NOT call MarkDBReady.
@@ -10026,7 +10034,7 @@ func TestExportGraph_JSONShape(t *testing.T) {
 func TestExportGraph_MidStreamFailure(t *testing.T) {
 	opPub, _ := generateTestKey()
 	scPub, scPriv := generateTestKey()
-	st, _ := ladybug.OpenInMemory()
+	st, _ := openTestStore(t)
 	t.Cleanup(func() { _ = st.Close() })
 	gs, _ := gitstore.New(t.TempDir())
 	srv := NewCartographerServer(st, gs, opPub, scPub, nil, "",
@@ -10057,7 +10065,7 @@ func TestExportGraph_MidStreamFailure(t *testing.T) {
 func TestExportGraph_BufferAllocationFailure(t *testing.T) {
 	opPub, _ := generateTestKey()
 	scPub, scPriv := generateTestKey()
-	st, _ := ladybug.OpenInMemory()
+	st, _ := openTestStore(t)
 	t.Cleanup(func() { _ = st.Close() })
 	gs, _ := gitstore.New(t.TempDir())
 	srv := NewCartographerServer(st, gs, opPub, scPub, nil, "",
@@ -10087,7 +10095,7 @@ func TestExportGraph_BufferAllocationFailure(t *testing.T) {
 func TestExecuteCypher_MissingReadCapability(t *testing.T) {
 	opPub, _ := generateTestKey()
 	scPub, scPriv := generateTestKey()
-	st, _ := ladybug.OpenInMemory()
+	st, _ := openTestStore(t)
 	t.Cleanup(func() { _ = st.Close() })
 	gs, _ := gitstore.New(t.TempDir())
 	srv := NewCartographerServer(st, gs, opPub, scPub, nil, "",
@@ -10114,7 +10122,7 @@ func TestExecuteCypher_MissingReadCapability(t *testing.T) {
 func TestCreateEntity_MissingWriteCapability(t *testing.T) {
 	opPub, _ := generateTestKey()
 	scPub, scPriv := generateTestKey()
-	st, _ := ladybug.OpenInMemory()
+	st, _ := openTestStore(t)
 	t.Cleanup(func() { _ = st.Close() })
 	gs, _ := gitstore.New(t.TempDir())
 	srv := NewCartographerServer(st, gs, opPub, scPub, nil, "",
@@ -10150,7 +10158,7 @@ func TestCreateEntity_MissingWriteCapability(t *testing.T) {
 func TestBeginTransaction_MissingTxCapability(t *testing.T) {
 	opPub, _ := generateTestKey()
 	scPub, scPriv := generateTestKey()
-	st, _ := ladybug.OpenInMemory()
+	st, _ := openTestStore(t)
 	t.Cleanup(func() { _ = st.Close() })
 	gs, _ := gitstore.New(t.TempDir())
 	srv := NewCartographerServer(st, gs, opPub, scPub, nil, "",
@@ -10175,7 +10183,7 @@ func TestBeginTransaction_MissingTxCapability(t *testing.T) {
 func TestCommitTransaction_MissingTxCapability(t *testing.T) {
 	opPub, _ := generateTestKey()
 	scPub, scPriv := generateTestKey()
-	st, _ := ladybug.OpenInMemory()
+	st, _ := openTestStore(t)
 	t.Cleanup(func() { _ = st.Close() })
 	gs, _ := gitstore.New(t.TempDir())
 	srv := NewCartographerServer(st, gs, opPub, scPub, nil, "",
@@ -10202,7 +10210,7 @@ func TestCommitTransaction_MissingTxCapability(t *testing.T) {
 func TestRollbackTransaction_MissingTxCapability(t *testing.T) {
 	opPub, _ := generateTestKey()
 	scPub, scPriv := generateTestKey()
-	st, _ := ladybug.OpenInMemory()
+	st, _ := openTestStore(t)
 	t.Cleanup(func() { _ = st.Close() })
 	gs, _ := gitstore.New(t.TempDir())
 	srv := NewCartographerServer(st, gs, opPub, scPub, nil, "",
@@ -10229,7 +10237,7 @@ func TestRollbackTransaction_MissingTxCapability(t *testing.T) {
 func TestRefreshTransaction_MissingTxCapability(t *testing.T) {
 	opPub, _ := generateTestKey()
 	scPub, scPriv := generateTestKey()
-	st, _ := ladybug.OpenInMemory()
+	st, _ := openTestStore(t)
 	t.Cleanup(func() { _ = st.Close() })
 	gs, _ := gitstore.New(t.TempDir())
 	srv := NewCartographerServer(st, gs, opPub, scPub, nil, "",
@@ -10256,7 +10264,7 @@ func TestRefreshTransaction_MissingTxCapability(t *testing.T) {
 func TestExtendTimeout_MissingTxCapability(t *testing.T) {
 	opPub, _ := generateTestKey()
 	scPub, scPriv := generateTestKey()
-	st, _ := ladybug.OpenInMemory()
+	st, _ := openTestStore(t)
 	t.Cleanup(func() { _ = st.Close() })
 	gs, _ := gitstore.New(t.TempDir())
 	srv := NewCartographerServer(st, gs, opPub, scPub, nil, "",
@@ -10281,7 +10289,7 @@ func TestExtendTimeout_MissingTxCapability(t *testing.T) {
 func TestExportGraph_MissingReadCapability(t *testing.T) {
 	opPub, _ := generateTestKey()
 	scPub, scPriv := generateTestKey()
-	st, _ := ladybug.OpenInMemory()
+	st, _ := openTestStore(t)
 	t.Cleanup(func() { _ = st.Close() })
 	gs, _ := gitstore.New(t.TempDir())
 	srv := NewCartographerServer(st, gs, opPub, scPub, nil, "",
@@ -10317,7 +10325,7 @@ func TestExportGraph_MissingReadCapability(t *testing.T) {
 func TestExportGraph_PerTypeReadCapabilityDenied(t *testing.T) {
 	opPub, _ := generateTestKey()
 	scPub, scPriv := generateTestKey()
-	st, _ := ladybug.OpenInMemory()
+	st, _ := openTestStore(t)
 	t.Cleanup(func() { _ = st.Close() })
 	gs, _ := gitstore.New(t.TempDir())
 	srv := NewCartographerServer(st, gs, opPub, scPub, nil, "",
@@ -10346,7 +10354,7 @@ func TestExportGraph_PerTypeReadCapabilityDenied(t *testing.T) {
 func TestCapability_WildcardFallback(t *testing.T) {
 	opPub, _ := generateTestKey()
 	scPub, scPriv := generateTestKey()
-	st, _ := ladybug.OpenInMemory()
+	st, _ := openTestStore(t)
 	t.Cleanup(func() { _ = st.Close() })
 	gs, _ := gitstore.New(t.TempDir())
 	srv := NewCartographerServer(st, gs, opPub, scPub, nil, "",
@@ -10383,7 +10391,7 @@ func TestCapability_WildcardFallback(t *testing.T) {
 func TestCapability_StalenessBoundary_InsideAndPast(t *testing.T) {
 	opPub, _ := generateTestKey()
 	scPub, scPriv := generateTestKey()
-	st, _ := ladybug.OpenInMemory()
+	st, _ := openTestStore(t)
 	t.Cleanup(func() { _ = st.Close() })
 	gs, _ := gitstore.New(t.TempDir())
 	// 30-second staleness window, like production.
@@ -10434,7 +10442,7 @@ func TestCapability_StalenessBoundary_InsideAndPast(t *testing.T) {
 func TestCapability_StalenessBoundary_NegativeWindow(t *testing.T) {
 	opPub, _ := generateTestKey()
 	scPub, scPriv := generateTestKey()
-	st, _ := ladybug.OpenInMemory()
+	st, _ := openTestStore(t)
 	t.Cleanup(func() { _ = st.Close() })
 	gs, _ := gitstore.New(t.TempDir())
 	// Negative staleness window disables the check.
@@ -10503,7 +10511,7 @@ func TestGitLockSerialization(t *testing.T) {
 func TestTelemetry_TransactionGC(t *testing.T) {
 	opPub, _ := generateTestKey()
 	scPub, _ := generateTestKey()
-	st, _ := ladybug.OpenInMemory()
+	st, _ := openTestStore(t)
 	t.Cleanup(func() { _ = st.Close() })
 	gs, _ := gitstore.New(t.TempDir())
 
@@ -10551,9 +10559,9 @@ func TestTelemetry_TransactionGC(t *testing.T) {
 func TestGC_ExpiredTransaction_Rollback(t *testing.T) {
 	opPub, _ := generateTestKey()
 	scPub, _ := generateTestKey()
-	st, err := ladybug.OpenInMemory()
+	st, err := openTestStore(t)
 	if err != nil {
-		t.Fatalf("OpenInMemory: %v", err)
+		t.Fatalf("openTestStore: %v", err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
 	gs, err := gitstore.New(t.TempDir())
@@ -11304,9 +11312,9 @@ func (s *healthFailingStore) Health(ctx context.Context) (*store.HealthResult, e
 }
 
 func TestHealthCheck_PropagatesStoreError(t *testing.T) {
-	base, err := ladybug.OpenInMemory()
+	base, err := openTestStore(t)
 	if err != nil {
-		t.Fatalf("OpenInMemory: %v", err)
+		t.Fatalf("openTestStore: %v", err)
 	}
 	t.Cleanup(func() { _ = base.Close() })
 	failing := &healthFailingStore{Store: base}
@@ -11337,7 +11345,7 @@ func TestHealthCheck_PropagatesStoreError(t *testing.T) {
 func TestCapability_MissingSignedAt(t *testing.T) {
 	opPub, _ := generateTestKey()
 	scPub, scPriv := generateTestKey()
-	st, _ := ladybug.OpenInMemory()
+	st, _ := openTestStore(t)
 	t.Cleanup(func() { _ = st.Close() })
 	gs, _ := gitstore.New(t.TempDir())
 	srv := NewCartographerServer(st, gs, opPub, scPub, nil, "",
@@ -11365,7 +11373,7 @@ func TestCapability_MissingSignedAt(t *testing.T) {
 func TestCapability_EmptySignedAt(t *testing.T) {
 	opPub, _ := generateTestKey()
 	scPub, _ := generateTestKey()
-	base, _ := ladybug.OpenInMemory()
+	base, _ := openTestStore(t)
 	t.Cleanup(func() { _ = base.Close() })
 	gs, _ := gitstore.New(t.TempDir())
 	srv := NewCartographerServer(base, gs, opPub, scPub, nil, "",
@@ -11390,7 +11398,7 @@ func TestCapability_EmptySignedAt(t *testing.T) {
 func TestCapability_MalformedSignedAt(t *testing.T) {
 	opPub, _ := generateTestKey()
 	scPub, scPriv := generateTestKey()
-	st, _ := ladybug.OpenInMemory()
+	st, _ := openTestStore(t)
 	t.Cleanup(func() { _ = st.Close() })
 	gs, _ := gitstore.New(t.TempDir())
 	srv := NewCartographerServer(st, gs, opPub, scPub, nil, "",
@@ -11520,7 +11528,7 @@ func (e *exhaustedStore) ListMainEntityTypes() ([]string, error) {
 }
 
 func TestExportGraph_DeterministicResourceExhausted(t *testing.T) {
-	base, _ := ladybug.OpenInMemory()
+	base, _ := openTestStore(t)
 	t.Cleanup(func() { _ = base.Close() })
 	gs, _ := gitstore.New(t.TempDir())
 	opPub, _ := generateTestKey()
@@ -12373,9 +12381,9 @@ func TestCommitTransaction_MergeCompletedAckWaitsForPush(t *testing.T) {
 		pushRelease: make(chan struct{}),
 	}
 	t.Cleanup(syncGit.releasePush)
-	base, err := ladybug.OpenInMemory()
+	base, err := openTestStore(t)
 	if err != nil {
-		t.Fatalf("OpenInMemory: %v", err)
+		t.Fatalf("openTestStore: %v", err)
 	}
 	t.Cleanup(func() { _ = base.Close() })
 	// Fail only the "persist completed merge" state write so the first commit
@@ -12870,9 +12878,9 @@ func TestGetTransactionDiff_LiveDeletePopulatesDeletionBuckets(t *testing.T) {
 func TestWipeGraph_RemovesUntrackedResidualFiles(t *testing.T) {
 	ctx := context.Background()
 	dataPath := t.TempDir()
-	st, err := ladybug.OpenInMemory()
+	st, err := openTestStore(t)
 	if err != nil {
-		t.Fatalf("OpenInMemory: %v", err)
+		t.Fatalf("openTestStore: %v", err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
 	gs, err := gitstore.New(dataPath)

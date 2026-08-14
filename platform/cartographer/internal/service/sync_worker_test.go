@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/foundry/flow/cartographer/internal/gitstore"
-	"github.com/foundry/flow/cartographer/internal/store/ladybug"
 	"github.com/go-git/go-git/v5/plumbing"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -132,9 +131,9 @@ func TestSyncWorkerPushRetry_NonRecoverableOnRetryStopsLoop(t *testing.T) {
 		GitStore: gs,
 		pushErrs: []error{gitstore.ErrRemoteUnreachable, gitstore.ErrAuthFailed},
 	}
-	base, err := ladybug.OpenInMemory()
+	base, err := openTestStore(t)
 	if err != nil {
-		t.Fatalf("OpenInMemory: %v", err)
+		t.Fatalf("openTestStore: %v", err)
 	}
 	t.Cleanup(func() { _ = base.Close() })
 	fc := newFakeClock(time.Now())
@@ -207,9 +206,9 @@ func TestSyncWorkerGitOpDeadline_HungPushAbortsWithDeadlineExceeded(t *testing.T
 		t.Fatalf("gitstore.New: %v", err)
 	}
 	hung := &hungPushGitStore{GitStore: gs}
-	base, err := ladybug.OpenInMemory()
+	base, err := openTestStore(t)
 	if err != nil {
-		t.Fatalf("OpenInMemory: %v", err)
+		t.Fatalf("openTestStore: %v", err)
 	}
 	t.Cleanup(func() { _ = base.Close() })
 	sw := NewSyncWorker("https://example.com/repo.git", hung, base, RealClock{},

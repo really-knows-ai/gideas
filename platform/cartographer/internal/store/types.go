@@ -75,9 +75,8 @@ type EdgeTypeDef struct {
 
 // SchemaProvider is the subset of the store API that schema consumers
 // (e.g., the service's computeSchemaHash and graph export) depend on.
-// The Store interface includes these methods directly; SchemaProvider is
-// a narrower consumer-facing interface. The concrete ladybugDB type
-// satisfies both interfaces.
+// The Store interface embeds SchemaProvider rather than re-declaring its
+// methods; the concrete ladybugDB type satisfies both interfaces.
 type SchemaProvider interface {
 	EntityTypeNames() []string
 	EdgeTypeNames() []string
