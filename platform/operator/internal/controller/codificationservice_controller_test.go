@@ -53,8 +53,8 @@ var _ = Describe("CodificationService Controller", func() {
 						Namespace: "default",
 					},
 					Spec: flowv1.CodificationServiceSpec{
-						Image:        "test-image:latest",
-						OutputFormat: "application/rego",
+						ServiceSpecBase: flowv1.ServiceSpecBase{Image: "test-image:latest"},
+						OutputFormat:    "application/rego",
 					},
 				}
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
