@@ -15,7 +15,7 @@
 // (NewChangeLog) and by cmd/main.go when wiring the service-layer
 // TransactionManager. The ErrChangeLogFull sentinel lives in gitstore next to
 // the ChangeLog type it guards; the service maps it to RESOURCE_EXHAUSTED with
-// a full transaction rollback (rejectFullChangeLog in cartographer_server.go).
+// a full transaction rollback (rejectFullChangeLog in internal/service/transaction.go).
 package store
 
 import (

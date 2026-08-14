@@ -254,7 +254,7 @@ func (w *Workitem) GetLawGroups(repType string) ([]*LawGroup, error) {
 	for _, n := range names {
 		lg, ok := configs[n]
 		if !ok {
-			// ponytail: groups absent from ListLawGroups use built-in defaults.
+			// Groups absent from ListLawGroups use built-in defaults.
 			lg = newLawGroup(n, GroupModeBundle, 1, w.session.Librarian)
 		}
 		out = append(out, lg)
