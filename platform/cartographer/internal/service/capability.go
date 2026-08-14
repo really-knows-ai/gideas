@@ -244,3 +244,55 @@ func validateTxID(txID string) error {
 	}
 	return nil
 }
+
+// checkEntityCap implements Mode 1 + Mode 2 capability checking for entity
+// operations. It first checks for a specific type (<prefix>:graph/entity/<type>),
+// then falls back to the wildcard (<prefix>:graph/entity/*).
+func (s *CartographerServer) checkEntityCap(ctx context.Context, prefix, entityType string) error {
+	caps, err := ExtractCapabilities(ctx)
+	if err != nil {
+		return err
+	}
+	if caps == nil {
+		return errCapabilityDenied(prefix + ":graph/entity/" + entityType)
+	}
+	if err := s.verifier.CheckSpecificType(caps, prefix, entityType); err != nil {
+		if wErr := s.verifier.CheckWildcard(caps, prefix); wErr != nil {
+			return errCapabilityDenied(prefix + ":graph/entity/" + entityType)
+		}
+	}
+	return nil
+}
+
+// checkTxCap checks that the caller holds the exact required transaction
+// capability (e.g. "WRITE:graph/tx" or "READ:graph/tx").
+func (s *CartographerServer) checkTxCap(ctx context.Context, required string) error {
+	caps, err := ExtractCapabilities(ctx)
+	if err != nil {
+		return err
+	}
+	if caps == nil {
+		return errCapabilityDenied(required)
+	}
+	if slices.Contains(caps.Caps, required) {
+		return nil
+	}
+	return errCapabilityDenied(required)
+}
+
+// checkWildcardEntityCap checks that the caller holds the wildcard entity
+// capability (<prefix>:graph/entity/*). It uses already-verified capabilities
+// from the context (stored by the ingress interceptor verify()).
+func (s *CartographerServer) checkWildcardEntityCap(ctx context.Context, prefix string) error {
+	caps, err := ExtractCapabilities(ctx)
+	if err != nil {
+		return err
+	}
+	if caps == nil {
+		return errCapabilityDenied(prefix + ":graph/entity/*")
+	}
+	if err := s.verifier.CheckWildcard(caps, prefix); err != nil {
+		return errCapabilityDenied(prefix + ":graph/entity/*")
+	}
+	return nil
+}
