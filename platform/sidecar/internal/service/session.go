@@ -122,22 +122,6 @@ func (s *session) addChild(childID string) {
 	s.childIDs[childID] = struct{}{}
 }
 
-// hasChild returns whether the given child Workitem ID was created
-// during this session.
-func (s *session) hasChild(childID string) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	_, ok := s.childIDs[childID]
-	return ok
-}
-
-// isPaused returns whether the timer is currently paused.
-func (s *session) isPaused() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.paused
-}
-
 // isTimedOut returns whether the inactivity timer has fired.
 func (s *session) isTimedOut() bool {
 	s.mu.Lock()

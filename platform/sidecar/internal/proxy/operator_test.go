@@ -244,8 +244,7 @@ func setupOperatorProxyWithTracker(t *testing.T) (*OperatorProxy, *captureOperat
 		flowv1.RegisterOperatorServiceServer(srv, capture)
 	})
 
-	sidecarSrv := service.NewSidecarServer("ns", "node", "")
-	sidecarSrv.InjectSessionForTest("parent-wi", "node")
+	sidecarSrv := newSidecarWithSession(t)
 
 	proxy := &OperatorProxy{
 		client:       flowv1.NewOperatorServiceClient(conn),

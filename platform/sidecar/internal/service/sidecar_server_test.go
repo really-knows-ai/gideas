@@ -306,8 +306,13 @@ func TestSidecarServer_AssignWork_CleanupKeepsReplacedSession(t *testing.T) {
 	first := sidecar.getSession("wi-1")
 
 	// A newer session for the same workitem replaces the first handler's
-	// entry (via a test injection that bypasses AssignWork's conflict check).
-	sidecar.InjectSessionForTest("wi-1", "node-2")
+	// entry (via a direct session injection that bypasses AssignWork's
+	// conflict check).
+	injected, _ := newSession(context.Background(), "wi-1", "node-2", sidecar.timeout())
+	injected.stop() // Prevent timer goroutine from leaking.
+	sidecar.mu.Lock()
+	sidecar.sessions["wi-1"] = injected
+	sidecar.mu.Unlock()
 	second := sidecar.getSession("wi-1")
 	if first == second {
 		t.Fatal("test setup broken: expected the injected session to replace the first")
@@ -438,7 +443,7 @@ func TestSidecarServer_PauseTimer_Success(t *testing.T) {
 	if sess == nil {
 		t.Fatal("session should exist")
 	}
-	if !sess.isPaused() {
+	if !sess.paused {
 		t.Fatal("session should be paused")
 	}
 
@@ -628,14 +633,14 @@ func TestSession_PauseResumeCycle(t *testing.T) {
 	sess, _ := newSession(context.Background(), "w", "n", time.Second)
 	defer sess.stop()
 
-	if sess.isPaused() {
+	if sess.paused {
 		t.Fatal("new session should not be paused")
 	}
 
 	if !sess.pause() {
 		t.Fatal("first pause should succeed")
 	}
-	if !sess.isPaused() {
+	if !sess.paused {
 		t.Fatal("should be paused after pause()")
 	}
 	if sess.pause() {
@@ -645,7 +650,7 @@ func TestSession_PauseResumeCycle(t *testing.T) {
 	if !sess.resume() {
 		t.Fatal("resume should succeed after pause")
 	}
-	if sess.isPaused() {
+	if sess.paused {
 		t.Fatal("should not be paused after resume")
 	}
 	if sess.resume() {
@@ -700,7 +705,7 @@ func TestSession_ResetTimerWhilePaused(t *testing.T) {
 	sess.pause()
 	// resetTimer should be a no-op while paused.
 	sess.resetTimer()
-	if !sess.isPaused() {
+	if !sess.paused {
 		t.Fatal("should still be paused after resetTimer")
 	}
 }
@@ -713,20 +718,20 @@ func TestSession_AddChild_HasChild(t *testing.T) {
 	sess, _ := newSession(context.Background(), "w", "n", time.Second)
 	defer sess.stop()
 
-	if sess.hasChild("child-1") {
+	if _, ok := sess.childIDs["child-1"]; ok {
 		t.Fatal("new session should not have any children")
 	}
 
 	sess.addChild("child-1")
 	sess.addChild("child-2")
 
-	if !sess.hasChild("child-1") {
+	if _, ok := sess.childIDs["child-1"]; !ok {
 		t.Fatal("expected child-1 to be tracked")
 	}
-	if !sess.hasChild("child-2") {
+	if _, ok := sess.childIDs["child-2"]; !ok {
 		t.Fatal("expected child-2 to be tracked")
 	}
-	if sess.hasChild("child-3") {
+	if _, ok := sess.childIDs["child-3"]; ok {
 		t.Fatal("child-3 was not added")
 	}
 }
@@ -738,7 +743,7 @@ func TestSession_AddChild_Idempotent(t *testing.T) {
 	sess.addChild("child-1")
 	sess.addChild("child-1") // duplicate add
 
-	if !sess.hasChild("child-1") {
+	if _, ok := sess.childIDs["child-1"]; !ok {
 		t.Fatal("expected child-1 to be tracked")
 	}
 }
@@ -760,10 +765,10 @@ func TestSidecarServer_TrackChild(t *testing.T) {
 	srv.TrackChild("wi-1", "child-1")
 	srv.TrackChild("wi-1", "child-2")
 
-	if !sess.hasChild("child-1") {
+	if _, ok := sess.childIDs["child-1"]; !ok {
 		t.Fatal("expected child-1 to be tracked in session")
 	}
-	if !sess.hasChild("child-2") {
+	if _, ok := sess.childIDs["child-2"]; !ok {
 		t.Fatal("expected child-2 to be tracked in session")
 	}
 }

@@ -1394,7 +1394,7 @@ func TestCartographerProxy_E2E_SessionMode_SignsCapabilitiesWithKey(t *testing.T
 	w := setupCartographerWireFull(t, caps)
 	// Register the SDK's workitem as an active assignment whose session node
 	// identity differs from the Sidecar's fallback node identity.
-	w.sidecarSrv.InjectSessionForTest("wi-1", "session-node")
+	startAssignmentSession(t, w.sidecarSrv, "wi-1", "session-node")
 
 	if _, err := w.client.GetGraph().ExecuteCypher("MATCH (c:Component) RETURN c", nil); err != nil {
 		t.Fatalf("session-mode ExecuteCypher via SDK→Sidecar→Cartographer failed: %v", err)

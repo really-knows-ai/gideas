@@ -150,7 +150,7 @@ func main() {
 			os.Exit(1)
 		}
 		client := flowv1.NewFlowEventBusServiceClient(conn)
-		tb := buffer.NewTelemetryBufferFromClient(client, 0) // 0 = default size
+		tb := buffer.NewTelemetryBuffer(client, 0) // 0 = default size
 		sidecarSrv.TelemetryBuffer = tb
 		eventBusCloser = func() error { return conn.Close() }
 
