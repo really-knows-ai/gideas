@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 
 	"github.com/foundry/flow/cartographer/internal/gitstore"
 	"github.com/foundry/flow/cartographer/internal/store"
@@ -30,6 +31,13 @@ func (s *CartographerServer) RecoverOpenTransactions(ctx context.Context) error 
 		return err
 	}); err != nil {
 		return fmt.Errorf("list branches: %w", err)
+	}
+	// Sweep orphaned refresh temp branches before the git-branch loop: the
+	// refresh branch-DB swap builds its replacement under a temporary key that
+	// never becomes a git branch, so a mid-swap crash strands files the
+	// git-branch enumeration below can never name.
+	if err := s.cleanupOrphanedTempBranches(ctx, branches); err != nil {
+		return fmt.Errorf("clean up orphaned refresh temp branches: %w", err)
 	}
 	for _, branch := range branches {
 		if !isValidUUID(branch) {
@@ -253,6 +261,76 @@ func (s *CartographerServer) isMidRefreshSwapBranch(ctx context.Context, txID st
 
 func (s *CartographerServer) cleanupIdenticalRecoveryBranch(ctx context.Context, txID string) error {
 	return s.cleanupTransaction(ctx, &TransactionState{ID: txID})
+}
+
+// cleanupOrphanedTempBranches removes branch files stranded by a mid-refresh
+// crash. resetBranchStoreFromWorkingTree builds the refresh replacement branch
+// under a temporary key (tempID := s.newIDFn()) and renames
+// branches/<tempID>.{lbug,schema.json,state.json} onto the transaction's
+// canonical names, so a crash at any point before the swap's rename loop
+// completes (or an os.Rename failure inside it) strands the not-yet-renamed
+// temp files under branches/. The temporary key never becomes a git branch, so
+// the git-branch enumeration above never visits it — without this sweep every
+// mid-refresh crash leaks up to three durable files (plus the engine's
+// write-ahead-log companion) indefinitely. The live git-branch set is the
+// discriminator: BeginTransaction creates the git branch before any branch
+// file (and cleanup deletes the files before the git branch), so a valid-UUID
+// branch key with files but no git branch is provably a refresh temp key and
+// is removed; a key that names a git branch is a live transaction and is never
+// touched.
+func (s *CartographerServer) cleanupOrphanedTempBranches(ctx context.Context, liveBranches []string) error {
+	if s.ladybugPath == "" {
+		return nil
+	}
+	live := make(map[string]bool, len(liveBranches))
+	for _, b := range liveBranches {
+		live[b] = true
+	}
+	branchesDir := filepath.Join(s.ladybugPath, "branches")
+	entries, err := os.ReadDir(branchesDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("list branch files: %w", err)
+	}
+	dropped := make(map[string]bool)
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		key, ok := branchKeyFromFile(entry.Name())
+		if !ok || !isValidUUID(key) || live[key] || dropped[key] {
+			continue
+		}
+		dropped[key] = true
+		// The engine's write-ahead-log companions (<key>.lbug.wal and
+		// <key>.lbug.wal.checkpoint) are the artifacts a crash tears alongside
+		// the database file; remove them with it (mirroring removeCorruptedMain)
+		// so the sweep leaves no trace of the orphaned temp branch.
+		for _, name := range []string{key + ".lbug.wal", key + ".lbug.wal.checkpoint"} {
+			if err := os.Remove(filepath.Join(branchesDir, name)); err != nil && !os.IsNotExist(err) {
+				return fmt.Errorf("remove orphaned refresh temp branch WAL %q: %w", name, err)
+			}
+		}
+		if err := s.store.DropBranchDB(ctx, key); err != nil {
+			return fmt.Errorf("clean up orphaned refresh temp branch %q: %w", key, err)
+		}
+		slog.Warn("RecoverOpenTransactions: removed orphaned refresh temp branch files", "temp_id", key)
+	}
+	return nil
+}
+
+// branchKeyFromFile derives the branch key a branches-directory file belongs
+// to. Files that are not branch files (e.g. the store's .state-*.tmp
+// atomic-write temporaries) report ok=false.
+func branchKeyFromFile(name string) (string, bool) {
+	for _, suffix := range []string{".lbug", ".schema.json", ".state.json"} {
+		if before, ok := strings.CutSuffix(name, suffix); ok {
+			return before, true
+		}
+	}
+	return "", false
 }
 
 // buildMainFileLookups reads all entity and edge files from main's git working
