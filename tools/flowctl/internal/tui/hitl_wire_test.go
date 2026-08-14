@@ -2,14 +2,21 @@ package tui
 
 import (
 	"context"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	k8sfake "k8s.io/client-go/kubernetes/fake"
 
 	"github.com/foundry/flow/tools/flowctl/internal/api"
 	"github.com/foundry/flow/tools/flowctl/internal/tui/components"
-	"github.com/foundry/flow/tools/flowctl/internal/tui/types"
 )
 
 // W1: Node change triggers probe (via WorkitemUpdateMsg)
@@ -218,23 +225,18 @@ func TestCancelChoiceShowsConfirmation(t *testing.T) {
 	m := initialModel()
 	m.screen = ScreenWorkitemDetail
 	m.hitlState = components.NewHitlState(8080)
-	m.hitlState.SetActiveForTest()
-	m.workitemDetail.hitl.Visible = true
-	m.workitemDetail.hitl.Choices = []types.Choice{
-		{Value: "cancel", Label: "Cancel", Type: "cancel"},
-	}
-	m.workitemDetail.hitl.ConfirmingCancel = false
+	m2, _ := startHitlProbe(t, &m, "human-approval")
 
 	// Press "c" (first letter of "Cancel")
 	// This is handled in updateWorkitemDetailKeys
-	model, cmd := m.updateWorkitemDetailKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
-	m2 := model.(*Model)
+	model, cmd := m2.updateWorkitemDetailKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	m3 := model.(*Model)
 
-	if !m2.workitemDetail.hitl.ConfirmingCancel {
+	if !m3.workitemDetail.hitl.ConfirmingCancel {
 		t.Error("expected confirmingCancel=true after pressing cancel-type choice")
 	}
-	if m2.workitemDetail.hitl.PendingChoice != "cancel" {
-		t.Errorf("expected pendingChoice 'cancel', got %q", m2.workitemDetail.hitl.PendingChoice)
+	if m3.workitemDetail.hitl.PendingChoice != "cancel" {
+		t.Errorf("expected pendingChoice 'cancel', got %q", m3.workitemDetail.hitl.PendingChoice)
 	}
 	if cmd != nil {
 		t.Error("expected nil command (confirmation pending)")
@@ -245,19 +247,18 @@ func TestCancelConfirmationDismissesOnNo(t *testing.T) {
 	m := initialModel()
 	m.screen = ScreenWorkitemDetail
 	m.hitlState = components.NewHitlState(8080)
-	m.hitlState.SetActiveForTest()
-	m.workitemDetail.hitl.Visible = true
-	m.workitemDetail.hitl.ConfirmingCancel = true
-	m.workitemDetail.hitl.PendingChoice = "cancel"
+	m2, _ := startHitlProbe(t, &m, "human-approval")
+	m2.workitemDetail.hitl.ConfirmingCancel = true
+	m2.workitemDetail.hitl.PendingChoice = "cancel"
 
-	model, cmd := m.updateWorkitemDetailKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
-	m2 := model.(*Model)
+	model, cmd := m2.updateWorkitemDetailKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	m3 := model.(*Model)
 
-	if m2.workitemDetail.hitl.ConfirmingCancel {
+	if m3.workitemDetail.hitl.ConfirmingCancel {
 		t.Error("expected cancel confirmation dismissed")
 	}
-	if m2.workitemDetail.hitl.PendingChoice != "" {
-		t.Errorf("expected pendingChoice cleared, got %q", m2.workitemDetail.hitl.PendingChoice)
+	if m3.workitemDetail.hitl.PendingChoice != "" {
+		t.Errorf("expected pendingChoice cleared, got %q", m3.workitemDetail.hitl.PendingChoice)
 	}
 	if cmd != nil {
 		t.Error("expected nil command")
@@ -268,21 +269,20 @@ func TestCancelConfirmationSubmitsOnYes(t *testing.T) {
 	m := initialModel()
 	m.screen = ScreenWorkitemDetail
 	m.hitlState = components.NewHitlState(8080)
-	m.hitlState.SetActiveForTest()
-	m.workitemDetail.hitl.Visible = true
-	m.workitemDetail.hitl.ConfirmingCancel = true
-	m.workitemDetail.hitl.PendingChoice = "cancel"
+	m2, _ := startHitlProbe(t, &m, "human-approval")
+	m2.workitemDetail.hitl.ConfirmingCancel = true
+	m2.workitemDetail.hitl.PendingChoice = "cancel"
 
-	model, cmd := m.updateWorkitemDetailKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
-	m2 := model.(*Model)
+	model, cmd := m2.updateWorkitemDetailKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	m3 := model.(*Model)
 
-	if m2.workitemDetail.hitl.ConfirmingCancel {
+	if m3.workitemDetail.hitl.ConfirmingCancel {
 		t.Error("expected cancel confirmation cleared")
 	}
-	if m2.workitemDetail.hitl.PendingChoice != "" {
-		t.Errorf("expected pendingChoice cleared, got %q", m2.workitemDetail.hitl.PendingChoice)
+	if m3.workitemDetail.hitl.PendingChoice != "" {
+		t.Errorf("expected pendingChoice cleared, got %q", m3.workitemDetail.hitl.PendingChoice)
 	}
-	if !m2.workitemDetail.hitl.Loading {
+	if !m3.workitemDetail.hitl.Loading {
 		t.Error("expected HITL loading while cancel decision command runs")
 	}
 	if cmd == nil {
@@ -295,23 +295,20 @@ func TestCtrlCCleansHitlForward(t *testing.T) {
 	m := initialModel()
 	m.screen = ScreenWorkitemDetail
 	m.hitlState = components.NewHitlState(8080)
+	m2, mockPFM := startHitlProbe(t, &m, "human-approval")
 
-	// Use a mock PortForwarder to verify close behavior
-	mockPFM := newMockPortForwarder()
-	m.pfm = mockPFM
-
-	// Create a forward and register it with hitlState
-	fid, _, _ := mockPFM.ForwardPod(nil, "ns", "pod", 8080)
-	m.hitlState.SetForwardIDForTest(fid)
+	if len(mockPFM.forwards) != 1 {
+		t.Fatalf("expected 1 HITL forward from probe, got %d", len(mockPFM.forwards))
+	}
 
 	// Send Ctrl+C
-	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	_, cmd := m2.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
 	if cmd == nil {
 		t.Fatal("expected non-nil command (quit)")
 	}
 
 	// Ensure the forward was closed
-	if mockPFM.IsOpen(fid) {
+	if len(mockPFM.forwards) != 0 {
 		t.Error("expected HITL forward to be closed on Ctrl+C")
 	}
 }
@@ -346,11 +343,12 @@ func TestHitlDebugHintNonDefaultPort(t *testing.T) {
 // ─── Mock PortForwarder for W9 ──────────────────────────────────────────────
 
 type mockPortForwarder struct {
-	forwards map[string]bool
+	localPort int
+	forwards  map[string]bool
 }
 
-func newMockPortForwarder() *mockPortForwarder {
-	return &mockPortForwarder{forwards: make(map[string]bool)}
+func newMockPortForwarder(localPort int) *mockPortForwarder {
+	return &mockPortForwarder{localPort: localPort, forwards: make(map[string]bool)}
 }
 
 func (m *mockPortForwarder) FindReadyPod(ctx context.Context, namespace, labelSelector string) (string, bool, error) {
@@ -360,7 +358,7 @@ func (m *mockPortForwarder) FindReadyPod(ctx context.Context, namespace, labelSe
 func (m *mockPortForwarder) ForwardPod(ctx context.Context, namespace, podName string, remotePort int) (string, int, error) {
 	fid := namespace + "/" + podName + ":8080"
 	m.forwards[fid] = true
-	return fid, 10000 + remotePort, nil
+	return fid, m.localPort, nil
 }
 
 func (m *mockPortForwarder) Close(forwardID string) error {
@@ -373,6 +371,64 @@ func (m *mockPortForwarder) CloseAll() error {
 	return nil
 }
 
-func (m *mockPortForwarder) IsOpen(fid string) bool {
-	return m.forwards[fid]
+// startHitlProbe drives HitlState.Probe through the real production path
+// against a stubbed HITL HTTP endpoint, so the model reaches an active probe
+// state (live forward, loaded choices) without a test-only setter seam.
+func startHitlProbe(t *testing.T, m *Model, nodeName string) (*Model, *mockPortForwarder) {
+	t.Helper()
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/queue/"):
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, `{"workitem_id":"wi-001","status":"queued"}`)
+		case r.URL.Path == "/choices":
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, `{"choices":[{"value":"approve","label":"Approve","type":"route"},{"value":"cancel","label":"Cancel","type":"cancel"}]}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(ts.Close)
+
+	u, err := url.Parse(ts.URL)
+	if err != nil {
+		t.Fatalf("parse test server URL: %v", err)
+	}
+	localPort, err := strconv.Atoi(u.Port())
+	if err != nil {
+		t.Fatalf("parse test server port: %v", err)
+	}
+
+	m.namespace = "test-ns"
+	m.workitemDetail.workitemName = "wi-001"
+	m.pfm = newMockPortForwarder(localPort)
+
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "hitl-pod",
+			Namespace: m.namespace,
+			Labels:    map[string]string{"flow.foundry.io/node-name": nodeName},
+		},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodRunning,
+			PodIP: "10.0.0.1",
+			Conditions: []corev1.PodCondition{
+				{Type: corev1.PodReady, Status: corev1.ConditionTrue},
+			},
+		},
+	}
+	clientset := k8sfake.NewSimpleClientset(pod)
+
+	cmd := m.hitlState.Probe(context.Background(), clientset, m.namespace, nodeName, m.workitemDetail.workitemName, m.pfm)
+	msg := cmd()
+	model, _ := m.Update(msg)
+	m2, ok := model.(*Model)
+	if !ok {
+		t.Fatalf("unexpected model type %T", model)
+	}
+	if !m2.hitlState.Active() {
+		t.Fatal("expected hitlState to be active after probe")
+	}
+	return m2, m.pfm.(*mockPortForwarder)
 }

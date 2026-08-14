@@ -387,14 +387,6 @@ func (h *HitlState) ResetForNewWorkitem() {
 	h.debugHintShown = false
 }
 
-// ─── Test helpers (for tui package tests) ───────────────────────────────────
-
-// SetActiveForTest sets the active flag for testing.
-func (h *HitlState) SetActiveForTest() { h.active = true }
-
-// SetForwardIDForTest sets the forwardID for testing.
-func (h *HitlState) SetForwardIDForTest(fid string) { h.forwardID = fid }
-
 // ─── Accessor methods (for tui package use) ─────────────────────────────────
 
 // Exhausted returns true when all probe retries have been exhausted.

@@ -128,7 +128,7 @@ stdout or a file.`,
 		RunE: runGraphExport,
 	}
 
-	cmd.Flags().String("format", "json", "Output format: \"json\" or \"graphml\"")
+	cmd.Flags().String("format", formatJSON, "Output format: \"json\" or \"graphml\"")
 	cmd.Flags().String("namespace", "", "Kubernetes namespace (overrides context/FLOW_NAMESPACE)")
 	cmd.Flags().String("graph-name", defaultGraphName, "FoundryGraph resource name")
 	cmd.Flags().String("output", "", "Output file path (default: stdout)")

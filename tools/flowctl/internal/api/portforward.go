@@ -23,13 +23,25 @@ type forwardState struct {
 	stopFunc   func() // calls SPDY stop func and removes from map; set by ForwardPod
 }
 
+// inflightForward records a same-key ForwardPod creation in progress so a
+// concurrent same-key call waits for its result instead of creating a
+// duplicate SPDY forward. Fields are written by the creator before done is
+// closed; the channel close publishes them to waiting callers.
+type inflightForward struct {
+	done      chan struct{}
+	forwardID string
+	localPort int
+	err       error
+}
+
 // PortForwardManager manages zero or more pod port-forwards.
 type PortForwardManager struct {
 	mu            sync.Mutex
 	config        *rest.Config
 	clientset     kubernetes.Interface
-	forwards      map[string]*forwardState // key: "namespace/podName:remotePort"
-	spdyForwarder SPDYForwarder            // production or mock SPDY forwarder
+	forwards      map[string]*forwardState    // key: "namespace/podName:remotePort"
+	inflight      map[string]*inflightForward // key: "namespace/podName:remotePort", non-nil while a creation for that key is in progress
+	spdyForwarder SPDYForwarder               // production or mock SPDY forwarder
 }
 
 // SPDYForwarder abstracts the SPDY port-forward creation for testability.
@@ -56,6 +68,7 @@ func NewPortForwardManager(config *rest.Config, clientset kubernetes.Interface, 
 		config:    config,
 		clientset: clientset,
 		forwards:  make(map[string]*forwardState),
+		inflight:  make(map[string]*inflightForward),
 	}
 	if spdyForwarder != nil {
 		m.spdyForwarder = spdyForwarder
@@ -145,50 +158,77 @@ func (m *PortForwardManager) FindReadyPod(ctx context.Context, namespace, labelS
 // ForwardPod creates a port-forward to namespace/podName on remotePort.
 // Returns a forwardID ("namespace/podName:remotePort") and the local port.
 // Idempotent: if a forward to the same target already exists, returns existing.
+// The map-insert is made atomic with the forward creation via the inflight
+// guard: a concurrent same-key call observes the in-flight creation and waits
+// for its result instead of creating a duplicate SPDY forward whose stop func
+// would orphan the earlier one.
 func (m *PortForwardManager) ForwardPod(ctx context.Context, namespace, podName string, remotePort int) (forwardID string, localPort int, err error) {
 	key := fmt.Sprintf("%s/%s:%d", namespace, podName, remotePort)
 
 	m.mu.Lock()
+	// Already-tracked forward for this target: idempotent return.
 	if existing, ok := m.forwards[key]; ok {
 		m.mu.Unlock()
 		return key, existing.localPort, nil
 	}
+	// A concurrent same-key creation is in progress: wait for its result
+	// rather than creating a duplicate.
+	if inflight, ok := m.inflight[key]; ok {
+		m.mu.Unlock()
+		select {
+		case <-inflight.done:
+		case <-ctx.Done():
+			return "", 0, ctx.Err()
+		}
+		return inflight.forwardID, inflight.localPort, inflight.err
+	}
+	// Become the creator for this key. The inflight entry is removed once the
+	// creation completes, so a later call sees either this record or the
+	// tracked forward.
+	in := &inflightForward{done: make(chan struct{})}
+	m.inflight[key] = in
 	m.mu.Unlock()
 
-	// Delegate to SPDY forwarder
+	// Delegate to the SPDY forwarder outside the lock.
 	lp, stop, err := m.spdyForwarder.ForwardPod(ctx, namespace, podName, remotePort)
+
+	m.mu.Lock()
+	delete(m.inflight, key)
+	if err == nil {
+		// Store the SPDY stop function and the cleanup function separately.
+		// The cleanup removes from the map; the SPDY stop closes the SPDY
+		// connection.
+		spdyStop := stop
+		cleanup := func() {
+			m.mu.Lock()
+			defer m.mu.Unlock()
+			delete(m.forwards, key)
+		}
+
+		state := &forwardState{
+			localPort:  lp,
+			remotePort: remotePort,
+			namespace:  namespace,
+			podName:    podName,
+		}
+		state.stopFunc = func() {
+			if spdyStop != nil {
+				spdyStop()
+			}
+			cleanup()
+		}
+
+		m.forwards[key] = state
+		in.forwardID = key
+		in.localPort = lp
+	}
+	in.err = err
+	m.mu.Unlock()
+	close(in.done) // publish the result to any waiting same-key callers
+
 	if err != nil {
 		return "", 0, err
 	}
-
-	// Store the SPDY stop function and the cleanup function separately.
-	// The cleanup removes from the map; the SPDY stop closes the SPDY connection.
-	spdyStop := stop
-
-	cleanup := func() {
-		m.mu.Lock()
-		defer m.mu.Unlock()
-		delete(m.forwards, key)
-	}
-
-	state := &forwardState{
-		localPort:  lp,
-		remotePort: remotePort,
-		namespace:  namespace,
-		podName:    podName,
-	}
-
-	state.stopFunc = func() {
-		if spdyStop != nil {
-			spdyStop()
-		}
-		cleanup()
-	}
-
-	m.mu.Lock()
-	m.forwards[key] = state
-	m.mu.Unlock()
-
 	return key, lp, nil
 }
 
