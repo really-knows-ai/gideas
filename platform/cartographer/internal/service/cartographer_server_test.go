@@ -1046,6 +1046,45 @@ func TestCapability_MissingMetadata(t *testing.T) {
 	}
 }
 
+// TestCapability_NilCapsFailClosed pins the fail-closed branch of every
+// node-facing capability gate (checkEntityCap, checkTxCap,
+// checkWildcardEntityCap — cartographer_server.go): when no capability
+// metadata is present, the ingress interceptor's system-to-system pass-through
+// leaves nil capabilities in the context, and every node-facing gate must deny
+// the request with PERMISSION_DENIED (errCapabilityDenied). Only the verifier
+// half is pinned elsewhere (TestCapability_MissingMetadata); every RPC test
+// injects non-nil capabilities (testCtx, capabilityContext/narrowCtx/noReadCtx),
+// so a regression making any of the three nil branches fail open (return nil)
+// would currently pass the entire suite. Each subtest drives one gate with a
+// bare context.Background().
+func TestCapability_NilCapsFailClosed(t *testing.T) {
+	srv, _ := newTestServer(t)
+
+	// checkEntityCap — ListEntities checks READ:graph/entity/<type> first.
+	t.Run("checkEntityCap", func(t *testing.T) {
+		_, err := srv.ListEntities(context.Background(), &flowv1.ListEntitiesRequest{EntityType: "Component"})
+		if status.Code(err) != codes.PermissionDenied {
+			t.Fatalf("expected PermissionDenied for nil capabilities on checkEntityCap, got %v", status.Code(err))
+		}
+	})
+
+	// checkTxCap — BeginTransaction checks WRITE:graph/tx first.
+	t.Run("checkTxCap", func(t *testing.T) {
+		_, err := srv.BeginTransaction(context.Background(), &flowv1.BeginTransactionRequest{})
+		if status.Code(err) != codes.PermissionDenied {
+			t.Fatalf("expected PermissionDenied for nil capabilities on checkTxCap, got %v", status.Code(err))
+		}
+	})
+
+	// checkWildcardEntityCap — Sync checks WRITE:graph/entity/* first.
+	t.Run("checkWildcardEntityCap", func(t *testing.T) {
+		_, err := srv.Sync(context.Background(), &flowv1.SyncRequest{})
+		if status.Code(err) != codes.PermissionDenied {
+			t.Fatalf("expected PermissionDenied for nil capabilities on checkWildcardEntityCap, got %v", status.Code(err))
+		}
+	})
+}
+
 func TestCapability_UnrecognizedSigner(t *testing.T) {
 	opPub, _ := generateTestKey()
 	scPub, _ := generateTestKey()
@@ -1367,7 +1406,8 @@ func TestWipeGraph_ExpiredTxDoesNotBlock(t *testing.T) {
 	}
 
 	fc := newFakeClock(time.Now())
-	srv.txManager = NewTransactionManager(7*24*time.Hour, 100000, WithClock(fc))
+	srv.txManager = NewTransactionManager(7*24*time.Hour, 100000)
+	srv.txManager.clock = fc
 	_, _ = srv.txManager.Create("test-tx", 1*time.Minute, "head")
 
 	// Advance past the transaction deadline without GC: the transaction is
@@ -1414,7 +1454,8 @@ func TestWipeGraph_TreeOnTxBranchWipeLandsOnMain(t *testing.T) {
 	// Replace the tx manager with a fake clock so the transaction can be
 	// expired deterministically without running the GC loop.
 	fc := newFakeClock(time.Now())
-	srv.txManager = NewTransactionManager(7*24*time.Hour, 100000, WithClock(fc))
+	srv.txManager = NewTransactionManager(7*24*time.Hour, 100000)
+	srv.txManager.clock = fc
 	ctx := testCtx()
 	applyTestSchema(ctx, t, base)
 	// Establish a non-empty main: a committed entity whose pre-wipe file must
@@ -3914,8 +3955,10 @@ func TestBeginTransaction_ImplicitSync(t *testing.T) {
 	if begin.TransactionId == "" {
 		t.Fatal("expected a transaction ID")
 	}
-	if err := srv.txManager.ValidateActive(begin.TransactionId); err != nil {
+	if _, unlock, err := srv.txManager.LockActive(begin.TransactionId); err != nil {
 		t.Fatalf("transaction not registered: %v", err)
+	} else {
+		unlock()
 	}
 
 	// The implicit-sync fetch must have happened immediately before the branch
@@ -3950,8 +3993,10 @@ func TestBeginTransaction_ImplicitSyncFailsProceeds(t *testing.T) {
 	if begin.TransactionId == "" {
 		t.Fatal("expected a transaction ID")
 	}
-	if err := srv.txManager.ValidateActive(begin.TransactionId); err != nil {
+	if _, unlock, err := srv.txManager.LockActive(begin.TransactionId); err != nil {
 		t.Fatalf("transaction not registered: %v", err)
+	} else {
+		unlock()
 	}
 	syncGit.mu.Lock()
 	fetchCalls := syncGit.fetchCalls
@@ -3986,8 +4031,10 @@ func TestBeginTransaction_NoRemote_StillCreatesTransaction(t *testing.T) {
 	if begin.TransactionId == "" {
 		t.Fatal("expected a transaction ID")
 	}
-	if err := srv.txManager.ValidateActive(begin.TransactionId); err != nil {
+	if _, unlock, err := srv.txManager.LockActive(begin.TransactionId); err != nil {
 		t.Fatalf("transaction not registered: %v", err)
+	} else {
+		unlock()
 	}
 	syncGit.mu.Lock()
 	fetchCalls := syncGit.fetchCalls
@@ -4618,6 +4665,13 @@ func TestCommitTransaction_WithSyncWorker_NoAckReturnsWithoutBlocking(t *testing
 	}
 }
 
+// TestRollbackTransaction_PartialCommitWithoutLadybugPathIsExplicit pins the
+// SPEC error-table row "Commit serialisation or re-hydration failed"
+// (INTERNAL) for a rollback that must restore the main store after a partial
+// commit in a process whose LADYBUG_DB_PATH is unset: the restoration is
+// re-hydration work, so the failure surfaces INTERNAL (never a FAILED_PRECONDITION
+// no error-table row assigns to this condition), and the failed rollback leaves
+// the transaction registered for retry.
 func TestRollbackTransaction_PartialCommitWithoutLadybugPathIsExplicit(t *testing.T) {
 	srv, _ := newTestServer(t)
 	srv.gitstore = &mergeFailingGitStore{GitStore: srv.gitstore, failMerge: true}
@@ -4637,11 +4691,13 @@ func TestRollbackTransaction_PartialCommitWithoutLadybugPathIsExplicit(t *testin
 		t.Fatal("expected merge failure")
 	}
 	_, err = srv.RollbackTransaction(ctx, &flowv1.RollbackTransactionRequest{TransactionId: begin.TransactionId})
-	if status.Code(err) != codes.FailedPrecondition {
-		t.Fatalf("expected FailedPrecondition without LADYBUG_DB_PATH, got %v", err)
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("expected Internal without LADYBUG_DB_PATH, got %v", err)
 	}
-	if err = srv.txManager.ValidateActive(begin.TransactionId); err != nil {
+	if _, unlock, err := srv.txManager.LockActive(begin.TransactionId); err != nil {
 		t.Fatalf("transaction was deregistered after explicit restoration failure: %v", err)
+	} else {
+		unlock()
 	}
 }
 
@@ -4719,7 +4775,8 @@ func TestTransaction_TimedOut(t *testing.T) {
 
 	// Replace with fake clock so we can control time.
 	fc := newFakeClock(time.Now())
-	srv.txManager = NewTransactionManager(7*24*time.Hour, 100000, WithClock(fc))
+	srv.txManager = NewTransactionManager(7*24*time.Hour, 100000)
+	srv.txManager.clock = fc
 
 	beginResp, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{
 		Timeout: durationpb.New(1 * time.Minute),
@@ -4976,8 +5033,10 @@ func TestEmptyTransaction_CommitCleanupFailureRemainsRetryable(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected cleanup failure")
 	}
-	if err = srv.txManager.ValidateActive(begin.TransactionId); err != nil {
+	if _, unlock, err := srv.txManager.LockActive(begin.TransactionId); err != nil {
 		t.Fatalf("transaction was not retryable after cleanup failure: %v", err)
+	} else {
+		unlock()
 	}
 	if err = srv.gitstore.WithGitLock(func() error {
 		exists, branchErr := srv.gitstore.BranchExists(ctx, begin.TransactionId)
@@ -6209,7 +6268,8 @@ func TestRefreshTransaction_DoesNotResetTimeoutTimer(t *testing.T) {
 	// Replace the tx manager with a fake clock so the absolute lifetime can be
 	// advanced deterministically without running the GC loop.
 	fc := newFakeClock(time.Now())
-	srv.txManager = NewTransactionManager(7*24*time.Hour, 100000, WithClock(fc))
+	srv.txManager = NewTransactionManager(7*24*time.Hour, 100000)
+	srv.txManager.clock = fc
 	ctx := testCtx()
 
 	begin, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{
@@ -7227,6 +7287,110 @@ func TestRecoverOpenTransactionsPersistsAppliedTimeout(t *testing.T) {
 	}
 }
 
+// TestRecoverOpenTransactionsPreservesAbsoluteLifetime pins SPEC R9's
+// "absolute lifetime from BeginTransaction, not an idle timeout" across a
+// restart: a recovered transaction must retain its original begin instant
+// (CreatedAt) and expiry (ExpiresAt) rather than being re-based from the
+// restart instant. Before the fix, RecoverOpenTransactions re-based both via
+// txManager.Create, so a transaction could live materially longer than its
+// granted lifetime — and beyond the 7-day hard maximum measured from the
+// original begin — after each crash/restart, and the ExtendTimeout ceiling
+// (computed against the rebased CreatedAt) no longer bounded the true total
+// lifetime. The test begins a transaction with a 30-minute timeout, lets its
+// absolute lifetime elapse while it is open (fake clock), restarts, and
+// asserts the recovered transaction keeps the original CreatedAt/ExpiresAt and
+// is already expired (DEADLINE_EXCEEDED) rather than re-armed for a fresh
+// 30-minute lease of life from the restart instant.
+func TestRecoverOpenTransactionsPreservesAbsoluteLifetime(t *testing.T) {
+	ctx := testCtx()
+	dataPath := t.TempDir()
+	opPub, _ := generateTestKey()
+
+	st, err := ladybug.Open(dataPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	gs, err := gitstore.New(dataPath)
+	if err != nil {
+		t.Fatalf("open git store: %v", err)
+	}
+	srv := NewCartographerServer(
+		st, gs, opPub, initTestKey(), nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000,
+		WithLadybugPath(dataPath),
+	)
+	srv.MarkDBReady()
+	// Drive the lifetime deterministically with a fake clock shared across the
+	// simulated restart.
+	fc := newFakeClock(time.Now())
+	srv.txManager = NewTransactionManager(7*24*time.Hour, 100000)
+	srv.txManager.clock = fc
+	applyTestSchema(ctx, t, st)
+
+	begin, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{
+		Timeout: durationpb.New(30 * time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("begin transaction: %v", err)
+	}
+	beginInstant := fc.Now()
+	// A mutation is required so the branch diff is non-empty and recovery does
+	// not treat the transaction as already-committed.
+	if _, err := srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
+		EntityType: "Component", Properties: map[string]string{"name": "in-tx"},
+		TransactionId: begin.TransactionId,
+	}); err != nil {
+		t.Fatalf("create entity in transaction: %v", err)
+	}
+
+	// The transaction's absolute lifetime elapses while it is open: the
+	// restart happens after the original expiry.
+	fc.Advance(40 * time.Minute)
+
+	if err := st.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+	reopened, err := ladybug.Open(dataPath)
+	if err != nil {
+		t.Fatalf("reopen store: %v", err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	reopenedGit, err := gitstore.New(dataPath)
+	if err != nil {
+		t.Fatalf("reopen git store: %v", err)
+	}
+	restarted := NewCartographerServer(
+		reopened, reopenedGit, opPub, initTestKey(), nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000,
+		WithLadybugPath(dataPath),
+	)
+	restarted.txManager = NewTransactionManager(7*24*time.Hour, 100000)
+	restarted.txManager.clock = fc
+	restarted.MarkDBReady()
+	if err := restarted.RecoverOpenTransactions(ctx); err != nil {
+		t.Fatalf("RecoverOpenTransactions: %v", err)
+	}
+	recovered, err := restarted.txManager.Lookup(begin.TransactionId)
+	if err != nil {
+		t.Fatalf("lookup recovered transaction: %v", err)
+	}
+	// The recovered transaction keeps the original begin instant and expiry:
+	// recovery must NOT re-base them from the restart instant (now =
+	// begin+40m), which would grant a fresh 30-minute lease of life.
+	if !recovered.CreatedAt.Equal(beginInstant) {
+		t.Fatalf("recovered CreatedAt = %v, want the original begin %v", recovered.CreatedAt, beginInstant)
+	}
+	wantExpiry := beginInstant.Add(30 * time.Minute)
+	if !recovered.ExpiresAt.Equal(wantExpiry) {
+		t.Fatalf("recovered ExpiresAt = %v, want the original absolute expiry %v", recovered.ExpiresAt, wantExpiry)
+	}
+	// The absolute lifetime has already elapsed at restart (now = begin+40m),
+	// so the recovered transaction is expired: an operation on it surfaces
+	// DEADLINE_EXCEEDED rather than a re-armed fresh lifetime.
+	_, err = restarted.GetTransactionDiff(ctx, &flowv1.GetTransactionDiffRequest{TransactionId: begin.TransactionId})
+	if status.Code(err) != codes.DeadlineExceeded {
+		t.Fatalf("expected DeadlineExceeded on the expired recovered transaction, got %v", err)
+	}
+}
+
 func TestRecoverRollbackOnlyTransactionWhenRejectedUpdateDoesNotIncreaseNetDiff(t *testing.T) {
 	ctx := testCtx()
 	dataPath := t.TempDir()
@@ -7693,8 +7857,10 @@ func TestRecoverOpenTransactionsMainLookupFailuresAbort(t *testing.T) {
 			if err := restarted.RecoverOpenTransactions(ctx); err == nil {
 				t.Fatalf("expected %s failure", operation)
 			}
-			if err := restarted.txManager.ValidateActive(begin.TransactionId); status.Code(err) != codes.NotFound {
+			if _, unlock, err := restarted.txManager.LockActive(begin.TransactionId); status.Code(err) != codes.NotFound {
 				t.Fatalf("recovery registered transaction after lookup failure: %v", err)
+			} else if unlock != nil {
+				unlock()
 			}
 		})
 	}
@@ -8275,7 +8441,8 @@ func TestExtendTimeout_AcceptedAt7DayBoundary(t *testing.T) {
 
 	// Replace with a fake clock so the boundary is deterministic.
 	fc := newFakeClock(time.Now())
-	srv.txManager = NewTransactionManager(7*24*time.Hour, 100000, WithClock(fc))
+	srv.txManager = NewTransactionManager(7*24*time.Hour, 100000)
+	srv.txManager.clock = fc
 
 	beginResp, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{
 		Timeout: durationpb.New(1 * time.Minute),
@@ -8352,8 +8519,10 @@ func TestExtendTimeout_PersistFailureRevertsInMemoryState(t *testing.T) {
 			state.ExpiresAt, oldExpiresAt, state.AppliedTimeout, oldAppliedTimeout)
 	}
 	// The transaction must still be usable with its original expiry.
-	if err := srv.txManager.ValidateActive(txID); err != nil {
+	if _, unlock, err := srv.txManager.LockActive(txID); err != nil {
 		t.Fatalf("transaction unusable after reverted extend failure: %v", err)
+	} else {
+		unlock()
 	}
 }
 
@@ -9886,6 +10055,85 @@ func TestApplySchema_BeforeDBReady(t *testing.T) {
 	}
 }
 
+// TestApplySchema_InvalidSchemaBeforeDBReady pins the SPEC ApplySchema check
+// order (SPEC:1021: database readiness → schema validation → table structure
+// mismatch) for the readiness gate: a schema that is ALSO structurally invalid
+// (duplicate entity type name → INVALID_ARGUMENT if validation ran) must still
+// surface FAILED_PRECONDITION ("ApplySchema called before database ready")
+// when the database is not ready — the readiness gate precedes schema
+// validation. TestApplySchema_BeforeDBReady uses a valid schema, so only a
+// combined fault can detect a reorder that surfaced the validation error first.
+func TestApplySchema_InvalidSchemaBeforeDBReady(t *testing.T) {
+	opPub, _ := generateTestKey()
+	scPub, _ := generateTestKey()
+	st, _ := ladybug.OpenInMemory()
+	t.Cleanup(func() { _ = st.Close() })
+	gs, _ := gitstore.New(t.TempDir())
+	// Do NOT call MarkDBReady.
+	srv := NewCartographerServer(st, gs, opPub, scPub, nil, "",
+		30*time.Second, "test-ns", 30*time.Minute, 100000)
+	ctx := context.Background()
+
+	schema := &flowv1.Schema{
+		EntityTypes: []*flowv1.EntityType{
+			{Name: "Component", Properties: []*flowv1.Property{{Name: "name", Type: "string"}}},
+			{Name: "Component", Properties: []*flowv1.Property{{Name: "version", Type: "string"}}},
+		},
+	}
+	_, err := srv.ApplySchema(ctx, &flowv1.ApplySchemaRequest{Schema: schema})
+	if err == nil {
+		t.Fatal("expected error for ApplySchema before DB ready, got nil")
+	}
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("expected FailedPrecondition (readiness gate first), got %v", status.Code(err))
+	}
+}
+
+// TestApplySchema_InvalidSchemaWinsOverDestructive pins the SPEC ApplySchema
+// check order (SPEC:1021: database readiness → schema validation → table
+// structure mismatch) for the validation gate: a schema that is both
+// structurally invalid (duplicate property name → INVALID_ARGUMENT) and
+// destructive (removes an applied property → FAILED_PRECONDITION if the
+// structure diff ran) must surface INVALID_ARGUMENT — schema validation
+// precedes the table-structure mismatch check.
+func TestApplySchema_InvalidSchemaWinsOverDestructive(t *testing.T) {
+	srv, _ := newTestServer(t)
+	ctx := context.Background()
+
+	initial := &flowv1.Schema{
+		EntityTypes: []*flowv1.EntityType{
+			{Name: "Component", Properties: []*flowv1.Property{
+				{Name: "name", Type: "string"},
+				{Name: "toremove", Type: "string"},
+			}},
+		},
+	}
+	if _, err := srv.ApplySchema(ctx, &flowv1.ApplySchemaRequest{Schema: initial}); err != nil {
+		t.Fatalf("initial ApplySchema failed: %v", err)
+	}
+
+	// Combined fault: removes `toremove` (destructive → FAILED_PRECONDITION if
+	// the catalog diff ran) and declares `version` twice (invalid →
+	// INVALID_ARGUMENT). Validation runs before the structure diff, so
+	// INVALID_ARGUMENT must win.
+	invalidAndDestructive := &flowv1.Schema{
+		EntityTypes: []*flowv1.EntityType{
+			{Name: "Component", Properties: []*flowv1.Property{
+				{Name: "name", Type: "string"},
+				{Name: "version", Type: "string"},
+				{Name: "version", Type: "string"},
+			}},
+		},
+	}
+	_, err := srv.ApplySchema(ctx, &flowv1.ApplySchemaRequest{Schema: invalidAndDestructive})
+	if err == nil {
+		t.Fatal("expected error for invalid destructive schema, got nil")
+	}
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("expected InvalidArgument (validation gate before structure mismatch), got %v", status.Code(err))
+	}
+}
+
 func TestApplySchema_AdditiveChange(t *testing.T) {
 	srv, _ := newTestServer(t)
 	ctx := context.Background()
@@ -10521,7 +10769,8 @@ func TestTelemetry_TransactionGC(t *testing.T) {
 	srv.dbReady.Store(true)
 
 	fc := newFakeClock(time.Now())
-	srv.txManager = NewTransactionManager(7*24*time.Hour, 100000, WithClock(fc))
+	srv.txManager = NewTransactionManager(7*24*time.Hour, 100000)
+	srv.txManager.clock = fc
 	_, _ = srv.txManager.Create("test-tx-id", 1*time.Minute, "head")
 
 	fc.Advance(2 * time.Minute)
@@ -10575,7 +10824,8 @@ func TestGC_ExpiredTransaction_Rollback(t *testing.T) {
 	srv.dbReady.Store(true)
 
 	fc := newFakeClock(time.Now())
-	srv.txManager = NewTransactionManager(7*24*time.Hour, 100000, WithClock(fc))
+	srv.txManager = NewTransactionManager(7*24*time.Hour, 100000)
+	srv.txManager.clock = fc
 
 	ctx := context.Background()
 	txID := srv.newIDFn()
@@ -11263,7 +11513,8 @@ func TestWriteCheckOrder_TransactionValidationPrecedesStructural(t *testing.T) {
 		}, codes.NotFound, ""},
 		{"timed-out transaction", func(t *testing.T, srv *CartographerServer) string {
 			fc := newFakeClock(time.Now())
-			srv.txManager = NewTransactionManager(7*24*time.Hour, 100000, WithClock(fc))
+			srv.txManager = NewTransactionManager(7*24*time.Hour, 100000)
+			srv.txManager.clock = fc
 			txID := beginTestTx(t, srv, testCtx())
 			fc.Advance(2 * time.Hour)
 			return txID
@@ -12792,6 +13043,50 @@ func TestExecuteCypher_MutationRejectedBeforeCapability(t *testing.T) {
 	}
 	if msg := status.Convert(err).Message(); !strings.Contains(msg, "mutation or DDL") {
 		t.Fatalf("expected the read-only enforcement's rejection (mutation/DDL), got %q", msg)
+	}
+}
+
+// TestExecuteCypher_EmptyQueryBeforeCapability pins the SPEC ExecuteCypher
+// check order (SPEC:1018: empty query → Cypher syntax → read-only enforcement →
+// capability) for the empty-query gate: a caller lacking READ capability
+// sending an EMPTY query must receive the empty-query gate's INVALID_ARGUMENT
+// ("Empty ExecuteCypher query"), NOT the capability gate's PERMISSION_DENIED —
+// the empty-query gate precedes the capability check. The plain
+// TestExecuteCypher_EmptyQuery runs with a full-capability context, so only a
+// combined fault can detect a reorder that hoisted the capability gate ahead.
+func TestExecuteCypher_EmptyQueryBeforeCapability(t *testing.T) {
+	srv, _ := newTestServer(t)
+	ctx := noReadCtx() // WRITE-only, no READ
+
+	_, err := srv.ExecuteCypher(ctx, &flowv1.ExecuteCypherRequest{Cypher: ""})
+	if err == nil {
+		t.Fatal("expected error for empty query from a no-READ caller, got nil")
+	}
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("expected InvalidArgument (empty-query gate first), got %v", status.Code(err))
+	}
+}
+
+// TestExecuteCypher_InvalidSyntaxBeforeCapability pins the SPEC ExecuteCypher
+// check order (SPEC:1018) for the syntax gate: a caller lacking READ capability
+// sending a syntactically invalid query must receive the parse gate's
+// INVALID_ARGUMENT ("Invalid Cypher syntax"), NOT the capability gate's
+// PERMISSION_DENIED — the syntax gate precedes the capability check. The plain
+// TestExecuteCypher_InvalidSyntax runs with a full-capability context, so only
+// a combined fault can detect a reorder that hoisted the capability gate ahead.
+func TestExecuteCypher_InvalidSyntaxBeforeCapability(t *testing.T) {
+	srv, _ := newTestServer(t)
+	ctx := noReadCtx() // WRITE-only, no READ
+	applyTestSchema(ctx, t, srv.store)
+
+	_, err := srv.ExecuteCypher(ctx, &flowv1.ExecuteCypherRequest{
+		Cypher: "NOT VALID CYPHER SYNTAX @@@",
+	})
+	if err == nil {
+		t.Fatal("expected error for invalid Cypher syntax from a no-READ caller, got nil")
+	}
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("expected InvalidArgument (syntax gate first), got %v", status.Code(err))
 	}
 }
 

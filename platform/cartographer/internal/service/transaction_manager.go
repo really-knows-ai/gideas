@@ -146,26 +146,15 @@ func (tm *TransactionManager) lockRegistered(txID string) (*TransactionState, fu
 	return state, state.lifecycle.Unlock, true
 }
 
-// NewTransactionManager creates a manager with the real clock.
-func NewTransactionManager(
-	hardMaxTimeout time.Duration, changeLogCap int,
-	opts ...func(*TransactionManager),
-) *TransactionManager {
-	tm := &TransactionManager{
+// NewTransactionManager creates a manager with the real clock. The clock
+// field remains assignable by same-package tests that need deterministic time.
+func NewTransactionManager(hardMaxTimeout time.Duration, changeLogCap int) *TransactionManager {
+	return &TransactionManager{
 		active:         make(map[string]*TransactionState),
 		hardMaxTimeout: hardMaxTimeout,
 		changeLogCap:   changeLogCap,
 		clock:          &RealClock{},
 	}
-	for _, o := range opts {
-		o(tm)
-	}
-	return tm
-}
-
-// WithClock returns an option that sets the clock on the TransactionManager.
-func WithClock(c Clock) func(*TransactionManager) {
-	return func(tm *TransactionManager) { tm.clock = c }
 }
 
 // Create registers a new transaction with the given ID and requested timeout.
@@ -223,17 +212,6 @@ func (tm *TransactionManager) Delete(txID string) {
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
 	delete(tm.active, txID)
-}
-
-// ValidateActive checks that the txID is a valid UUID, references an active
-// transaction, and has not timed out. Returns the appropriate gRPC status error.
-func (tm *TransactionManager) ValidateActive(txID string) error {
-	_, unlock, err := tm.LockActive(txID)
-	if err != nil {
-		return err
-	}
-	unlock()
-	return nil
 }
 
 // ExtendTimeout replaces the transaction expiry with now+duration.

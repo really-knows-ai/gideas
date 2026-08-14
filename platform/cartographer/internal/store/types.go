@@ -99,13 +99,21 @@ type HealthResult struct {
 type BranchTransactionState struct {
 	MainHeadAtLastSync string        `json:"main_head_at_last_sync"`
 	AppliedTimeout     time.Duration `json:"applied_timeout_ns"`
-	SchemaHash         string        `json:"schema_hash"`
-	CommitStarted      bool          `json:"commit_started"`
-	CommitCreated      bool          `json:"commit_created"`
-	CommitHydrated     bool          `json:"commit_hydrated"`
-	MainRehydrated     bool          `json:"main_rehydrated"`
-	MergeCompleted     bool          `json:"merge_completed"`
-	RollbackOnly       bool          `json:"rollback_only"`
+	// CreatedAt and ExpiresAt are the transaction's absolute lifetime bounds
+	// (SPEC R9: "the timeout is an absolute lifetime from BeginTransaction, not
+	// an idle timeout"). They are persisted at every timeout-affecting event
+	// (BeginTransaction, ExtendTimeout) so recovery can restore the true
+	// lifetime instead of re-basing it from the restart instant. Zero values
+	// mark a record that predates the persistence of these fields.
+	CreatedAt      time.Time `json:"created_at"`
+	ExpiresAt      time.Time `json:"expires_at"`
+	SchemaHash     string    `json:"schema_hash"`
+	CommitStarted  bool      `json:"commit_started"`
+	CommitCreated  bool      `json:"commit_created"`
+	CommitHydrated bool      `json:"commit_hydrated"`
+	MainRehydrated bool      `json:"main_rehydrated"`
+	MergeCompleted bool      `json:"merge_completed"`
+	RollbackOnly   bool      `json:"rollback_only"`
 	// BranchRefreshInProgress marks that a RefreshTransaction branch-DB swap is
 	// in flight: the durable record is written with the flag set before the
 	// swap and cleared only when the refresh's final state persist completes.

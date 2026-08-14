@@ -1,6 +1,7 @@
 package service
 
 import (
+	"math"
 	"testing"
 
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
@@ -54,6 +55,58 @@ func TestWriteMethods_WrongEntityTypeCapabilityDenied(t *testing.T) {
 		})
 		if status.Code(err) != codes.PermissionDenied {
 			t.Fatalf("expected PermissionDenied for wrong per-type capability on UpdateEntity, got %v", status.Code(err))
+		}
+	})
+
+	// TestUpdateEntity_CapabilityWinsOverEmbeddingValidation pins the SPEC
+	// UpdateEntity check order (SPEC:1015: active transaction → entity
+	// existence → type-specific capability → property/embedding validation):
+	// the capability gate runs before the store's embedding validation, so a
+	// combined fault (wrong/missing WRITE capability + NaN or
+	// dimension-mismatch embedding) must surface PERMISSION_DENIED, never the
+	// embedding's INVALID_ARGUMENT. The standalone embedding tests
+	// (TestUpdateEntity_NaNEmbedding, TestUpdateEntity_EmbeddingDimensionMismatch)
+	// run with full capabilities, so only a combined fault pins the order.
+	t.Run("UpdateEntity capability wins over embedding validation", func(t *testing.T) {
+		srv, st := newTestServer(t)
+		schema := &flowv1.Schema{
+			EntityTypes: []*flowv1.EntityType{
+				{
+					Name:              "VecType",
+					EnableVectorIndex: true,
+					Properties:        []*flowv1.Property{{Name: "name", Type: "string"}},
+				},
+			},
+		}
+		if err := st.ApplySchema(testCtx(), schema); err != nil {
+			t.Fatalf("ApplySchema: %v", err)
+		}
+		txID := beginTestTx(t, srv, testCtx())
+		ent, err := srv.store.CreateEntity(
+			testCtx(), "VecType", "", map[string]string{"name": "a"}, []float32{1.0, 0.0, 0.0}, txID,
+		)
+		if err != nil {
+			t.Fatalf("seed VecType entity: %v", err)
+		}
+		for _, tc := range []struct {
+			name      string
+			caps      []string
+			embedding []float32
+		}{
+			{"wrong-type capability + NaN embedding", []string{"WRITE:graph/entity/Component"},
+				[]float32{float32(math.NaN()), 0.0, 0.0}},
+			{"missing capability + dimension mismatch", []string{"WRITE:graph/tx"},
+				[]float32{1.0, 0.0}},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				_, err := srv.UpdateEntity(narrowCtx(tc.caps...), &flowv1.UpdateEntityRequest{
+					Id: ent.Id, Properties: map[string]string{"name": "b"},
+					Embedding: tc.embedding, TransactionId: txID,
+				})
+				if status.Code(err) != codes.PermissionDenied {
+					t.Fatalf("expected PermissionDenied (capability gate first), got %v", status.Code(err))
+				}
+			})
 		}
 	})
 
