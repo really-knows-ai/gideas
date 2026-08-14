@@ -374,9 +374,6 @@ func (s *spyServer) GetChildren(
 				WorkitemId:      "child-001",
 				Phase:           "Running",
 				CurrentAssignee: "codify-smt",
-				Artefacts: []*flowv1.ArtefactRef{
-					{Id: "input", GovernedArtefact: "codification-input"},
-				},
 			},
 			{
 				WorkitemId:      "child-002",

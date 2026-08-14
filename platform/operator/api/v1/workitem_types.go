@@ -73,6 +73,13 @@ type WorkitemStatus struct {
 	// TIMEOUT_EXCEEDED, CONTRACT_VIOLATION, INVALID_ROUTE).
 	// +optional
 	FailureReason string `json:"failureReason,omitempty"`
+
+	// completionReason records the proto CompletionReason enum name
+	// (e.g. "COMPLETION_REASON_CANCELLED") when the Workitem was completed
+	// with a non-default reason. Empty means COMPLETION_REASON_UNSPECIFIED
+	// (normal success). Only meaningful when phase is Completed.
+	// +optional
+	CompletionReason string `json:"completionReason,omitempty"`
 	// resumeCondition is the CEL expression that must evaluate to true for the
 	// Operator to auto-resume a Suspended workitem. Empty means manual Resume() required.
 	// +optional

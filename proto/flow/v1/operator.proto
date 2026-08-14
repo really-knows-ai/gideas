@@ -40,9 +40,8 @@ service OperatorService {
   rpc RouteChild(RouteChildRequest) returns (RouteChildResponse);
 
   // Returns the current state of all child Workitems for the caller's parent
-  // Workitem. The Operator queries by flow.foundry.io/parent label and includes
-  // artefact references from the Archivist. Identity comes from Sidecar-injected
-  // metadata — the request body is empty.
+  // Workitem. The Operator queries by flow.foundry.io/parent label. Identity
+  // comes from Sidecar-injected metadata — the request body is empty.
   rpc GetChildren(GetChildrenRequest) returns (GetChildrenResponse);
 
   // Explicitly resumes a suspended Workitem. The Operator validates the
@@ -163,8 +162,6 @@ message ChildWorkitemStatus {
   string phase = 2;
   // Node currently assigned to the child. Empty when Pending.
   string current_assignee = 3;
-  // Artefact references associated with the child in the Archivist.
-  repeated ArtefactRef artefacts = 4;
   // Completion reason (only meaningful when phase is Completed).
   CompletionReason completion_reason = 5;
 }

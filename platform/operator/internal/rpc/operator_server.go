@@ -160,6 +160,13 @@ func (s *OperatorServer) SubmitResult(ctx context.Context, req *flowv1.SubmitRes
 	ri := convertSubmitAction(req)
 	if ri != nil {
 		workitem.Status.RoutingInstruction = ri
+		// Persist the completion reason (if non-default) so GetChildren can
+		// report it to the parent Workitem.
+		if complete, ok := req.GetAction().(*flowv1.SubmitResultRequest_Complete); ok && complete.Complete != nil {
+			if reason := complete.Complete.GetReason(); reason != flowv1.CompletionReason_COMPLETION_REASON_UNSPECIFIED {
+				workitem.Status.CompletionReason = reason.String()
+			}
+		}
 	} else {
 		slog.Warn("SubmitResult with nil action, routing instruction not updated",
 			"workitem_id", workitemID,
@@ -603,12 +610,15 @@ func (s *OperatorServer) GetChildren(ctx context.Context, _ *flowv1.GetChildrenR
 	children := make([]*flowv1.ChildWorkitemStatus, len(childList.Items))
 	for i := range childList.Items {
 		c := &childList.Items[i]
+		reason := flowv1.CompletionReason_COMPLETION_REASON_UNSPECIFIED
+		if v, ok := flowv1.CompletionReason_value[c.Status.CompletionReason]; ok {
+			reason = flowv1.CompletionReason(v)
+		}
 		children[i] = &flowv1.ChildWorkitemStatus{
-			WorkitemId:      c.Name,
-			Phase:           c.Status.Phase,
-			CurrentAssignee: c.Status.CurrentAssignee,
-			// Artefact references are populated via Archivist cross-Workitem
-			// reads (Phase 7). For now, return an empty list.
+			WorkitemId:       c.Name,
+			Phase:            c.Status.Phase,
+			CurrentAssignee:  c.Status.CurrentAssignee,
+			CompletionReason: reason,
 		}
 	}
 

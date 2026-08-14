@@ -102,7 +102,6 @@ type ChildWorkitemStatus struct {
 	WorkitemID      string
 	Phase           string
 	CurrentAssignee string
-	Artefacts       []*flowv1.ArtefactRef
 	// CompletionReason is the proto enum string (e.g. "COMPLETION_REASON_CANCELLED")
 	// when Phase is "Completed". Empty string otherwise.
 	CompletionReason string

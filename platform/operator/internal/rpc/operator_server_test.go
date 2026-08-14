@@ -80,6 +80,50 @@ func TestSubmitResult_HappyPath(t *testing.T) {
 	}
 }
 
+func TestSubmitResult_CompleteWithReason_PersistsCompletionReason(t *testing.T) {
+	scheme := newScheme()
+
+	workitem := &apiv1.Workitem{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-123",
+			Namespace: "default",
+		},
+		Status: apiv1.WorkitemStatus{
+			Phase: "Running",
+		},
+	}
+
+	k8s := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(workitem).
+		WithStatusSubresource(workitem).
+		Build()
+
+	srv := NewOperatorServer(k8s)
+
+	resp, err := srv.SubmitResult(nsCtx(), &flowv1.SubmitResultRequest{
+		WorkitemId: "test-123",
+		Action: &flowv1.SubmitResultRequest_Complete{Complete: &flowv1.CompleteAction{
+			Reason: flowv1.CompletionReason_COMPLETION_REASON_CANCELLED,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("SubmitResult() returned error: %v", err)
+	}
+	if !resp.GetAccepted() {
+		t.Fatal("Expected Accepted=true")
+	}
+
+	var updated apiv1.Workitem
+	err = k8s.Get(context.Background(), nsName("test-123"), &updated)
+	if err != nil {
+		t.Fatalf("Failed to get updated workitem: %v", err)
+	}
+	if updated.Status.CompletionReason != "COMPLETION_REASON_CANCELLED" {
+		t.Fatalf("Expected completion reason CANCELLED, got %q", updated.Status.CompletionReason)
+	}
+}
+
 func TestSubmitResult_WorkitemFromMetadata(t *testing.T) {
 	scheme := newScheme()
 
@@ -1368,6 +1412,7 @@ func TestGetChildren_HappyPath(t *testing.T) {
 		Status: apiv1.WorkitemStatus{
 			Phase:            "Completed",
 			ParentWorkitemID: "parent-wi",
+			CompletionReason: "COMPLETION_REASON_CANCELLED",
 		},
 	}
 
@@ -1417,6 +1462,9 @@ func TestGetChildren_HappyPath(t *testing.T) {
 	if c1.GetCurrentAssignee() != "codify-smt" {
 		t.Fatalf("Expected child-1 assignee 'codify-smt', got %s", c1.GetCurrentAssignee())
 	}
+	if c1.GetCompletionReason() != flowv1.CompletionReason_COMPLETION_REASON_UNSPECIFIED {
+		t.Fatalf("Expected child-1 completion reason UNSPECIFIED, got %s", c1.GetCompletionReason())
+	}
 
 	c2, ok := childMap["child-2"]
 	if !ok {
@@ -1424,6 +1472,9 @@ func TestGetChildren_HappyPath(t *testing.T) {
 	}
 	if c2.GetPhase() != "Completed" {
 		t.Fatalf("Expected child-2 phase Completed, got %s", c2.GetPhase())
+	}
+	if c2.GetCompletionReason() != flowv1.CompletionReason_COMPLETION_REASON_CANCELLED {
+		t.Fatalf("Expected child-2 completion reason CANCELLED, got %s", c2.GetCompletionReason())
 	}
 }
 

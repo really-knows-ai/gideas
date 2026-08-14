@@ -56,6 +56,13 @@ spec:
                   Set when the Workitem transitions to Running. Used for timeout enforcement.
                 format: date-time
                 type: string
+              completionReason:
+                description: |-
+                  completionReason records the proto CompletionReason enum name
+                  (e.g. "COMPLETION_REASON_CANCELLED") when the Workitem was completed
+                  with a non-default reason. Empty means COMPLETION_REASON_UNSPECIFIED
+                  (normal success). Only meaningful when phase is Completed.
+                type: string
               currentAssignee:
                 description: |-
                   currentAssignee is the node currently processing this Workitem.

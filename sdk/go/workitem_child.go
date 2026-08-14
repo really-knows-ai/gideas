@@ -38,7 +38,6 @@ func (w *Workitem) GetChildren() ([]ChildWorkitemStatus, error) {
 			WorkitemID:       ch.GetWorkitemId(),
 			Phase:            ch.GetPhase(),
 			CurrentAssignee:  ch.GetCurrentAssignee(),
-			Artefacts:        ch.GetArtefacts(),
 			CompletionReason: ch.GetCompletionReason().String(),
 		})
 	}

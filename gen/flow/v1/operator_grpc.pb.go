@@ -61,9 +61,8 @@ type OperatorServiceClient interface {
 	// that contract before routing.
 	RouteChild(ctx context.Context, in *RouteChildRequest, opts ...grpc.CallOption) (*RouteChildResponse, error)
 	// Returns the current state of all child Workitems for the caller's parent
-	// Workitem. The Operator queries by flow.foundry.io/parent label and includes
-	// artefact references from the Archivist. Identity comes from Sidecar-injected
-	// metadata — the request body is empty.
+	// Workitem. The Operator queries by flow.foundry.io/parent label. Identity
+	// comes from Sidecar-injected metadata — the request body is empty.
 	GetChildren(ctx context.Context, in *GetChildrenRequest, opts ...grpc.CallOption) (*GetChildrenResponse, error)
 	// Explicitly resumes a suspended Workitem. The Operator validates the
 	// Workitem is in Suspended phase and re-dispatches it to the same node
@@ -210,9 +209,8 @@ type OperatorServiceServer interface {
 	// that contract before routing.
 	RouteChild(context.Context, *RouteChildRequest) (*RouteChildResponse, error)
 	// Returns the current state of all child Workitems for the caller's parent
-	// Workitem. The Operator queries by flow.foundry.io/parent label and includes
-	// artefact references from the Archivist. Identity comes from Sidecar-injected
-	// metadata — the request body is empty.
+	// Workitem. The Operator queries by flow.foundry.io/parent label. Identity
+	// comes from Sidecar-injected metadata — the request body is empty.
 	GetChildren(context.Context, *GetChildrenRequest) (*GetChildrenResponse, error)
 	// Explicitly resumes a suspended Workitem. The Operator validates the
 	// Workitem is in Suspended phase and re-dispatches it to the same node
