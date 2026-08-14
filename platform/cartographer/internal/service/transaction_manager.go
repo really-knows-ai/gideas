@@ -55,8 +55,8 @@ type TransactionState struct {
 	MainHeadAtLastSync string
 	SchemaHash         string // hash of schema at begin time
 	MainRehydrated     bool   // main contains branch data from a commit that has not merged
-	CommitStarted      bool   // a Git commit may have been created; mutations and refresh are closed
-	CommitCreated      bool   // transaction Git commit exists; mutations and refresh are closed
+	CommitStarted      bool   // a Git commit may have been created; mutations are closed (refresh re-opens it)
+	CommitCreated      bool   // transaction Git commit exists; mutations are closed (refresh re-opens it)
 	CommitHydrated     bool   // main rehydration completed successfully for this commit
 	MergeCompleted     bool   // transaction commit has reached main; only cleanup remains
 	RollbackOnly       bool   // admission failed; only rollback/GC cleanup may proceed

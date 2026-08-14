@@ -5137,19 +5137,19 @@ func TestCommitTransaction_RetryAfterCommitCreatedDoesNotDuplicateCommit(t *test
 	if lookupErr != nil || !state.CommitCreated || state.MergeCompleted {
 		t.Fatalf("unexpected retry state: state=%+v error=%v", state, lookupErr)
 	}
-	// A mutation and a refresh against a transaction whose commit has started
-	// are rejected with NOT_FOUND (SPEC error-table row "Transaction not
-	// found": "was already committed/rolled back" — the commit-in-progress
-	// handle no longer references a usable active transaction from the write
-	// surface). FAILED_PRECONDITION would be an un-justified code.
+	// A mutation against a transaction whose commit has started is rejected
+	// with NOT_FOUND (SPEC error-table row "Transaction not found": "was
+	// already committed/rolled back" — the commit-in-progress handle no
+	// longer references a usable active transaction from the write surface).
+	// FAILED_PRECONDITION would be an un-justified code. RefreshTransaction,
+	// by contrast, remains available for a commit-started transaction whose
+	// commit has not merged (the SPEC "Commit not up-to-date with main" row
+	// prescribes "Call Refresh() before Commit()") — see
+	// TestRefreshTransaction_CommitMergeFailedThenMainAdvancedUnwedges.
 	if _, err = srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
 		EntityType: "Component", Properties: map[string]string{"name": "late"}, TransactionId: begin.TransactionId,
 	}); status.Code(err) != codes.NotFound {
 		t.Fatalf("expected mutation rejection after commit creation, got %v", err)
-	}
-	_, err = srv.RefreshTransaction(ctx, &flowv1.RefreshTransactionRequest{TransactionId: begin.TransactionId})
-	if status.Code(err) != codes.NotFound {
-		t.Fatalf("expected refresh rejection after commit creation, got %v", err)
 	}
 	_, err = srv.CommitTransaction(ctx, &flowv1.CommitTransactionRequest{TransactionId: begin.TransactionId})
 	if err != nil {
@@ -5157,6 +5157,113 @@ func TestCommitTransaction_RetryAfterCommitCreatedDoesNotDuplicateCommit(t *test
 	}
 	if countingGit.commits != 1 {
 		t.Fatalf("expected one transaction commit, got %d", countingGit.commits)
+	}
+}
+
+// TestRefreshTransaction_CommitMergeFailedThenMainAdvancedUnwedges pins the
+// SPEC serialisation-flow retry contract for a transaction whose step-6 git
+// commit was created but whose step-10 merge failed, after main advanced: the
+// retried commit surfaces step 5's FAILED_PRECONDITION ("Commit not up-to-date
+// with main", SPEC error table, whose prescription is "Call Refresh() before
+// Commit()"), and the prescribed Refresh() → Commit() path must now succeed
+// without losing the transaction's changes. Previously RefreshTransaction
+// rejected any CommitStarted transaction with NOT_FOUND, so the baseline could
+// never advance again and the transaction was permanently wedged — its changes
+// recoverable only by Rollback, i.e. loss. The fix keeps the FAILED_PRECONDITION
+// guard intact for genuinely conflicting changes: the wedge here is the
+// baseline-advance path, not the conflict detection.
+func TestRefreshTransaction_CommitMergeFailedThenMainAdvancedUnwedges(t *testing.T) {
+	base, err := openTestStore(t)
+	if err != nil {
+		t.Fatalf("openTestStore: %v", err)
+	}
+	t.Cleanup(func() { _ = base.Close() })
+	ladybugPath := t.TempDir()
+	gs, err := gitstore.New(ladybugPath)
+	if err != nil {
+		t.Fatalf("gitstore.New: %v", err)
+	}
+	failingGit := &mergeFailingGitStore{GitStore: gs, failMerge: true}
+	opPub, _ := generateTestKey()
+	srv := NewCartographerServer(
+		base, failingGit, opPub, initTestKey(), nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000,
+		WithLadybugPath(ladybugPath),
+	)
+	srv.MarkDBReady()
+	ctx := testCtx()
+	applyTestSchema(ctx, t, base)
+
+	// Transaction A: the step-6 git commit is created, the step-10 merge fails.
+	beginA, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
+	if err != nil {
+		t.Fatalf("BeginTransaction A: %v", err)
+	}
+	createdA, err := srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
+		EntityType: "Component", Properties: map[string]string{"name": "a"}, TransactionId: beginA.TransactionId,
+	})
+	if err != nil {
+		t.Fatalf("CreateEntity A: %v", err)
+	}
+	if _, err = srv.CommitTransaction(ctx, &flowv1.CommitTransactionRequest{
+		TransactionId: beginA.TransactionId,
+	}); err == nil {
+		t.Fatal("expected commit A merge failure")
+	}
+	stateA, lookupErr := srv.txManager.Lookup(beginA.TransactionId)
+	if lookupErr != nil || !stateA.CommitStarted || !stateA.CommitCreated || stateA.MergeCompleted {
+		t.Fatalf("commit A did not retain the created-commit milestone: state=%+v error=%v", stateA, lookupErr)
+	}
+
+	// Main advances: transaction B commits on top.
+	beginB, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
+	if err != nil {
+		t.Fatalf("BeginTransaction B: %v", err)
+	}
+	createdB, err := srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
+		EntityType: "Component", Properties: map[string]string{"name": "b"}, TransactionId: beginB.TransactionId,
+	})
+	if err != nil {
+		t.Fatalf("CreateEntity B: %v", err)
+	}
+	if _, err = srv.CommitTransaction(ctx, &flowv1.CommitTransactionRequest{
+		TransactionId: beginB.TransactionId,
+	}); err != nil {
+		t.Fatalf("CommitTransaction B: %v", err)
+	}
+
+	// The retried commit A now hits step 5's divergence check and surfaces the
+	// SPEC-prescribed FAILED_PRECONDITION ("Commit not up-to-date with main").
+	if _, err = srv.CommitTransaction(ctx, &flowv1.CommitTransactionRequest{
+		TransactionId: beginA.TransactionId,
+	}); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("expected retried commit A to surface FAILED_PRECONDITION, got %v (%v)", status.Code(err), err)
+	}
+
+	// The SPEC error-table prescription for that condition: Refresh() then
+	// Commit(). The refresh must succeed (it resets the branch, discarding the
+	// orphaned commit, and re-applies A's change) and clear the commit-in-flight
+	// milestones so the retried commit re-enters the serialisation flow.
+	if _, err = srv.RefreshTransaction(ctx, &flowv1.RefreshTransactionRequest{
+		TransactionId: beginA.TransactionId,
+	}); err != nil {
+		t.Fatalf("RefreshTransaction after failed merge + main advance: %v", err)
+	}
+	refreshedA, lookupErr := srv.txManager.Lookup(beginA.TransactionId)
+	if lookupErr != nil || refreshedA.CommitStarted || refreshedA.CommitCreated || refreshedA.CommitHydrated {
+		t.Fatalf("refresh did not clear commit-in-flight milestones: state=%+v error=%v", refreshedA, lookupErr)
+	}
+	if _, err = srv.CommitTransaction(ctx, &flowv1.CommitTransactionRequest{
+		TransactionId: beginA.TransactionId,
+	}); err != nil {
+		t.Fatalf("retried CommitTransaction after refresh: %v", err)
+	}
+
+	// No data loss: A's entity is committed to main, and B's survives too.
+	if _, err = base.GetEntity(ctx, createdA.EntityId, "main"); err != nil {
+		t.Fatalf("transaction A entity lost after un-wedged commit: %v", err)
+	}
+	if _, err = base.GetEntity(ctx, createdB.EntityId, "main"); err != nil {
+		t.Fatalf("transaction B entity lost after A's un-wedged commit: %v", err)
 	}
 }
 
@@ -5275,20 +5382,19 @@ func TestCommitTransaction_ErrorAfterCommitRetainsResumableState(t *testing.T) {
 	if lookupErr != nil || !state.CommitStarted || !state.CommitCreated {
 		t.Fatalf("created commit was not retained: state=%+v error=%v", state, lookupErr)
 	}
-	// A mutation and a refresh against the recovered mid-commit transaction are
-	// rejected with NOT_FOUND (SPEC error-table row "Transaction not found":
-	// the commit-in-progress handle no longer references a usable active
-	// transaction from the write surface).
+	// A mutation against the recovered mid-commit transaction is rejected
+	// with NOT_FOUND (SPEC error-table row "Transaction not found": the
+	// commit-in-progress handle no longer references a usable active
+	// transaction from the write surface). RefreshTransaction, by contrast,
+	// remains available for a commit-started transaction whose commit has not
+	// merged (the SPEC "Commit not up-to-date with main" row prescribes
+	// "Call Refresh() before Commit()") — see
+	// TestRefreshTransaction_CommitMergeFailedThenMainAdvancedUnwedges.
 	if _, err = restarted.CreateEntity(ctx, &flowv1.CreateEntityRequest{
 		EntityType: "Component", Properties: map[string]string{"name": "late"},
 		TransactionId: begin.TransactionId,
 	}); status.Code(err) != codes.NotFound {
 		t.Fatalf("expected mutation rejection after commit creation, got %v", err)
-	}
-	if _, err = restarted.RefreshTransaction(ctx, &flowv1.RefreshTransactionRequest{
-		TransactionId: begin.TransactionId,
-	}); status.Code(err) != codes.NotFound {
-		t.Fatalf("expected refresh rejection after commit creation, got %v", err)
 	}
 	if _, err = restarted.CommitTransaction(ctx, &flowv1.CommitTransactionRequest{
 		TransactionId: begin.TransactionId,
@@ -5436,22 +5542,28 @@ func TestCommitTransaction_StateWriteFailureRemainsDiscoverableAndRetryable(t *t
 			_, refreshErr := srv.RefreshTransaction(ctx, &flowv1.RefreshTransactionRequest{
 				TransactionId: begin.TransactionId,
 			})
-			// A refresh against a transaction whose commit has started is
-			// rejected with NOT_FOUND (SPEC error-table row "Transaction not
-			// found"), matching the other commit-in-progress refresh guards.
-			if tc.commitCreated && status.Code(refreshErr) != codes.NotFound {
-				t.Fatalf("refresh after created commit error=%v", refreshErr)
-			}
-			if !tc.commitCreated && refreshErr != nil {
-				t.Fatalf("refresh after pre-commit failure: %v", refreshErr)
+			// A refresh remains available after both failure points — the SPEC
+			// error-table row "Commit not up-to-date with main" prescribes
+			// "Call Refresh() before Commit()", and a commit whose state write
+			// failed never merged (the SPEC "Commit merge failed
+			// (post-re-hydration)" row leaves the merge retryable). The
+			// refresh re-opens the transaction, so the retried commit re-enters
+			// the serialisation flow: a fresh commit is created for the
+			// after-commit case, whose orphaned commit the refresh discarded.
+			if refreshErr != nil {
+				t.Fatalf("refresh after %s failure: %v", tc.name, refreshErr)
 			}
 			if _, err = srv.CommitTransaction(ctx, &flowv1.CommitTransactionRequest{
 				TransactionId: begin.TransactionId,
 			}); err != nil {
 				t.Fatalf("retry CommitTransaction: %v", err)
 			}
-			if countingGit.commits != 1 {
-				t.Fatalf("expected one Git commit, got %d", countingGit.commits)
+			expectedCommits := 1
+			if tc.commitCreated {
+				expectedCommits = 2
+			}
+			if countingGit.commits != expectedCommits {
+				t.Fatalf("expected %d Git commits, got %d", expectedCommits, countingGit.commits)
 			}
 		})
 	}
