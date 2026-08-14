@@ -2,6 +2,18 @@ package flow
 
 import "testing"
 
+// testSystemImportTypes mirrors the built-in system import types used by the
+// trust-policy tests (the production DefaultSystemImportTypes helper was
+// deleted as test-only surface).
+func testSystemImportTypes() map[string]EmbassyResolvedImportType {
+	return map[string]EmbassyResolvedImportType{
+		builtInLawPetitionImportType: {
+			Name:    builtInLawPetitionImportType,
+			BuiltIn: true,
+		},
+	}
+}
+
 func TestEmbassyTrustPolicyAllowsBuiltInImportType(t *testing.T) {
 	t.Parallel()
 
@@ -9,7 +21,7 @@ func TestEmbassyTrustPolicyAllowsBuiltInImportType(t *testing.T) {
 	if err := ValidateEmbassyTrustPolicy(
 		policy,
 		EmbassyImportRequest{ImportType: builtInLawPetitionImportType},
-		DefaultSystemImportTypes(),
+		testSystemImportTypes(),
 		nil,
 	); err != nil {
 		t.Fatalf("expected built-in import type to validate, got %v", err)
@@ -23,7 +35,7 @@ func TestEmbassyTrustPolicyAllowsCustomImportType(t *testing.T) {
 	if err := ValidateEmbassyTrustPolicy(
 		policy,
 		EmbassyImportRequest{ImportType: "external-submission"},
-		DefaultSystemImportTypes(),
+		testSystemImportTypes(),
 		map[string]EmbassyFlowImportTypeSpec{"external-submission": {Node: "intake"}},
 	); err != nil {
 		t.Fatalf("expected custom import type to validate, got %v", err)
@@ -40,7 +52,7 @@ func TestEmbassyTrustPolicyEnforcesAllowedImportTypes(t *testing.T) {
 	err := ValidateEmbassyTrustPolicy(
 		policy,
 		EmbassyImportRequest{ImportType: "external-submission"},
-		DefaultSystemImportTypes(),
+		testSystemImportTypes(),
 		map[string]EmbassyFlowImportTypeSpec{"external-submission": {Node: "intake"}},
 	)
 	if err == nil {
@@ -58,7 +70,7 @@ func TestEmbassyTrustPolicyEnforcesAllowedSubjects(t *testing.T) {
 	err := ValidateEmbassyTrustPolicy(
 		policy,
 		EmbassyImportRequest{ImportType: builtInLawPetitionImportType, Subject: "spiffe://other/embassy"},
-		DefaultSystemImportTypes(),
+		testSystemImportTypes(),
 		nil,
 	)
 	if err == nil {
@@ -76,7 +88,7 @@ func TestEmbassyTrustPolicyEnforcesMaxBundleSize(t *testing.T) {
 	err := ValidateEmbassyTrustPolicy(
 		policy,
 		EmbassyImportRequest{ImportType: builtInLawPetitionImportType, BundleSizeBytes: 5},
-		DefaultSystemImportTypes(),
+		testSystemImportTypes(),
 		nil,
 	)
 	if err == nil {

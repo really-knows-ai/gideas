@@ -317,13 +317,15 @@ func newTestQueueManager(t *testing.T) flow.QueueManager {
 // both the interface and a stop function.
 func newTestQueueManagerWithStop(t *testing.T) (flow.QueueManager, func() error) {
 	t.Helper()
-	qm, err := flow.NewQueueManager(
-		flow.WithShardID("test-shard"),
-	)
+	// The storage-path and API-port knobs are configured via environment
+	// variables (the SDK option constructors were deleted as test-only).
+	t.Setenv("FLOW_STORAGE_PATH", ":memory:")
+	t.Setenv("FLOW_HITL_PORT", "0")
+	qm, err := flow.NewQueueManager()
 	if err != nil {
 		t.Fatalf("NewQueueManager failed: %v", err)
 	}
-	if err := qm.Start(context.Background(), flow.WithStoragePath(":memory:"), flow.WithAPIPort("0")); err != nil {
+	if err := qm.Start(context.Background()); err != nil {
 		t.Fatalf("QueueManager.Start failed: %v", err)
 	}
 	t.Cleanup(func() { _ = qm.Stop() })

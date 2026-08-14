@@ -35,13 +35,6 @@ func (g *LawGroup) Mode() GroupMode { return g.mode }
 // Passes returns the number of evaluation passes (no round-trip).
 func (g *LawGroup) Passes() int32 { return g.passes }
 
-// NewLawGroup creates a LawGroup domain object. The librarian parameter may
-// be nil when the LawGroup is used only for config access (Name/Mode/Passes).
-// When librarian is nil, calling GetLaws() or Attest() will panic.
-func NewLawGroup(name string, mode GroupMode, passes int32) *LawGroup {
-	return &LawGroup{name: name, mode: mode, passes: passes}
-}
-
 // newLawGroup creates a LawGroup domain object from its constituent parts.
 func newLawGroup(name string, mode GroupMode, passes int32, librarian flowv1.LibrarianServiceClient) *LawGroup {
 	return &LawGroup{name: name, mode: mode, passes: passes, librarian: librarian}
@@ -82,14 +75,6 @@ type DispatchEntry struct {
 	Unit      Unit
 	Appraiser string // appraiser id
 	Pass      int    // 1-based
-}
-
-// GetGroup returns the group name for a law, or DefaultGroup if empty.
-func GetGroup(law *flowv1.Law) string {
-	if g := law.GetGroup(); g != "" {
-		return g
-	}
-	return DefaultGroup
 }
 
 // PartitionLawsByGroup groups laws by their Group field.
@@ -199,18 +184,6 @@ func ComputeDispatchMatrix(
 		}
 	}
 	return entries
-}
-
-// BuildDispatchMatrix is a convenience that chains PartitionLawsByGroup
-// -> ComputeUnits -> ComputeDispatchMatrix.
-func BuildDispatchMatrix(
-	laws []*flowv1.Law,
-	groups map[string]*LawGroup,
-	appraiserIDs []string,
-) []DispatchEntry {
-	lawsByGroup := PartitionLawsByGroup(laws)
-	unitsByGroup := ComputeUnits(lawsByGroup, groups)
-	return ComputeDispatchMatrix(unitsByGroup, appraiserIDs, groups)
 }
 
 // sortedGroupNames returns the sorted keys of m for deterministic map iteration.

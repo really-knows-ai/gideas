@@ -10066,7 +10066,7 @@ func TestApplySchema_BeforeDBReady(t *testing.T) {
 func TestApplySchema_InvalidSchemaBeforeDBReady(t *testing.T) {
 	opPub, _ := generateTestKey()
 	scPub, _ := generateTestKey()
-	st, _ := ladybug.OpenInMemory()
+	st, _ := ladybug.Open(t.TempDir())
 	t.Cleanup(func() { _ = st.Close() })
 	gs, _ := gitstore.New(t.TempDir())
 	// Do NOT call MarkDBReady.

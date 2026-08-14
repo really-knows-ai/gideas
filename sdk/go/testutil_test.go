@@ -64,8 +64,8 @@ func setupGRPCTestEnv(
 
 // setupStandaloneGRPCTestConn creates a standalone TCP-based gRPC server,
 // registers services on it, and returns the client connection. This is used
-// by standalone clients (EmbassyClient, FederationClient) that are not part
-// of the main Client struct and don't need the workitem interceptor.
+// by standalone clients (e.g. FederationClient) that are not part of the
+// main Client struct and don't need the workitem interceptor.
 func setupStandaloneGRPCTestConn(
 	t *testing.T, registerServices func(srv *grpc.Server),
 ) *grpc.ClientConn {

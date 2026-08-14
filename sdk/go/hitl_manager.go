@@ -37,54 +37,15 @@ type queueManagerConfig struct {
 	customRoutes func(mux *http.ServeMux)
 }
 
-// WithStoragePath sets the directory for queue.db.
-// Overridden by FLOW_STORAGE_PATH environment variable if set.
-func WithStoragePath(path string) QueueManagerOption {
-	return func(c *queueManagerConfig) { c.storagePath = path }
-}
-
-// WithShardID sets the shard identity. Defaults to HOSTNAME env.
-func WithShardID(id string) QueueManagerOption {
-	return func(c *queueManagerConfig) { c.shardID = id }
-}
-
 // WithQueueName sets the queue name for scoping queue items.
 // Defaults to FLOW_NODE_ID environment variable, then "default".
 func WithQueueName(name string) QueueManagerOption {
 	return func(c *queueManagerConfig) { c.queueName = name }
 }
 
-// WithServiceName sets the headless service name for DNS peer discovery.
-// Overridden by FLOW_SERVICE_NAME environment variable if set.
-func WithServiceName(name string) QueueManagerOption {
-	return func(c *queueManagerConfig) { c.serviceName = name }
-}
-
-// WithNamespace sets the Kubernetes namespace for DNS peer discovery.
-// Overridden by FLOW_NAMESPACE environment variable if set.
-func WithNamespace(ns string) QueueManagerOption {
-	return func(c *queueManagerConfig) { c.namespace = ns }
-}
-
 // WithClient sets the SDK Client for telemetry emission.
 func WithClient(c *Client) QueueManagerOption {
 	return func(cfg *queueManagerConfig) { cfg.client = c }
-}
-
-// WithPeerResolver injects a custom PeerResolver (for testing).
-func WithPeerResolver(r PeerResolver) QueueManagerOption {
-	return func(c *queueManagerConfig) { c.peerResolver = r }
-}
-
-// WithAPIPort sets the REST API listen port. Default "8080".
-// Overridden by FLOW_HITL_PORT environment variable if set.
-func WithAPIPort(port string) QueueManagerOption {
-	return func(c *queueManagerConfig) { c.apiPort = port }
-}
-
-// WithPeerPort sets the gRPC port for peer connections. Default "50053".
-func WithPeerPort(port string) QueueManagerOption {
-	return func(c *queueManagerConfig) { c.peerPort = port }
 }
 
 // WithCustomRoutes registers additional HTTP routes on the QueueManager's
@@ -164,7 +125,7 @@ func (qm *queueManagerImpl) Start(ctx context.Context, opts ...QueueManagerOptio
 	for _, opt := range opts {
 		opt(cfg)
 	}
-	// Apply the effective API port so a Start-time WithAPIPort (e.g. "0" for
+	// Apply the effective API port so a Start-time override (e.g. "0" for
 	// an ephemeral test port) actually takes effect instead of silently
 	// falling back to the NewQueueManager-time default.
 	qm.apiPort = cfg.apiPort
@@ -285,12 +246,6 @@ func (qm *queueManagerImpl) Stop() error {
 		_ = qm.store.close()
 	}
 	return nil
-}
-
-// SetClient wires the SDK Client for telemetry emission.
-// Called from the handler after NewClient().
-func (qm *queueManagerImpl) SetClient(c *Client) {
-	qm.client = c
 }
 
 // RegisterGRPC registers the QueuePeerService on the given gRPC server.

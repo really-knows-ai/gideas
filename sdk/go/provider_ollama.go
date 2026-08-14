@@ -33,23 +33,6 @@ type ollamaProvider struct {
 // ollamaOption configures an ollamaProvider.
 type ollamaOption func(*ollamaProvider)
 
-// withBaseURL overrides the base URL for the Ollama API.
-// If not set, the provider reads OLLAMA_BASE_URL from the environment,
-// falling back to http://localhost:11434.
-func withBaseURL(url string) ollamaOption {
-	return func(p *ollamaProvider) {
-		p.baseURL = strings.TrimRight(url, "/")
-	}
-}
-
-// withTimeout overrides the HTTP client timeout.
-// The default is 5 minutes, appropriate for long LLM generation calls.
-func withTimeout(d time.Duration) ollamaOption {
-	return func(p *ollamaProvider) {
-		p.httpClient.Timeout = d
-	}
-}
-
 // newOllamaProvider creates an ollamaProvider.
 //
 // By default the base URL is read from the OLLAMA_BASE_URL environment

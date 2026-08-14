@@ -5054,7 +5054,7 @@ func TestRehydrateMainFromFiles_EntitiesDirOnly_ReturnsError(t *testing.T) {
 // failed": the R8 "automatic recovery on next startup" escape hatch
 // presupposes a consistent graph to serve).
 func TestRehydrateMainFromFiles_FailureKeepsMainConsistent(t *testing.T) {
-	s, err := OpenInMemory()
+	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
 	}

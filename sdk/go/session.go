@@ -129,10 +129,10 @@ func (s *session) Close() error {
 // call invokes fn with the given context, annotating it with entity-type
 // metadata when a key is supplied. fn must be a closure over a typed
 // CartographerServiceClient method to preserve compile-time type safety.
-// key is the metadata key ("entity_type") per the operation-specific table;
-// it is empty for RPCs that annotate nothing. types are the entity type(s)
-// required for capability resolution by the Sidecar proxy. Each type is
-// appended as its own metadata value.
+// key is the metadata key (metadata.MetadataKeyEntityType per the
+// operation-specific table); it is empty for RPCs that annotate nothing.
+// types are the entity type(s) required for capability resolution by the
+// Sidecar proxy. Each type is appended as its own metadata value.
 // ExecuteCypher passes no key and no types: the SDK attaches no entity-type
 // metadata for it (SPEC R3 — the Cartographer derives the types from its own
 // server-side parse of the statement).

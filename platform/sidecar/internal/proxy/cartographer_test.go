@@ -10,11 +10,9 @@ import (
 	"net"
 	"sync"
 	"testing"
-	"time"
 
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
 	flowmeta "github.com/foundry/flow/pkg/metadata"
-	flow "github.com/foundry/flow/sdk/go"
 	"github.com/foundry/flow/sidecar/internal/service"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -247,13 +245,12 @@ func (s *captureCartographerServer) metadata() metadata.MD {
 }
 
 // cartographerWire is the full wire-harness result from
-// setupCartographerWireFull: the capture server, the SDK client, the Sidecar's
-// public key (for signature verification), the Sidecar server (for session
-// injection), and a raw Cartographer client dialing the Sidecar (for direct
-// RPC invocation without the SDK).
+// setupCartographerWireFull: the capture server, the Sidecar's public key
+// (for signature verification), the Sidecar server (for session injection),
+// and a raw Cartographer client dialing the Sidecar (for direct RPC
+// invocation without the SDK domain-object layer).
 type cartographerWire struct {
 	capture    *captureCartographerServer
-	client     *flow.Client
 	sidecarPub ed25519.PublicKey
 	sidecarSrv *service.SidecarServer
 	rawClient  flowv1.CartographerServiceClient
@@ -261,10 +258,9 @@ type cartographerWire struct {
 
 // setupCartographerWireFull spins up an in-process fake Cartographer, a real
 // Sidecar gRPC server with the CartographerProxy + identity interceptors +
-// signing key, and a real SDK client dialing the Sidecar, plus a raw
-// Cartographer client dialing the Sidecar directly. It returns the capture
-// server, the SDK client, and the Sidecar's public key for signature
-// verification along with the Sidecar server and raw client.
+// signing key, and a raw Cartographer client dialing the Sidecar. It returns
+// the capture server, the Sidecar's public key for signature verification,
+// the Sidecar server, and the raw client.
 func setupCartographerWireFull(t *testing.T, nodeCaps string) *cartographerWire {
 	t.Helper()
 
@@ -304,15 +300,7 @@ func setupCartographerWireFull(t *testing.T, nodeCaps string) *cartographerWire 
 	go func() { _ = grpcSrv.Serve(sidecarLis) }()
 	t.Cleanup(grpcSrv.Stop)
 
-	// Real SDK client dialing the Sidecar.
-	client, err := flow.NewClient(flow.WithSidecarAddress(sidecarLis.Addr().String()), flow.WithWorkitemID("wi-1"))
-	if err != nil {
-		t.Fatalf("new sdk client: %v", err)
-	}
-	t.Cleanup(func() { _ = client.Close() })
-
-	// Raw Cartographer client dialing the Sidecar directly, for RPCs the SDK
-	// cannot issue without a transaction handle (fixed-gate block tests).
+	// Raw Cartographer client dialing the Sidecar directly.
 	rawConn, err := grpc.NewClient(
 		sidecarLis.Addr().String(),
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
@@ -324,7 +312,6 @@ func setupCartographerWireFull(t *testing.T, nodeCaps string) *cartographerWire 
 
 	return &cartographerWire{
 		capture:    capture,
-		client:     client,
 		sidecarPub: pub,
 		sidecarSrv: sidecarSrv,
 		rawClient:  flowv1.NewCartographerServiceClient(rawConn),
@@ -332,14 +319,15 @@ func setupCartographerWireFull(t *testing.T, nodeCaps string) *cartographerWire 
 }
 
 // setupCartographerWire spins up the wire harness and returns the capture
-// server, the SDK client, and the Sidecar's public key for signature
-// verification. It is the convenience form used by the SDK-path wire tests.
+// server, a raw Cartographer client dialing the Sidecar, and the Sidecar's
+// public key for signature verification. It is the convenience form used by
+// the wire tests.
 func setupCartographerWire(
 	t *testing.T, nodeCaps string,
-) (*captureCartographerServer, *flow.Client, ed25519.PublicKey) {
+) (*captureCartographerServer, flowv1.CartographerServiceClient, ed25519.PublicKey) {
 	t.Helper()
 	w := setupCartographerWireFull(t, nodeCaps)
-	return w.capture, w.client, w.sidecarPub
+	return w.capture, w.rawClient, w.sidecarPub
 }
 
 // assertSignedCapabilitiesOnMD verifies that the metadata carries the given
@@ -467,8 +455,9 @@ func TestCartographerProxy_CheckCapability_ExactOrLiteralWildcard(t *testing.T) 
 func TestCartographerProxy_E2E_ExecuteCypher_ReachesUpstreamWithSignedCapabilities(t *testing.T) {
 	const caps = "READ:graph/entity/*"
 	capture, client, pub := setupCartographerWire(t, caps)
+	ctx := context.Background()
 
-	_, err := client.GetGraph().ExecuteCypher("MATCH (c:Component) RETURN c", nil)
+	_, err := client.ExecuteCypher(ctx, &flowv1.ExecuteCypherRequest{Cypher: "MATCH (c:Component) RETURN c"})
 	if err != nil {
 		t.Fatalf("ExecuteCypher via SDK→Sidecar→Cartographer failed: %v", err)
 	}
@@ -485,14 +474,17 @@ func TestCartographerProxy_E2E_Mode1_BlocksWrongType(t *testing.T) {
 	// The node holds no WRITE:graph/entity/Component grant (only the tx grant).
 	const caps = "READ:graph/entity/*,WRITE:graph/tx"
 	capture, client, _ := setupCartographerWire(t, caps)
+	ctx := context.Background()
 
-	graph := client.GetGraph()
-	tx, err := graph.BeginTransaction()
+	begin, err := client.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
 	if err != nil {
 		t.Fatalf("BeginTransaction: %v", err)
 	}
 	before := capture.count()
-	_, err = tx.CreateEntity(entityTypeComponent, nil, nil, nil)
+	_, err = client.CreateEntity(ctx, &flowv1.CreateEntityRequest{
+		EntityType:    entityTypeComponent,
+		TransactionId: begin.GetTransactionId(),
+	})
 	if err == nil {
 		t.Fatal("expected CreateEntity to be blocked by the mode-1 capability check")
 	}
@@ -510,17 +502,20 @@ func TestCartographerProxy_E2E_Mode1_BlocksWrongType(t *testing.T) {
 func TestCartographerProxy_E2E_Mode1_PassesWithWildcardGrant(t *testing.T) {
 	const caps = "READ:graph/entity/*,WRITE:graph/entity/*,WRITE:graph/tx"
 	capture, client, _ := setupCartographerWire(t, caps)
+	ctx := context.Background()
 
-	graph := client.GetGraph()
-	tx, err := graph.BeginTransaction()
+	begin, err := client.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
 	if err != nil {
 		t.Fatalf("BeginTransaction: %v", err)
 	}
-	entity, err := tx.CreateEntity(entityTypeComponent, nil, nil, nil)
+	entity, err := client.CreateEntity(ctx, &flowv1.CreateEntityRequest{
+		EntityType:    entityTypeComponent,
+		TransactionId: begin.GetTransactionId(),
+	})
 	if err != nil {
 		t.Fatalf("CreateEntity with WRITE:graph/entity/* should pass mode-1: %v", err)
 	}
-	if entity.ID != "entity-1" || entity.Type != entityTypeComponent {
+	if entity.GetEntityId() != "entity-1" || entity.GetEntityType() != entityTypeComponent {
 		t.Fatalf("unexpected forwarded entity: %+v", entity)
 	}
 	if capture.lastMethod() != "CreateEntity" {
@@ -535,18 +530,14 @@ func TestCartographerProxy_E2E_Mode1_PassesWithWildcardGrant(t *testing.T) {
 func TestCartographerProxy_E2E_Mode2_PassesThrough(t *testing.T) {
 	const caps = "READ:graph/entity/*,WRITE:graph/tx"
 	capture, client, pub := setupCartographerWire(t, caps)
+	ctx := context.Background()
 
-	graph := client.GetGraph()
-	tx, err := graph.BeginTransaction()
-	if err != nil {
-		t.Fatalf("BeginTransaction: %v", err)
-	}
-	edge, err := tx.DeleteEdge("f47ac10b-58cc-4372-a567-0e02b2c3d479")
+	edge, err := client.DeleteEdge(ctx, &flowv1.DeleteEdgeRequest{Id: "f47ac10b-58cc-4372-a567-0e02b2c3d479"})
 	if err != nil {
 		t.Fatalf("DeleteEdge mode-2 pass-through failed: %v", err)
 	}
-	if edge.ID != "f47ac10b-58cc-4372-a567-0e02b2c3d479" {
-		t.Fatalf("expected forwarded edge id, got %q", edge.ID)
+	if edge.GetEdgeId() != "f47ac10b-58cc-4372-a567-0e02b2c3d479" {
+		t.Fatalf("expected forwarded edge id, got %q", edge.GetEdgeId())
 	}
 	if capture.lastMethod() != "DeleteEdge" {
 		t.Fatalf("expected the Cartographer to receive DeleteEdge, got %q", capture.lastMethod())
@@ -561,11 +552,15 @@ func TestCartographerProxy_E2E_Mode2_PassesThrough(t *testing.T) {
 // READ gate (SearchNeighbors) and the wildcard WRITE gate (Sync) block.
 func TestCartographerProxy_E2E_ZeroCapabilityNode_BlockedOnMode1(t *testing.T) {
 	capture, client, _ := setupCartographerWire(t, "") // node with no grants
-	graph := client.GetGraph()
+	ctx := context.Background()
 	before := capture.count()
 
 	// Mode-1 specific-type READ: requires READ:graph/entity/Component.
-	if _, err := graph.SearchNeighbors([]float32{0.1, 0.2}, entityTypeComponent, 10); err == nil {
+	if _, err := client.SearchNeighbors(ctx, &flowv1.SearchNeighborsRequest{
+		Embedding:  []float32{0.1, 0.2},
+		EntityType: entityTypeComponent,
+		TopK:       10,
+	}); err == nil {
 		t.Fatal("expected zero-capability node to be denied on mode-1 SearchNeighbors")
 	} else if st, ok := status.FromError(err); !ok || st.Code() != codes.PermissionDenied {
 		t.Fatalf("expected PermissionDenied, got %v", err)
@@ -575,7 +570,7 @@ func TestCartographerProxy_E2E_ZeroCapabilityNode_BlockedOnMode1(t *testing.T) {
 	}
 
 	// Mode-1 wildcard WRITE: Sync requires WRITE:graph/entity/*.
-	if err := graph.Sync(); err == nil {
+	if _, err := client.Sync(ctx, &flowv1.SyncRequest{}); err == nil {
 		t.Fatal("expected zero-capability node to be denied on mode-1 Sync")
 	} else if st, ok := status.FromError(err); !ok || st.Code() != codes.PermissionDenied {
 		t.Fatalf("expected PermissionDenied, got %v", err)
@@ -591,8 +586,11 @@ func TestCartographerProxy_E2E_ZeroCapabilityNode_BlockedOnMode1(t *testing.T) {
 // the request reaches the Cartographer (which enforces authoritatively).
 func TestCartographerProxy_E2E_ZeroCapabilityNode_PassesMode2(t *testing.T) {
 	capture, client, _ := setupCartographerWire(t, "") // node with no grants
+	ctx := context.Background()
 
-	if _, err := client.GetGraph().ExecuteCypher("MATCH (c:Component) RETURN c", nil); err != nil {
+	if _, err := client.ExecuteCypher(
+		ctx, &flowv1.ExecuteCypherRequest{Cypher: "MATCH (c:Component) RETURN c"},
+	); err != nil {
 		t.Fatalf("zero-capability node should pass mode-2 ExecuteCypher: %v", err)
 	}
 	if capture.lastMethod() != "ExecuteCypher" {
@@ -609,21 +607,20 @@ func TestCartographerProxy_E2E_ZeroCapabilityNode_PassesMode2(t *testing.T) {
 func TestCartographerProxy_E2E_Mode1_AllTypesSearch_BlocksPerTypeGrantOnly(t *testing.T) {
 	const caps = "READ:graph/entity/Component,WRITE:graph/tx"
 	capture, client, _ := setupCartographerWire(t, caps)
-
-	graph := client.GetGraph()
+	ctx := context.Background()
 	before := capture.count()
 
-	if _, err := graph.SearchNeighbors([]float32{0.1, 0.2}, "", 10); err == nil {
+	if _, err := client.SearchNeighbors(ctx, &flowv1.SearchNeighborsRequest{Embedding: []float32{0.1, 0.2}}); err == nil {
 		t.Fatal("expected an all-types SearchNeighbors without READ:graph/entity/* to be blocked")
 	} else if st, ok := status.FromError(err); !ok || st.Code() != codes.PermissionDenied {
 		t.Fatalf("expected PermissionDenied, got %v", err)
 	}
-	if _, err := graph.FullTextSearch("auth service", ""); err == nil {
+	if _, err := client.FullTextSearch(ctx, &flowv1.FullTextSearchRequest{Query: "auth service"}); err == nil {
 		t.Fatal("expected an all-types FullTextSearch without READ:graph/entity/* to be blocked")
 	} else if st, ok := status.FromError(err); !ok || st.Code() != codes.PermissionDenied {
 		t.Fatalf("expected PermissionDenied, got %v", err)
 	}
-	if _, err := graph.ListEntities(""); err == nil {
+	if _, err := client.ListEntities(ctx, &flowv1.ListEntitiesRequest{}); err == nil {
 		t.Fatal("expected an all-types ListEntities without READ:graph/entity/* to be blocked")
 	} else if st, ok := status.FromError(err); !ok || st.Code() != codes.PermissionDenied {
 		t.Fatalf("expected PermissionDenied, got %v", err)
@@ -640,22 +637,23 @@ func TestCartographerProxy_E2E_Mode1_AllTypesSearch_BlocksPerTypeGrantOnly(t *te
 func TestCartographerProxy_E2E_Mode1_AllTypesSearch_PassesWithWildcardGrant(t *testing.T) {
 	const caps = "READ:graph/entity/*"
 	capture, client, _ := setupCartographerWire(t, caps)
+	ctx := context.Background()
 
-	if _, err := client.GetGraph().SearchNeighbors([]float32{0.1, 0.2}, "", 10); err != nil {
+	if _, err := client.SearchNeighbors(ctx, &flowv1.SearchNeighborsRequest{Embedding: []float32{0.1, 0.2}}); err != nil {
 		t.Fatalf("all-types SearchNeighbors with READ:graph/entity/* should pass mode-1: %v", err)
 	}
 	if capture.lastMethod() != methodSearchNeighbors {
 		t.Fatalf("expected the Cartographer to receive SearchNeighbors, got %q", capture.lastMethod())
 	}
 
-	if _, err := client.GetGraph().FullTextSearch("auth service", ""); err != nil {
+	if _, err := client.FullTextSearch(ctx, &flowv1.FullTextSearchRequest{Query: "auth service"}); err != nil {
 		t.Fatalf("all-types FullTextSearch with READ:graph/entity/* should pass mode-1: %v", err)
 	}
 	if capture.lastMethod() != methodFullTextSearch {
 		t.Fatalf("expected the Cartographer to receive FullTextSearch, got %q", capture.lastMethod())
 	}
 
-	if _, err := client.GetGraph().ListEntities(""); err != nil {
+	if _, err := client.ListEntities(ctx, &flowv1.ListEntitiesRequest{}); err != nil {
 		t.Fatalf("all-types ListEntities with READ:graph/entity/* should pass mode-1: %v", err)
 	}
 	if capture.lastMethod() != methodListEntities {
@@ -664,24 +662,24 @@ func TestCartographerProxy_E2E_Mode1_AllTypesSearch_PassesWithWildcardGrant(t *t
 }
 
 // TestCartographerProxy_E2E_ExportGraph_StreamsWithSignedCapabilities
-// exercises the server-streaming path: the SDK's ExportGraph reaches the fake
+// exercises the server-streaming path: an ExportGraph call reaches the fake
 // Cartographer through the Sidecar's stream interceptor, carrying signed
 // capability metadata, and the chunk is relayed back.
 func TestCartographerProxy_E2E_ExportGraph_StreamsWithSignedCapabilities(t *testing.T) {
 	const caps = "READ:graph/entity/*"
 	capture, client, pub := setupCartographerWire(t, caps)
+	ctx := context.Background()
 
-	stream, err := client.GetGraph().ExportGraph("json")
+	stream, err := client.ExportGraph(ctx, &flowv1.ExportGraphRequest{Format: "json"})
 	if err != nil {
 		t.Fatalf("ExportGraph: %v", err)
 	}
-	defer stream.Stop()
 	chunk, err := stream.Recv()
 	if err != nil {
 		t.Fatalf("Recv: %v", err)
 	}
-	if string(chunk.Data) != `{"nodes":[],"edges":[]}` {
-		t.Fatalf("unexpected export chunk: %q", string(chunk.Data))
+	if string(chunk.GetChunk()) != `{"nodes":[],"edges":[]}` {
+		t.Fatalf("unexpected export chunk: %q", string(chunk.GetChunk()))
 	}
 	if capture.lastExportReq() == nil || capture.lastExportReq().GetFormat() != "json" {
 		t.Fatal("expected the Cartographer to receive the ExportGraph request")
@@ -941,40 +939,61 @@ func TestCartographerProxy_E2E_MetadataType_PassesToCartographer(t *testing.T) {
 		targetID = "f47ac10b-58cc-4372-a567-0e02b2c3d479"
 	)
 	capture, client, _ := setupCartographerWire(t, caps)
-	// The fake Cartographer must return a canonical UUID v4: the SDK's
-	// UpdateEntity/DeleteEntity/CreateEdge validate ID format client-side.
+	// The fake Cartographer returns the canonical UUID v4 used below.
 	capture.createEntityID = entityID
+	ctx := context.Background()
 
-	graph := client.GetGraph()
-	tx, err := graph.BeginTransaction()
+	begin, err := client.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
 	if err != nil {
 		t.Fatalf("BeginTransaction: %v", err)
 	}
+	txID := begin.GetTransactionId()
 
-	// CreateEntity seeds the SDK's ID-to-type map: entityID → Component.
-	entity, err := tx.CreateEntity(entityTypeComponent, nil, nil, nil)
+	// CreateEntity (request body type Component, held) reaches the
+	// Cartographer; the fake reports the created entity as Component — the
+	// same mapping the SDK would record from the response.
+	entity, err := client.CreateEntity(ctx, &flowv1.CreateEntityRequest{
+		EntityType:    entityTypeComponent,
+		TransactionId: txID,
+	})
 	if err != nil {
 		t.Fatalf("CreateEntity: %v", err)
 	}
-	if entity.ID != entityID || entity.Type != entityTypeComponent {
+	if entity.GetEntityId() != entityID || entity.GetEntityType() != entityTypeComponent {
 		t.Fatalf("unexpected created entity: %+v", entity)
 	}
 
-	if _, err := tx.UpdateEntity(entityID, map[string]string{"name": "x"}, nil); err != nil {
+	// The SDK annotates entity_type=<resolved type> from its local ID-to-type
+	// mapping; emulate that wire annotation explicitly.
+	annotated := metadata.AppendToOutgoingContext(ctx, flowmeta.MetadataKeyEntityType, entityTypeComponent)
+
+	if _, err := client.UpdateEntity(annotated, &flowv1.UpdateEntityRequest{
+		Id:            entityID,
+		Properties:    map[string]string{"name": "x"},
+		TransactionId: txID,
+	}); err != nil {
 		t.Fatalf("UpdateEntity with held type should pass the mode-1 metadata check: %v", err)
 	}
 	if capture.lastMethod() != methodUpdateEntity {
 		t.Fatalf("expected UpdateEntity to reach the Cartographer, got %q", capture.lastMethod())
 	}
 
-	if _, err := tx.CreateEdge("DEPENDS_ON", entityID, targetID, nil); err != nil {
+	if _, err := client.CreateEdge(annotated, &flowv1.CreateEdgeRequest{
+		EdgeType:      "DEPENDS_ON",
+		FromEntityId:  entityID,
+		ToEntityId:    targetID,
+		TransactionId: txID,
+	}); err != nil {
 		t.Fatalf("CreateEdge with held source type should pass the mode-1 metadata check: %v", err)
 	}
 	if capture.lastMethod() != methodCreateEdge {
 		t.Fatalf("expected CreateEdge to reach the Cartographer, got %q", capture.lastMethod())
 	}
 
-	if _, err := tx.DeleteEntity(entityID); err != nil {
+	if _, err := client.DeleteEntity(annotated, &flowv1.DeleteEntityRequest{
+		Id:            entityID,
+		TransactionId: txID,
+	}); err != nil {
 		t.Fatalf("DeleteEntity with held type should pass the mode-1 metadata check: %v", err)
 	}
 	if capture.lastMethod() != methodDeleteEntity {
@@ -983,7 +1002,7 @@ func TestCartographerProxy_E2E_MetadataType_PassesToCartographer(t *testing.T) {
 
 	// The forwarded request carries the entity_type metadata the Sidecar
 	// consumed for its mode-1 specific-type check.
-	if got := capture.metadata().Get("entity_type"); len(got) != 1 || got[0] != entityTypeComponent {
+	if got := capture.metadata().Get(flowmeta.MetadataKeyEntityType); len(got) != 1 || got[0] != entityTypeComponent {
 		t.Fatalf("expected entity_type=Component forwarded to Cartographer, got %v", got)
 	}
 }
@@ -1008,23 +1027,30 @@ func TestCartographerProxy_E2E_Mode1_MetadataType_BlocksUnheldResolvedType(t *te
 		targetID = "f47ac10b-58cc-4372-a567-0e02b2c3d479"
 	)
 	capture, client, _ := setupCartographerWire(t, caps)
-	// The fake Cartographer reports the created entity as type Service, seeding
-	// entityID → Service into the SDK's TTL-fresh mapping while the node only
-	// holds WRITE:graph/entity/Component.
+	// The fake Cartographer reports the created entity as type Service, which
+	// the SDK would record as entityID → Service in its TTL-fresh mapping
+	// while the node only holds WRITE:graph/entity/Component.
 	capture.createEntityID = entityID
 	capture.createEntityType = "Service"
+	ctx := context.Background()
 
-	graph := client.GetGraph()
-	tx, err := graph.BeginTransaction()
+	begin, err := client.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
 	if err != nil {
 		t.Fatalf("BeginTransaction: %v", err)
 	}
-	// The request body type (Component) is held, so CreateEntity passes; the
-	// response seeds entityID → Service into the SDK's mapping.
-	if _, err := tx.CreateEntity(entityTypeComponent, nil, nil, nil); err != nil {
+	txID := begin.GetTransactionId()
+	// The request body type (Component) is held, so CreateEntity passes.
+	if _, err := client.CreateEntity(ctx, &flowv1.CreateEntityRequest{
+		EntityType:    entityTypeComponent,
+		TransactionId: txID,
+	}); err != nil {
 		t.Fatalf("CreateEntity (request body type Component, held): %v", err)
 	}
 	before := capture.count()
+
+	// The SDK resolves entityID → Service from the CreateEntity response;
+	// emulate that wire annotation explicitly.
+	annotated := metadata.AppendToOutgoingContext(ctx, flowmeta.MetadataKeyEntityType, "Service")
 
 	assertBlocked := func(name string, call func() error) {
 		t.Helper()
@@ -1036,15 +1062,20 @@ func TestCartographerProxy_E2E_Mode1_MetadataType_BlocksUnheldResolvedType(t *te
 	}
 
 	assertBlocked(methodUpdateEntity, func() error {
-		_, err := tx.UpdateEntity(entityID, nil, nil)
+		_, err := client.UpdateEntity(annotated, &flowv1.UpdateEntityRequest{Id: entityID, TransactionId: txID})
 		return err
 	})
 	assertBlocked(methodDeleteEntity, func() error {
-		_, err := tx.DeleteEntity(entityID)
+		_, err := client.DeleteEntity(annotated, &flowv1.DeleteEntityRequest{Id: entityID, TransactionId: txID})
 		return err
 	})
 	assertBlocked(methodCreateEdge, func() error {
-		_, err := tx.CreateEdge("DEPENDS_ON", entityID, targetID, nil)
+		_, err := client.CreateEdge(annotated, &flowv1.CreateEdgeRequest{
+			EdgeType:      "DEPENDS_ON",
+			FromEntityId:  entityID,
+			ToEntityId:    targetID,
+			TransactionId: txID,
+		})
 		return err
 	})
 
@@ -1070,33 +1101,46 @@ func TestCartographerProxy_E2E_Mode2_UnresolvableType_PassesThrough(t *testing.T
 		targetID = "f47ac10b-58cc-4372-a567-0e02b2c3d479"
 	)
 	capture, client, _ := setupCartographerWire(t, caps)
+	ctx := context.Background()
 
-	graph := client.GetGraph()
-	tx, err := graph.BeginTransaction()
+	begin, err := client.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
 	if err != nil {
 		t.Fatalf("BeginTransaction: %v", err)
 	}
+	txID := begin.GetTransactionId()
 
 	// No entity was created, so no ID is in the SDK's mapping: each RPC
 	// resolves to entity_type="*" and falls back to the mode-2 wildcard check.
-	if _, err := tx.UpdateEntity(entityID, nil, nil); err != nil {
+	// Emulate the SDK's "*" annotation explicitly.
+	annotated := metadata.AppendToOutgoingContext(ctx, flowmeta.MetadataKeyEntityType, "*")
+
+	if _, err := client.UpdateEntity(annotated, &flowv1.UpdateEntityRequest{
+		Id: entityID, TransactionId: txID,
+	}); err != nil {
 		t.Fatalf("UpdateEntity wildcard fallback should pass through: %v", err)
 	}
 	if capture.lastMethod() != methodUpdateEntity {
 		t.Fatalf("expected UpdateEntity to reach the Cartographer, got %q", capture.lastMethod())
 	}
-	if got := capture.metadata().Get("entity_type"); len(got) != 1 || got[0] != "*" {
+	if got := capture.metadata().Get(flowmeta.MetadataKeyEntityType); len(got) != 1 || got[0] != "*" {
 		t.Fatalf("expected entity_type=* forwarded to Cartographer, got %v", got)
 	}
 
-	if _, err := tx.DeleteEntity(entityID); err != nil {
+	if _, err := client.DeleteEntity(annotated, &flowv1.DeleteEntityRequest{
+		Id: entityID, TransactionId: txID,
+	}); err != nil {
 		t.Fatalf("DeleteEntity wildcard fallback should pass through: %v", err)
 	}
 	if capture.lastMethod() != methodDeleteEntity {
 		t.Fatalf("expected DeleteEntity to reach the Cartographer, got %q", capture.lastMethod())
 	}
 
-	if _, err := tx.CreateEdge("DEPENDS_ON", entityID, targetID, nil); err != nil {
+	if _, err := client.CreateEdge(annotated, &flowv1.CreateEdgeRequest{
+		EdgeType:      "DEPENDS_ON",
+		FromEntityId:  entityID,
+		ToEntityId:    targetID,
+		TransactionId: txID,
+	}); err != nil {
 		t.Fatalf("CreateEdge wildcard fallback should pass through: %v", err)
 	}
 	if capture.lastMethod() != methodCreateEdge {
@@ -1135,61 +1179,44 @@ func TestCartographerProxy_E2E_MetadataType_AbsentMetadata_FallsBackToMode2(t *t
 func TestCartographerProxy_E2E_TxLifecycle_PassesWithTxGrants(t *testing.T) {
 	const caps = "WRITE:graph/tx,READ:graph/tx"
 	capture, client, _ := setupCartographerWire(t, caps)
-	graph := client.GetGraph()
+	ctx := context.Background()
 
-	tx, err := graph.BeginTransaction()
-	if err != nil {
+	if _, err := client.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{}); err != nil {
 		t.Fatalf("BeginTransaction with WRITE:graph/tx: %v", err)
 	}
 	if capture.lastMethod() != methodBeginTransaction {
 		t.Fatalf("expected the Cartographer to receive BeginTransaction, got %q", capture.lastMethod())
 	}
 
-	if err := tx.Commit(); err != nil {
+	if _, err := client.CommitTransaction(ctx, &flowv1.CommitTransactionRequest{TransactionId: txID}); err != nil {
 		t.Fatalf("CommitTransaction with WRITE:graph/tx: %v", err)
 	}
 	if capture.lastMethod() != methodCommitTransaction {
 		t.Fatalf("expected the Cartographer to receive CommitTransaction, got %q", capture.lastMethod())
 	}
 
-	tx2, err := graph.BeginTransaction()
-	if err != nil {
-		t.Fatalf("BeginTransaction: %v", err)
-	}
-	if err := tx2.Rollback(); err != nil {
+	if _, err := client.RollbackTransaction(ctx, &flowv1.RollbackTransactionRequest{TransactionId: txID}); err != nil {
 		t.Fatalf("RollbackTransaction with WRITE:graph/tx: %v", err)
 	}
 	if capture.lastMethod() != methodRollbackTransaction {
 		t.Fatalf("expected the Cartographer to receive RollbackTransaction, got %q", capture.lastMethod())
 	}
 
-	tx3, err := graph.BeginTransaction()
-	if err != nil {
-		t.Fatalf("BeginTransaction: %v", err)
-	}
-	if err := tx3.Refresh(); err != nil {
+	if _, err := client.RefreshTransaction(ctx, &flowv1.RefreshTransactionRequest{TransactionId: txID}); err != nil {
 		t.Fatalf("RefreshTransaction with WRITE:graph/tx: %v", err)
 	}
 	if capture.lastMethod() != methodRefreshTransaction {
 		t.Fatalf("expected the Cartographer to receive RefreshTransaction, got %q", capture.lastMethod())
 	}
 
-	tx4, err := graph.BeginTransaction()
-	if err != nil {
-		t.Fatalf("BeginTransaction: %v", err)
-	}
-	if _, err := tx4.ExtendTimeout(time.Hour); err != nil {
+	if _, err := client.ExtendTimeout(ctx, &flowv1.ExtendTimeoutRequest{TransactionId: txID}); err != nil {
 		t.Fatalf("ExtendTimeout with WRITE:graph/tx: %v", err)
 	}
 	if capture.lastMethod() != methodExtendTimeout {
 		t.Fatalf("expected the Cartographer to receive ExtendTimeout, got %q", capture.lastMethod())
 	}
 
-	tx5, err := graph.BeginTransaction()
-	if err != nil {
-		t.Fatalf("BeginTransaction: %v", err)
-	}
-	if _, err := tx5.Diff(); err != nil {
+	if _, err := client.GetTransactionDiff(ctx, &flowv1.GetTransactionDiffRequest{TransactionId: txID}); err != nil {
 		t.Fatalf("GetTransactionDiff with READ:graph/tx: %v", err)
 	}
 	if capture.lastMethod() != methodGetTransactionDiff {
@@ -1201,8 +1228,8 @@ func TestCartographerProxy_E2E_TxLifecycle_PassesWithTxGrants(t *testing.T) {
 // block side (SPEC R3): a node holding no WRITE:graph/tx or READ:graph/tx
 // grant is denied at the Sidecar with PERMISSION_DENIED for every transaction
 // RPC, and no request reaches the Cartographer. The RPCs are issued with a raw
-// client because the SDK cannot obtain a transaction handle without the
-// WRITE:graph/tx grant (BeginTransaction is itself gated).
+// client because a caller without WRITE:graph/tx cannot obtain a transaction
+// handle (BeginTransaction is itself gated).
 func TestCartographerProxy_E2E_TxGate_BlocksWithoutTxGrants(t *testing.T) {
 	const caps = "READ:graph/entity/*"
 	w := setupCartographerWireFull(t, caps)
@@ -1256,8 +1283,9 @@ func TestCartographerProxy_E2E_TxGate_BlocksWithoutTxGrants(t *testing.T) {
 func TestCartographerProxy_E2E_Sync_PassesWithWildcardWrite(t *testing.T) {
 	const caps = "WRITE:graph/entity/*"
 	capture, client, _ := setupCartographerWire(t, caps)
+	ctx := context.Background()
 
-	if err := client.GetGraph().Sync(); err != nil {
+	if _, err := client.Sync(ctx, &flowv1.SyncRequest{}); err != nil {
 		t.Fatalf("Sync with WRITE:graph/entity/* should pass the fixed gate: %v", err)
 	}
 	if capture.lastMethod() != methodSync {
@@ -1272,9 +1300,10 @@ func TestCartographerProxy_E2E_Sync_PassesWithWildcardWrite(t *testing.T) {
 func TestCartographerProxy_E2E_Sync_BlocksWithoutWildcardWrite(t *testing.T) {
 	const caps = "READ:graph/entity/*"
 	capture, client, _ := setupCartographerWire(t, caps)
+	ctx := context.Background()
 	before := capture.count()
 
-	if err := client.GetGraph().Sync(); err == nil {
+	if _, err := client.Sync(ctx, &flowv1.SyncRequest{}); err == nil {
 		t.Fatal("expected Sync to be blocked without WRITE:graph/entity/*")
 	} else if st, ok := status.FromError(err); !ok || st.Code() != codes.PermissionDenied {
 		t.Fatalf("expected PermissionDenied, got %v", err)
@@ -1292,12 +1321,12 @@ func TestCartographerProxy_E2E_Sync_BlocksWithoutWildcardWrite(t *testing.T) {
 func TestCartographerProxy_E2E_ExportGraph_BlocksWithoutWildcardRead(t *testing.T) {
 	const caps = "WRITE:graph/entity/*"
 	capture, client, _ := setupCartographerWire(t, caps)
+	ctx := context.Background()
 
 	// ExportGraph is server-streaming: the Sidecar's status error is delivered
 	// on the stream (Recv), not on the establishment call itself.
-	stream, err := client.GetGraph().ExportGraph("json")
+	stream, err := client.ExportGraph(ctx, &flowv1.ExportGraphRequest{Format: "json"})
 	if err == nil {
-		defer stream.Stop()
 		_, err = stream.Recv()
 	}
 	if err == nil {
@@ -1317,23 +1346,29 @@ func TestCartographerProxy_E2E_ExportGraph_BlocksWithoutWildcardRead(t *testing.
 func TestCartographerProxy_E2E_Mode1_SpecificTypeRead_PassesWithHeldType(t *testing.T) {
 	const caps = "READ:graph/entity/Component"
 	capture, client, _ := setupCartographerWire(t, caps)
-	graph := client.GetGraph()
+	ctx := context.Background()
 
-	if _, err := graph.SearchNeighbors([]float32{0.1, 0.2}, entityTypeComponent, 10); err != nil {
+	if _, err := client.SearchNeighbors(ctx, &flowv1.SearchNeighborsRequest{
+		Embedding:  []float32{0.1, 0.2},
+		EntityType: entityTypeComponent,
+		TopK:       10,
+	}); err != nil {
 		t.Fatalf("SearchNeighbors with held type should pass mode-1: %v", err)
 	}
 	if capture.lastMethod() != methodSearchNeighbors {
 		t.Fatalf("expected the Cartographer to receive SearchNeighbors, got %q", capture.lastMethod())
 	}
 
-	if _, err := graph.FullTextSearch("auth service", entityTypeComponent); err != nil {
+	if _, err := client.FullTextSearch(ctx, &flowv1.FullTextSearchRequest{
+		Query: "auth service", EntityType: entityTypeComponent,
+	}); err != nil {
 		t.Fatalf("FullTextSearch with held type should pass mode-1: %v", err)
 	}
 	if capture.lastMethod() != methodFullTextSearch {
 		t.Fatalf("expected the Cartographer to receive FullTextSearch, got %q", capture.lastMethod())
 	}
 
-	if _, err := graph.ListEntities(entityTypeComponent); err != nil {
+	if _, err := client.ListEntities(ctx, &flowv1.ListEntitiesRequest{EntityType: entityTypeComponent}); err != nil {
 		t.Fatalf("ListEntities with held type should pass mode-1: %v", err)
 	}
 	if capture.lastMethod() != methodListEntities {
@@ -1349,7 +1384,7 @@ func TestCartographerProxy_E2E_Mode1_SpecificTypeRead_PassesWithHeldType(t *test
 func TestCartographerProxy_E2E_Mode1_SpecificTypeRead_BlocksUnheldType(t *testing.T) {
 	const caps = "READ:graph/entity/Service"
 	capture, client, _ := setupCartographerWire(t, caps)
-	graph := client.GetGraph()
+	ctx := context.Background()
 	before := capture.count()
 
 	readCalls := []struct {
@@ -1357,15 +1392,21 @@ func TestCartographerProxy_E2E_Mode1_SpecificTypeRead_BlocksUnheldType(t *testin
 		call func() error
 	}{
 		{methodSearchNeighbors, func() error {
-			_, err := graph.SearchNeighbors([]float32{0.1, 0.2}, entityTypeComponent, 10)
+			_, err := client.SearchNeighbors(ctx, &flowv1.SearchNeighborsRequest{
+				Embedding:  []float32{0.1, 0.2},
+				EntityType: entityTypeComponent,
+				TopK:       10,
+			})
 			return err
 		}},
 		{methodFullTextSearch, func() error {
-			_, err := graph.FullTextSearch("auth service", entityTypeComponent)
+			_, err := client.FullTextSearch(ctx, &flowv1.FullTextSearchRequest{
+				Query: "auth service", EntityType: entityTypeComponent,
+			})
 			return err
 		}},
 		{methodListEntities, func() error {
-			_, err := graph.ListEntities(entityTypeComponent)
+			_, err := client.ListEntities(ctx, &flowv1.ListEntitiesRequest{EntityType: entityTypeComponent})
 			return err
 		}},
 	}
@@ -1383,7 +1424,7 @@ func TestCartographerProxy_E2E_Mode1_SpecificTypeRead_BlocksUnheldType(t *testin
 
 // TestCartographerProxy_E2E_SessionMode_SignsCapabilitiesWithKey pins the
 // identity interceptor's session-mode enrichment branch (SPEC R3 / Capability
-// Authorisation Chain): when the SDK's workitem has an active assignment
+// Authorisation Chain): when the caller's workitem has an active assignment
 // session, the interceptor resolves the node identity from the session and
 // signs the attested capabilities with the Sidecar's configured key. The
 // session's node identity differs from the Sidecar's entry-bound fallback
@@ -1392,11 +1433,16 @@ func TestCartographerProxy_E2E_Mode1_SpecificTypeRead_BlocksUnheldType(t *testin
 func TestCartographerProxy_E2E_SessionMode_SignsCapabilitiesWithKey(t *testing.T) {
 	const caps = "READ:graph/entity/*"
 	w := setupCartographerWireFull(t, caps)
-	// Register the SDK's workitem as an active assignment whose session node
+	// Register the workitem as an active assignment whose session node
 	// identity differs from the Sidecar's fallback node identity.
 	startAssignmentSession(t, w.sidecarSrv, "wi-1", "session-node")
+	// The raw client carries no workitem interceptor, so attach the workitem
+	// identity explicitly to trigger the interceptor's session-mode branch.
+	ctx := metadata.AppendToOutgoingContext(context.Background(), flowmeta.MetadataKeyWorkitemID, "wi-1")
 
-	if _, err := w.client.GetGraph().ExecuteCypher("MATCH (c:Component) RETURN c", nil); err != nil {
+	if _, err := w.rawClient.ExecuteCypher(
+		ctx, &flowv1.ExecuteCypherRequest{Cypher: "MATCH (c:Component) RETURN c"},
+	); err != nil {
 		t.Fatalf("session-mode ExecuteCypher via SDK→Sidecar→Cartographer failed: %v", err)
 	}
 	if w.capture.count() == 0 {

@@ -359,48 +359,6 @@ func TestComputeDispatchMatrix_EmptyUnitSlice(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// BuildDispatchMatrix (integration)
-// ---------------------------------------------------------------------------
-
-func TestBuildDispatchMatrix_Integration(t *testing.T) {
-	laws := []*flowv1.Law{
-		{Id: lawL001, Group: "security"},
-		{Id: lawL002, Group: "security"},
-		{Id: lawL003, Group: "style"},
-		{Id: lawL004}, // empty group → "default"
-	}
-	groups := map[string]*LawGroup{
-		"security": {name: "security", mode: GroupModeLawByLaw, passes: 2},
-		"style":    {name: "style", mode: GroupModeBundle, passes: 1},
-	}
-	appraiserIDs := []string{"skeptic", "auditor"}
-
-	got := BuildDispatchMatrix(laws, groups, appraiserIDs)
-
-	// security: law-by-law, 2 laws × 2 appraisers × 2 passes = 8.
-	// style:    bundle, 1 × 2 appraisers × 1 pass = 2.
-	// default:  bundle (default), 1 × 2 appraisers × 1 pass = 2.
-	// total: 12.
-	if len(got) != 12 {
-		t.Fatalf("expected 12 dispatch entries, got %d", len(got))
-	}
-
-	groupsSeen := make(map[string]int)
-	for _, e := range got {
-		groupsSeen[e.Group]++
-	}
-	if groupsSeen["security"] != 8 {
-		t.Fatalf("expected 8 security entries, got %d", groupsSeen["security"])
-	}
-	if groupsSeen["style"] != 2 {
-		t.Fatalf("expected 2 style entries, got %d", groupsSeen["style"])
-	}
-	if groupsSeen[DefaultGroup] != 2 {
-		t.Fatalf("expected 2 default entries, got %d", groupsSeen[DefaultGroup])
-	}
-}
-
-// ---------------------------------------------------------------------------
 // Additional edge cases
 // ---------------------------------------------------------------------------
 

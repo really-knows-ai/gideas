@@ -38,9 +38,9 @@ type EntryClient struct {
 }
 
 // NewEntryClientForTest creates an EntryClient connected to the given
-// sidecar and event bus addresses. Named to make misuse obvious — this
-// is intended for external node packages that need to unit-test entry
-// functions with spy servers.
+// sidecar and event bus addresses. Named to make misuse obvious — this is a
+// cross-module test seam used by node packages (petition-watcher,
+// ttl-watcher) to unit-test entry functions against spy servers.
 func NewEntryClientForTest(sidecarAddr, eventBusAddr string) (*EntryClient, error) {
 	return newEntryClient(sidecarAddr, eventBusAddr)
 }

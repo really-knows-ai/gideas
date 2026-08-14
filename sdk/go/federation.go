@@ -60,7 +60,9 @@ func NewFederationClient(opts ...FederationOption) (*FederationClient, error) {
 	return newFederationClient(cfg.address)
 }
 
-// NewFederationClientForTest creates a FederationClient connected to the given address.
+// NewFederationClientForTest creates a FederationClient connected to the
+// given address. Named to make misuse obvious — this is a cross-module test
+// seam used by node packages (petition-watcher) to test against spy servers.
 func NewFederationClientForTest(address string) (*FederationClient, error) {
 	return newFederationClient(address)
 }

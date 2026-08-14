@@ -868,9 +868,9 @@ func TestStartupRehydrateFailureFatal(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("non-fatal when main holds graph data", func(t *testing.T) {
-		s, err := ladybug.OpenInMemory()
+		s, err := ladybug.Open(t.TempDir())
 		if err != nil {
-			t.Fatalf("OpenInMemory: %v", err)
+			t.Fatalf("Open: %v", err)
 		}
 		t.Cleanup(func() { _ = s.Close() })
 		if err := s.ApplySchema(ctx, &flowv1.Schema{
@@ -891,9 +891,9 @@ func TestStartupRehydrateFailureFatal(t *testing.T) {
 	})
 
 	t.Run("fatal when main is empty", func(t *testing.T) {
-		s, err := ladybug.OpenInMemory()
+		s, err := ladybug.Open(t.TempDir())
 		if err != nil {
-			t.Fatalf("OpenInMemory: %v", err)
+			t.Fatalf("Open: %v", err)
 		}
 		t.Cleanup(func() { _ = s.Close() })
 		// Fresh database — the state ladybug.Open's corruption recovery

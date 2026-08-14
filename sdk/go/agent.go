@@ -41,14 +41,6 @@ type agentConfig struct {
 	validationRetries int
 }
 
-// WithHeartbeatInterval overrides the default heartbeat interval for managed
-// liveness during inference execution.
-func WithHeartbeatInterval(d time.Duration) AgentOption {
-	return func(c *agentConfig) {
-		c.heartbeatInterval = d
-	}
-}
-
 // WithSchema sets the JSON Schema bytes for output validation.
 // The schema is compiled at construction time; malformed schemas are caught
 // early rather than at inference time.
@@ -127,8 +119,9 @@ type Agent struct {
 //   - WithSchema: JSON Schema bytes for output validation
 //   - WithQueryTemplate: query prompt template
 //
-// By default, the Agent uses an Ollama-backed InferFunc. Tests can override
-// this with OverrideModelForTest.
+// By default, the Agent uses an Ollama-backed InferFunc. Tests replace the
+// infer function by assigning Agent.inferFn directly (the test-only
+// OverrideModelForTest helper was deleted).
 //
 // The Client must already be connected (via NewClient). The Agent uses the
 // Client's Heartbeat() and RecordTelemetry() methods for managed liveness
@@ -406,7 +399,10 @@ func (a *Agent) emitCostTelemetry(_ context.Context, cost *CostMetadata) error {
 }
 
 // OverrideModelForTest replaces the infer function on an Agent. Named to make
-// misuse in production code obvious. Use only in tests.
+// misuse in production code obvious. Use only in tests. It is a cross-module
+// test seam: node packages (juror, refine) inject a mock InferFunc into the
+// Agent's unexported field from their own test files, which cannot reference
+// test-local helpers of the sdk package.
 func OverrideModelForTest(a *Agent, fn InferFunc) {
 	a.inferFn = fn
 }

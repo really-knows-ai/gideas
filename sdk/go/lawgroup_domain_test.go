@@ -405,41 +405,6 @@ func TestLaw_PB(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Law Cite tests (Round 5)
-// ---------------------------------------------------------------------------
-
-func TestLaw_Cite_CallsLibrarian(t *testing.T) {
-	spy := &librarianSpy{}
-	librarian := newLibrarianClient(t, spy)
-	law := newLaw(&flowv1.Law{Id: lawL001}, librarian)
-
-	err := law.Cite()
-	if err != nil {
-		t.Fatalf("Cite() returned error: %v", err)
-	}
-
-	if spy.lastCiteReq == nil {
-		t.Fatal("Cite was not called")
-	}
-	if len(spy.lastCiteReq.GetLawIds()) != 1 || spy.lastCiteReq.GetLawIds()[0] != lawL001 {
-		t.Fatalf("expected CiteRequest with [L001], got %v", spy.lastCiteReq.GetLawIds())
-	}
-}
-
-func TestLaw_Cite_ServerError(t *testing.T) {
-	spy := &librarianSpy{
-		citeErr: fmt.Errorf("librarian unavailable"),
-	}
-	librarian := newLibrarianClient(t, spy)
-	law := newLaw(&flowv1.Law{Id: lawL001}, librarian)
-
-	err := law.Cite()
-	if err == nil {
-		t.Fatal("expected error from Cite(), got nil")
-	}
-}
-
-// ---------------------------------------------------------------------------
 // Law Attest tests (Round 6)
 // ---------------------------------------------------------------------------
 

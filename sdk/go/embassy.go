@@ -57,7 +57,9 @@ func NewEmbassyClient(opts ...EmbassyOption) (*EmbassyClient, error) {
 	return newEmbassyClient(cfg.address)
 }
 
-// NewEmbassyClientForTest creates an EmbassyClient connected to the given address.
+// NewEmbassyClientForTest creates an EmbassyClient connected to the given
+// address. Named to make misuse obvious — this is a cross-module test seam
+// used by the embassy node's export tests against a spy server.
 func NewEmbassyClientForTest(address string) (*EmbassyClient, error) {
 	return newEmbassyClient(address)
 }

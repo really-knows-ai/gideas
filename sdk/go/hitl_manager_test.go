@@ -34,16 +34,15 @@ func newTestManager(t *testing.T) *queueManagerImpl {
 }
 
 func TestQueueManager_Lifecycle(t *testing.T) {
-	qm, err := NewQueueManager(
-		WithShardID("lifecycle-shard"),
-		WithPeerResolver(&staticResolver{}),
-	)
+	t.Setenv("FLOW_STORAGE_PATH", ":memory:")
+	t.Setenv("FLOW_HITL_PORT", "0")
+
+	qm, err := NewQueueManager()
 	if err != nil {
 		t.Fatalf("NewQueueManager failed: %v", err)
 	}
 
-	// Start with in-memory storage.
-	if err := qm.Start(context.Background(), WithStoragePath(":memory:"), WithAPIPort("0")); err != nil {
+	if err := qm.Start(context.Background()); err != nil {
 		t.Fatalf("Start failed: %v", err)
 	}
 
@@ -473,15 +472,16 @@ func TestQueueManager_WaitForDecision_ReturnsChoice(t *testing.T) {
 }
 
 func TestQueueManager_WithQueueName_Stored(t *testing.T) {
+	t.Setenv("FLOW_STORAGE_PATH", ":memory:")
+	t.Setenv("FLOW_HITL_PORT", "0")
+
 	qm, err := NewQueueManager(
-		WithShardID("qn-shard"),
 		WithQueueName("my-queue"),
-		WithPeerResolver(&staticResolver{}),
 	)
 	if err != nil {
 		t.Fatalf("NewQueueManager failed: %v", err)
 	}
-	if err := qm.Start(context.Background(), WithStoragePath(":memory:"), WithAPIPort("0")); err != nil {
+	if err := qm.Start(context.Background()); err != nil {
 		t.Fatalf("Start failed: %v", err)
 	}
 	t.Cleanup(func() { _ = qm.Stop() })
@@ -505,11 +505,10 @@ func TestQueueManager_WithQueueName_Stored(t *testing.T) {
 
 func TestQueueManager_QueueName_DefaultsToFLOW_NODE_ID(t *testing.T) {
 	t.Setenv("FLOW_NODE_ID", "test-node-id")
+	t.Setenv("FLOW_STORAGE_PATH", ":memory:")
+	t.Setenv("FLOW_HITL_PORT", "0")
 
-	qm, err := NewQueueManager(
-		WithShardID("qn-shard"),
-		WithPeerResolver(&staticResolver{}),
-	)
+	qm, err := NewQueueManager()
 	if err != nil {
 		t.Fatalf("NewQueueManager failed: %v", err)
 	}
@@ -517,7 +516,7 @@ func TestQueueManager_QueueName_DefaultsToFLOW_NODE_ID(t *testing.T) {
 		t.Fatalf("expected queueName=test-node-id, got %q", qm.queueName)
 	}
 
-	if err := qm.Start(context.Background(), WithStoragePath(":memory:"), WithAPIPort("0")); err != nil {
+	if err := qm.Start(context.Background()); err != nil {
 		t.Fatalf("Start failed: %v", err)
 	}
 	t.Cleanup(func() { _ = qm.Stop() })
@@ -540,15 +539,16 @@ func TestQueueManager_QueueName_DefaultsToFLOW_NODE_ID(t *testing.T) {
 }
 
 func TestQueueManager_QueueName_EnqueueDecideWaitCycle(t *testing.T) {
+	t.Setenv("FLOW_STORAGE_PATH", ":memory:")
+	t.Setenv("FLOW_HITL_PORT", "0")
+
 	qm, err := NewQueueManager(
-		WithShardID("qn-shard-cycle"),
 		WithQueueName("test-queue"),
-		WithPeerResolver(&staticResolver{}),
 	)
 	if err != nil {
 		t.Fatalf("NewQueueManager failed: %v", err)
 	}
-	if err := qm.Start(context.Background(), WithStoragePath(":memory:"), WithAPIPort("0")); err != nil {
+	if err := qm.Start(context.Background()); err != nil {
 		t.Fatalf("Start failed: %v", err)
 	}
 	t.Cleanup(func() { _ = qm.Stop() })

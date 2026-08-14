@@ -614,12 +614,6 @@ func TestGetFlow(t *testing.T) {
 		t.Fatal("expected non-nil Flow")
 	}
 
-	// Verify topology accessors work.
-	nodes := f.GetNodes()
-	if len(nodes) != 2 {
-		t.Fatalf("expected 2 nodes, got %d", len(nodes))
-	}
-
 	ec := f.GetExitContract()
 	if ec == nil {
 		t.Fatal("expected non-nil exit contract")
@@ -630,24 +624,6 @@ func TestGetFlow(t *testing.T) {
 	}
 	if len(stamps) != 2 || stamps[0] != stampLinter {
 		t.Fatalf("unexpected doc stamps: %v", stamps)
-	}
-}
-
-func TestGetNode(t *testing.T) {
-	env := setupTestEnv(t, "workitem-getnode-001")
-
-	n, err := env.client.GetNode()
-	if err != nil {
-		t.Fatalf("GetNode() returned error: %v", err)
-	}
-	if n == nil {
-		t.Fatal("expected non-nil Node")
-	}
-	if n.GetName() != testNodeName {
-		t.Fatalf("expected node name=%q, got %q", testNodeName, n.GetName())
-	}
-	if !n.HasCapability("READ:flow") {
-		t.Error("expected READ:flow capability")
 	}
 }
 
@@ -680,28 +656,6 @@ func TestRecordFinding_NewEntryMethod(t *testing.T) {
 	}
 	if lawID != "finding-001" {
 		t.Fatalf("expected law_id=finding-001, got %q", lawID)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Tests — Resume (no ctx)
-// ---------------------------------------------------------------------------
-
-func TestResume_SendsCorrectWorkitemID(t *testing.T) {
-	const targetID = "workitem-child-suspended-001"
-	env := setupTestEnv(t, "workitem-caller-001")
-
-	err := env.client.Resume(targetID)
-	if err != nil {
-		t.Fatalf("Resume() returned error: %v", err)
-	}
-
-	req := env.spy.lastResumeReq
-	if req == nil {
-		t.Fatal("ResumeWorkitem was not called")
-	}
-	if req.GetWorkitemId() != targetID {
-		t.Fatalf("workitem_id = %q, want %q", req.GetWorkitemId(), targetID)
 	}
 }
 

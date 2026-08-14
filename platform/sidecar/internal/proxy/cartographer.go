@@ -99,7 +99,7 @@ func entityTypeFromMetadata(ctx context.Context) string {
 	if !ok {
 		return ""
 	}
-	vals := md.Get("entity_type")
+	vals := md.Get(flowmeta.MetadataKeyEntityType)
 	if len(vals) == 0 {
 		return ""
 	}

@@ -77,19 +77,6 @@ func (w *Workitem) Suspend(opts ...SuspendOption) error {
 	return nil
 }
 
-// Resume requests that a suspended workitem be re-dispatched and clears
-// the local cached suspension state.
-func (w *Workitem) Resume() error {
-	_, err := w.session.Operator.ResumeWorkitem(context.Background(), &flowv1.ResumeWorkitemRequest{
-		WorkitemId: w.id,
-	})
-	if err != nil {
-		return fmt.Errorf("flow sdk: resume failed: %w", err)
-	}
-	w.suspended = false
-	return nil
-}
-
 // Heartbeat resets the Sidecar's inactivity timer for this workitem.
 func (w *Workitem) Heartbeat() error {
 	_, err := w.session.Sidecar.Heartbeat(context.Background(), &flowv1.HeartbeatRequest{
@@ -211,19 +198,6 @@ func (w *Workitem) GetFeedback(artefactID string) ([]*Feedback, error) {
 		fbs = append(fbs, newFeedback(item, w.session))
 	}
 	return fbs, nil
-}
-
-// HasUnresolvedFeedback returns true if any feedback for the artefact
-// is not in RESOLVED state.
-func (w *Workitem) HasUnresolvedFeedback(artefactID string) (bool, error) {
-	resp, err := w.session.Archivist.HasUnresolvedFeedback(context.Background(), &flowv1.HasUnresolvedFeedbackRequest{
-		WorkitemId: w.id,
-		ArtefactId: artefactID,
-	})
-	if err != nil {
-		return false, fmt.Errorf("flow sdk: has unresolved feedback failed: %w", err)
-	}
-	return resp.GetHasUnresolved(), nil
 }
 
 // ---------------------------------------------------------------------------
@@ -390,7 +364,7 @@ func (w *Workitem) GetTopology() (*Flow, error) {
 	if err != nil {
 		return nil, fmt.Errorf("flow sdk: get flow topology failed: %w", err)
 	}
-	return newFlow(resp, w.namespace), nil
+	return newFlow(resp), nil
 }
 
 // ---------------------------------------------------------------------------

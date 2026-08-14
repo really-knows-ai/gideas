@@ -162,48 +162,7 @@ func (c *Client) GetFlow() (*Flow, error) {
 	if err != nil {
 		return nil, fmt.Errorf("flow sdk: get flow topology failed: %w", err)
 	}
-	return newFlow(resp, c.session.namespace), nil
-}
-
-// GetGraph returns the Cartographer graph handle for the current flow.
-// A Graph handle is always returned (never nil); graph operations
-// (ExecuteCypher, SearchNeighbors, etc.) surface errors themselves,
-// returning "flow sdk: graph not initialised" when the client was not
-// initialised. Graph operations do not require a workitem context: when
-// FLOW_WORKITEM_ID is unset the SDK attaches no workitem metadata and the
-// Sidecar's entry-bound fallback forwards the request with namespace and
-// node identity and no workitem. The single-value return documents the SDK
-// surface (SPEC R4): a Graph handle is always returned; graph operations
-// surface nil-session errors themselves.
-func (c *Client) GetGraph() *Graph {
-	// ponytail: the ID-to-type cache (SPEC R3) is owned per Graph handle and
-	// GetGraph allocates a fresh one per call, so a second GetGraph call
-	// starts with an empty cache and mappings learned through the first
-	// handle are lost. Consequence: R3's best-effort per-type capability
-	// annotation degrades to the WRITE:graph/entity/* wildcard for those
-	// entities on UpdateEntity/DeleteEntity/CreateEdge issued through the
-	// newer handle, until the SDK re-learns them from its own traffic.
-	// Failure mode: the wildcard widens the Sidecar mode-2 check, but the
-	// Cartographer's authoritative per-type check still rejects callers
-	// lacking the capability — the correctness net holds, so this is a
-	// best-effort degradation, never a security gap. Deployment risk:
-	// minimal — the cost is annotation accuracy for nodes that recreate the
-	// handle (e.g. once per workitem). Upgrade path: hoist the cache onto
-	// the Client, shared across Graph handles, with the same TTL/eviction
-	// bounds as the per-handle map.
-	return &Graph{session: c.session, idTypeMap: newIDTypeMap()}
-}
-
-// GetNode returns the calling node's identity and capabilities.
-func (c *Client) GetNode() (*Node, error) {
-	if c.session == nil {
-		return nil, fmt.Errorf("flow sdk: client not initialised")
-	}
-	resp, err := c.session.Operator.GetFlowTopology(context.Background(), &flowv1.GetFlowTopologyRequest{})
-	if err != nil {
-		return nil, fmt.Errorf("flow sdk: get node failed: %w", err)
-	}
-	return newNode(resp.GetSelf()), nil
+	return newFlow(resp), nil
 }
 
 // GetLaw returns a single law by ID from the Librarian. Returns the domain

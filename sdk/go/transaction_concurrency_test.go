@@ -7,65 +7,30 @@ import (
 	"time"
 
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
-	"google.golang.org/protobuf/types/known/durationpb"
 )
 
 // TestTransaction_ConcurrentLifecycle pins that a single Transaction handle is
-// safe to share across goroutines: the terminal/lifecycle fields (committed,
-// rolledBack, timeout) are guarded by a mutex while every method reads them
-// via checkTerminal/Timeout. Run under the race detector (-race) this test
-// fails on the unsynchronized-field data race the guard removes; without the
-// guard the deterministic assertions below are also violated.
+// safe to share across goroutines: every surviving method reads the
+// terminal/lifecycle fields (committed, rolledBack) through checkTerminal,
+// which is guarded by a mutex. Run under the race detector (-race) this test
+// fails on the unsynchronized-field data race the guard removes.
 func TestTransaction_ConcurrentLifecycle(t *testing.T) {
 	mock := &mockCartographerClient{
-		commitTx: func(
-			ctx context.Context,
-			req *flowv1.CommitTransactionRequest,
-		) (*flowv1.CommitTransactionResponse, error) {
-			return &flowv1.CommitTransactionResponse{}, nil
-		},
-		rollbackTx: func(
-			ctx context.Context,
-			req *flowv1.RollbackTransactionRequest,
-		) (*flowv1.RollbackTransactionResponse, error) {
-			return &flowv1.RollbackTransactionResponse{}, nil
-		},
-		extendTimeout: func(
-			ctx context.Context,
-			req *flowv1.ExtendTimeoutRequest,
-		) (*flowv1.ExtendTimeoutResponse, error) {
-			return &flowv1.ExtendTimeoutResponse{AppliedTimeout: durationpb.New(1 * time.Hour)}, nil
+		createEntity: func(ctx context.Context, req *flowv1.CreateEntityRequest) (*flowv1.CreateEntityResponse, error) {
+			return &flowv1.CreateEntityResponse{EntityId: "entity-1", EntityType: componentType}, nil
 		},
 	}
-
-	// Phase 1: concurrent ExtendTimeout/Timeout on a non-terminal handle.
-	// Every ExtendTimeout succeeds (nothing sets the handle terminal in this
-	// phase), so the final timeout is deterministically the applied 1h.
 	tx := newMockTx(mock)
-	runConcurrently(t, 8, func(i int) {
-		if i%2 == 0 {
-			if _, err := tx.ExtendTimeout(1 * time.Hour); err != nil {
-				t.Errorf("concurrent ExtendTimeout failed: %v", err)
-			}
-			return
-		}
-		_ = tx.Timeout()
-	})
-	if got := tx.Timeout(); got != 1*time.Hour {
-		t.Errorf("expected timeout 1h after concurrent ExtendTimeout, got %v", got)
-	}
 
-	// Phase 2: concurrent Commit/Rollback on the same handle. At least one
-	// transition reaches the wire, so the handle is deterministically terminal.
+	// Concurrent writes through the same handle: every call passes
+	// checkTerminal (mutex-guarded) before reaching the wire.
 	runConcurrently(t, 8, func(i int) {
-		if i%2 == 0 {
-			_ = tx.Commit()
-			return
+		if _, err := tx.CreateEntity(componentType, nil, nil, nil); err != nil {
+			t.Errorf("concurrent CreateEntity failed: %v", err)
 		}
-		_ = tx.Rollback()
 	})
-	if tx.checkTerminal() == nil {
-		t.Error("expected the handle to be terminal after concurrent Commit/Rollback")
+	if tx.checkTerminal() != nil {
+		t.Error("expected the handle to remain non-terminal after concurrent writes")
 	}
 }
 

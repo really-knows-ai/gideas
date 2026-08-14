@@ -347,9 +347,9 @@ func TestSyncWorker_RehydrateFailureKeepsMainConsistent(t *testing.T) {
 		t.Fatalf("seed git tree: %v", err)
 	}
 
-	base, err := ladybug.OpenInMemory()
+	base, err := ladybug.Open(t.TempDir())
 	if err != nil {
-		t.Fatalf("OpenInMemory: %v", err)
+		t.Fatalf("Open: %v", err)
 	}
 	t.Cleanup(func() { _ = base.Close() })
 	if err := base.ApplySchema(ctx, &flowv1.Schema{
@@ -413,9 +413,9 @@ func TestSyncWorker_PushRequestLandedDuringPushIsNotLost(t *testing.T) {
 		pushEntered: make(chan struct{}),
 		pushRelease: make(chan struct{}),
 	}
-	base, err := ladybug.OpenInMemory()
+	base, err := ladybug.Open(t.TempDir())
 	if err != nil {
-		t.Fatalf("OpenInMemory: %v", err)
+		t.Fatalf("Open: %v", err)
 	}
 	t.Cleanup(func() { _ = base.Close() })
 	sw := NewSyncWorker("https://example.com/repo.git", syncGit, base, RealClock{})

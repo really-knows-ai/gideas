@@ -34,28 +34,6 @@ func TestChildWorkitem_StoreArtefact_ReturnsErrorOnly(t *testing.T) {
 	}
 }
 
-func TestChildWorkitem_StampArtefact_ReturnsErrorOnly(t *testing.T) {
-	const wantID = "workitem-child-stamp"
-	env := setupTestEnv(t, wantID)
-
-	child := &ChildWorkitem{
-		id:      "child-stamp-001",
-		session: env.client.session,
-	}
-
-	err := child.StampArtefact("input", "validated")
-	if err != nil {
-		t.Fatalf("child.StampArtefact() returned error: %v", err)
-	}
-
-	if env.spy.lastStampReq == nil {
-		t.Fatal("expected stamp request to be captured")
-	}
-	if env.spy.lastStampReq.GetStampName() != "validated" {
-		t.Fatalf("expected stamp name=validated, got %q", env.spy.lastStampReq.GetStampName())
-	}
-}
-
 func TestChildWorkitem_RouteTo_ReturnsErrorOnly(t *testing.T) {
 	const wantID = "workitem-child-route"
 	env := setupTestEnv(t, wantID)
@@ -73,36 +51,6 @@ func TestChildWorkitem_RouteTo_ReturnsErrorOnly(t *testing.T) {
 	got := env.spy.lastMD.Get("x-flow-workitem-id")
 	if len(got) == 0 || got[0] != wantID {
 		t.Fatalf("metadata x-flow-workitem-id = %v, want %q", got, wantID)
-	}
-}
-
-func TestChildWorkitem_RouteToOutput_ReturnsErrorOnly(t *testing.T) {
-	const wantID = "workitem-child-output"
-	env := setupTestEnv(t, wantID)
-
-	child := &ChildWorkitem{
-		id:      "child-output-001",
-		session: env.client.session,
-	}
-
-	err := child.RouteToOutput("codification")
-	if err != nil {
-		t.Fatalf("child.RouteToOutput() returned error: %v", err)
-	}
-}
-
-func TestChildWorkitem_Complete_ReturnsErrorOnly(t *testing.T) {
-	const wantID = "workitem-child-complete"
-	env := setupTestEnv(t, wantID)
-
-	child := &ChildWorkitem{
-		id:      "child-complete-001",
-		session: env.client.session,
-	}
-
-	err := child.Complete()
-	if err != nil {
-		t.Fatalf("child.Complete() returned error: %v", err)
 	}
 }
 
@@ -234,36 +182,6 @@ func TestChildWorkitem_RouteTo_SendsCorrectRequest(t *testing.T) {
 	got := captureSpy.lastMD.Get("x-flow-workitem-id")
 	if len(got) == 0 || got[0] != wantParentID {
 		t.Fatalf("metadata x-flow-workitem-id = %v, want %q", got, wantParentID)
-	}
-}
-
-func TestChildWorkitem_Complete_SendsCorrectRequest(t *testing.T) {
-	captureSpy := &captureRouteChildServer{}
-
-	client, _ := setupGRPCTestEnv(t, "workitem-complete-verify", func(s *grpc.Server) {
-		flowv1.RegisterOperatorServiceServer(s, captureSpy)
-	})
-
-	child := &ChildWorkitem{
-		id:      "child-complete-verify",
-		session: client.session,
-	}
-
-	err := child.Complete()
-	if err != nil {
-		t.Fatalf("child.Complete() error: %v", err)
-	}
-
-	if captureSpy.lastReq == nil {
-		t.Fatal("expected request to be captured")
-	}
-	if captureSpy.lastReq.GetChildWorkitemId() != "child-complete-verify" {
-		t.Fatalf("expected child_workitem_id=child-complete-verify, got %q",
-			captureSpy.lastReq.GetChildWorkitemId())
-	}
-	ri := captureSpy.lastReq.GetRoutingInstruction()
-	if ri.GetType() != flowv1.RoutingType_ROUTING_TYPE_COMPLETE {
-		t.Fatalf("expected COMPLETE, got %v", ri.GetType())
 	}
 }
 

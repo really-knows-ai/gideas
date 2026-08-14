@@ -10,6 +10,22 @@ import (
 	"time"
 )
 
+// Test-only ollamaProvider option constructors. The production constructor
+// newOllamaProvider reads OLLAMA_BASE_URL/OLLAMA_API_KEY from the environment
+// and uses the default timeout; tests override those knobs to point at an
+// httptest server and shrink the timeout.
+func withBaseURL(url string) ollamaOption {
+	return func(p *ollamaProvider) {
+		p.baseURL = strings.TrimRight(url, "/")
+	}
+}
+
+func withTimeout(d time.Duration) ollamaOption {
+	return func(p *ollamaProvider) {
+		p.httpClient.Timeout = d
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Tests — OllamaProvider: Infer
 // ---------------------------------------------------------------------------

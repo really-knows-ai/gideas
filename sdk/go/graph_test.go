@@ -2,34 +2,18 @@ package flow
 
 import (
 	"context"
-	"errors"
-	"io"
-	"math"
 	"testing"
 	"time"
 
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/metadata"
-	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/types/known/durationpb"
-	"google.golang.org/protobuf/types/known/structpb"
 )
 
 const metadataEntityTypeKey = "entity_type"
 
-// metadataEntityTypesKey is the plural legacy annotation key the SDK no
-// longer attaches to any RPC (SPEC R3: the Cartographer is the sole authority
-// for per-type capability validation on ExecuteCypher). Pinned by the
-// no-annotation ExecuteCypher tests.
-const metadataEntityTypesKey = "entity_types"
-
-// componentType and serviceType are the entity-type names used across the
-// Graph and Transaction test suites.
+// componentType is the entity-type name used across the Graph and Transaction
+// test suites.
 const componentType = "Component"
-
-const serviceType = "Service"
 
 const (
 	clobberedIDProp   = "clobbered-id"
@@ -223,7 +207,7 @@ func (m *mockCartographerClient) ExportGraph(
 	if m.exportGraph != nil {
 		return m.exportGraph(ctx, req)
 	}
-	return nil, errors.New("ExportGraph mock function not set")
+	return nil, nil
 }
 func (m *mockCartographerClient) Sync(
 	ctx context.Context, req *flowv1.SyncRequest, opts ...grpc.CallOption,
@@ -235,520 +219,15 @@ func (m *mockCartographerClient) Sync(
 }
 
 // ---------------------------------------------------------------------------
-// Test helpers
+// Transaction write-method tests
 // ---------------------------------------------------------------------------
-
-func newMockGraph(mock *mockCartographerClient) *Graph {
-	ctx, cancel := context.WithCancel(context.Background())
-	sess := &session{
-		Cartographer: mock,
-		ctx:          ctx,
-		cancel:       cancel,
-	}
-	return &Graph{session: sess, idTypeMap: newIDTypeMap()}
-}
-
-func TestGetGraphReturnsHandle(t *testing.T) {
-	c := &Client{session: &session{}}
-	g := c.GetGraph()
-	if g == nil {
-		t.Fatal("GetGraph() returned nil")
-	}
-}
-
-func TestGetGraph_NilSession(t *testing.T) {
-	c := &Client{}
-	g := c.GetGraph()
-	if g == nil {
-		t.Fatal("GetGraph() returned nil")
-	}
-	// The Graph handle is always returned; nil-session errors surface on
-	// graph operations.
-	_, err := g.ExecuteCypher("MATCH (c:"+componentType+") RETURN c", nil)
-	if err == nil {
-		t.Fatal("expected error for graph operation on nil session")
-	}
-}
-
-func TestExecuteCypher(t *testing.T) {
-	mock := &mockCartographerClient{
-		executeCypher: func(ctx context.Context, req *flowv1.ExecuteCypherRequest) (*flowv1.ExecuteCypherResponse, error) {
-			if req.GetCypher() == "" {
-				t.Error("expected non-empty cypher")
-			}
-			// SPEC R2: each Row is one flat tuple of string values in the
-			// order LadybugDB returned them; the SDK exposes them
-			// positionally as col_<N>.
-			return &flowv1.ExecuteCypherResponse{
-				Rows: []*flowv1.Row{
-					{Values: []string{"id-1", "x"}},
-					{Values: []string{"id-2", "y"}},
-				},
-			}, nil
-		},
-	}
-	g := newMockGraph(mock)
-	rows, err := g.ExecuteCypher("MATCH (c:"+componentType+") RETURN c", nil)
-	if err != nil {
-		t.Fatalf("ExecuteCypher returned error: %v", err)
-	}
-	if len(rows) != 2 {
-		t.Fatalf("expected 2 rows, got %d", len(rows))
-	}
-	if rows[0]["col_0"] != "id-1" || rows[0]["col_1"] != "x" {
-		t.Errorf("row 0 = %v, want map[col_0:id-1 col_1:x]", rows[0])
-	}
-	if rows[1]["col_0"] != "id-2" || rows[1]["col_1"] != "y" {
-		t.Errorf("row 1 = %v, want map[col_0:id-2 col_1:y]", rows[1])
-	}
-}
-
-// TestExecuteCypher_ParamsConvertedToStructpb pins SPEC R2's optional params
-// parameter (ExecuteCypher(cypher, params?)) on the Graph layer: when params
-// are present, the SDK converts them to a structpb.Value and the request
-// carries them on the wire.
 //
-//nolint:dupl // Graph and Transaction params-conversion tests share structure.
-func TestExecuteCypher_ParamsConvertedToStructpb(t *testing.T) {
-	var capturedParams *structpb.Value
-	mock := &mockCartographerClient{
-		executeCypher: func(ctx context.Context, req *flowv1.ExecuteCypherRequest) (*flowv1.ExecuteCypherResponse, error) {
-			capturedParams = req.GetParams()
-			return &flowv1.ExecuteCypherResponse{}, nil
-		},
-	}
-	g := newMockGraph(mock)
-	_, err := g.ExecuteCypher("MATCH (c:"+componentType+") RETURN c", map[string]any{"limit": int64(5), "name": "x"})
-	if err != nil {
-		t.Fatalf("ExecuteCypher returned error: %v", err)
-	}
-	if capturedParams == nil {
-		t.Fatal("expected params to be set on request")
-	}
-	s := capturedParams.GetStructValue()
-	if s == nil {
-		t.Fatalf("expected struct params, got %v", capturedParams)
-	}
-	if s.Fields["limit"].GetNumberValue() != 5 {
-		t.Errorf("expected limit=5 in params, got %v", s.Fields["limit"])
-	}
-	if s.Fields["name"].GetStringValue() != "x" {
-		t.Errorf("expected name=x in params, got %v", s.Fields["name"])
-	}
-}
-
-// TestExecuteCypher_InvalidParams pins the SDK's "invalid params" error
-// branch (graph.go): a params value that cannot be converted to structpb
-// must surface an error instead of reaching the wire.
-func TestExecuteCypher_InvalidParams(t *testing.T) {
-	called := false
-	mock := &mockCartographerClient{
-		executeCypher: func(ctx context.Context, req *flowv1.ExecuteCypherRequest) (*flowv1.ExecuteCypherResponse, error) {
-			called = true
-			return &flowv1.ExecuteCypherResponse{}, nil
-		},
-	}
-	g := newMockGraph(mock)
-	_, err := g.ExecuteCypher("MATCH (c:"+componentType+") RETURN c", map[string]any{"bad": make(chan int)})
-	if err == nil {
-		t.Fatal("expected error for params that cannot convert to structpb")
-	}
-	if called {
-		t.Error("expected ExecuteCypher RPC not to be called for invalid params")
-	}
-}
-
-// TestExecuteCypher_NoEntityTypeMetadata pins SPEC R3's amended contract for
-// ExecuteCypher (SPEC.md:247, :651 — "statement only — no entity-type
-// metadata"): the Cartographer is the sole authority for per-type capability
-// validation, and the SDK performs no Cypher parsing and attaches no
-// entity-type capability metadata. The outgoing gRPC context must carry
-// neither entity_type nor entity_types metadata keys — the inverse of the
-// write-path annotation tests (CreateEdge/UpdateEntity/DeleteEntity), which
-// keep the singular annotation per SPEC.md:243.
-//
-//nolint:dupl // Graph and Transaction no-annotation metadata tests share structure.
-func TestExecuteCypher_NoEntityTypeMetadata(t *testing.T) {
-	mock := &mockCartographerClient{
-		executeCypher: func(ctx context.Context, req *flowv1.ExecuteCypherRequest) (*flowv1.ExecuteCypherResponse, error) {
-			md, _ := metadata.FromOutgoingContext(ctx)
-			if vals := md.Get(metadataEntityTypeKey); len(vals) > 0 {
-				t.Errorf("expected no %s metadata on ExecuteCypher outgoing context, got %v", metadataEntityTypeKey, vals)
-			}
-			if vals := md.Get(metadataEntityTypesKey); len(vals) > 0 {
-				t.Errorf("expected no %s metadata on ExecuteCypher outgoing context, got %v", metadataEntityTypesKey, vals)
-			}
-			return &flowv1.ExecuteCypherResponse{}, nil
-		},
-	}
-	g := newMockGraph(mock)
-	_, err := g.ExecuteCypher("MATCH (c:"+componentType+") RETURN c", nil)
-	if err != nil {
-		t.Fatalf("ExecuteCypher returned error: %v", err)
-	}
-}
-
-func TestSearchNeighbors(t *testing.T) {
-	mock := &mockCartographerClient{
-		searchNeighbors: func(ctx context.Context,
-			req *flowv1.SearchNeighborsRequest,
-		) (*flowv1.SearchNeighborsResponse, error) {
-			return &flowv1.SearchNeighborsResponse{}, nil
-		},
-	}
-	g := newMockGraph(mock)
-	_, err := g.SearchNeighbors([]float32{0.1, 0.2}, componentType, 10)
-	if err != nil {
-		t.Fatalf("SearchNeighbors returned error: %v", err)
-	}
-}
-
-func TestSearchNeighbors_LosslessIdentityLikeProperties(t *testing.T) {
-	mock := &mockCartographerClient{
-		searchNeighbors: func(ctx context.Context,
-			req *flowv1.SearchNeighborsRequest,
-		) (*flowv1.SearchNeighborsResponse, error) {
-			return &flowv1.SearchNeighborsResponse{
-				Results: []*flowv1.SearchNeighborResult{
-					{
-						EntityId:   "n1",
-						EntityType: componentType,
-						Properties: map[string]string{
-							"entity_id":   clobberedIDProp,
-							"entity_type": clobberedTypeProp,
-							"score":       "0.9",
-						},
-						Distance: 0.9,
-					},
-				},
-			}, nil
-		},
-	}
-	g := newMockGraph(mock)
-	results, err := g.SearchNeighbors([]float32{0.1, 0.2}, componentType, 10)
-	if err != nil {
-		t.Fatalf("SearchNeighbors returned error: %v", err)
-	}
-	if len(results) != 1 {
-		t.Fatalf("expected 1 result, got %d", len(results))
-	}
-	r := results[0]
-	if r.ID != "n1" {
-		t.Errorf("expected identity ID n1, got %q", r.ID)
-	}
-	if r.Type != componentType {
-		t.Errorf("expected identity type Component, got %q", r.Type)
-	}
-	if r.Properties["entity_id"] != clobberedIDProp {
-		t.Errorf("expected identity-like property entity_id preserved, got %q", r.Properties["entity_id"])
-	}
-	if r.Properties["entity_type"] != clobberedTypeProp {
-		t.Errorf("expected identity-like property entity_type preserved, got %q", r.Properties["entity_type"])
-	}
-	if r.Distance != 0.9 {
-		t.Errorf("expected distance 0.9, got %v", r.Distance)
-	}
-}
-
-func TestSearchNeighbors_NaNRejection(t *testing.T) {
-	g := newMockGraph(&mockCartographerClient{})
-	_, err := g.SearchNeighbors([]float32{float32(math.NaN())}, componentType, 10)
-	if err == nil {
-		t.Fatal("expected error for NaN embedding")
-	}
-}
-
-// TestSearchNeighbors_InfinityRejection verifies validateEmbedding rejects
-// +Inf and -Inf (SPEC error table "Embedding contains NaN or infinity").
-func TestSearchNeighbors_InfinityRejection(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		emb  []float32
-	}{
-		{"positive", []float32{float32(math.Inf(1)), 1.0}},
-		{"negative", []float32{1.0, float32(math.Inf(-1))}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			g := newMockGraph(&mockCartographerClient{})
-			_, err := g.SearchNeighbors(tc.emb, componentType, 10)
-			if err == nil {
-				t.Fatal("expected error for infinity embedding")
-			}
-		})
-	}
-}
-
-// The SPEC error table ("Embedding contains NaN or infinity") applies the
-// NaN/infinity check to CreateEntity and UpdateEntity as well as
-// SearchNeighbors. These tests pin the SDK-side validation boundary on the
-// write paths, which call the same validateEmbedding guard.
-func TestCreateEntity_NaNInfinityRejection(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		emb  []float32
-	}{
-		{"nan", []float32{float32(math.NaN())}},
-		{"positive-infinity", []float32{float32(math.Inf(1))}},
-		{"negative-infinity", []float32{float32(math.Inf(-1))}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			mock := &mockCartographerClient{
-				beginTx: func(ctx context.Context, req *flowv1.BeginTransactionRequest) (*flowv1.BeginTransactionResponse, error) {
-					return &flowv1.BeginTransactionResponse{TransactionId: "tx-1"}, nil
-				},
-			}
-			g := newMockGraph(mock)
-			tx, err := g.BeginTransaction()
-			if err != nil {
-				t.Fatalf("BeginTransaction returned error: %v", err)
-			}
-			_, err = tx.CreateEntity(componentType, nil, nil, tc.emb)
-			if err == nil {
-				t.Fatal("expected error for NaN/infinity embedding on CreateEntity")
-			}
-		})
-	}
-}
-
-func TestUpdateEntity_NaNInfinityRejection(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		emb  []float32
-	}{
-		{"nan", []float32{float32(math.NaN())}},
-		{"positive-infinity", []float32{float32(math.Inf(1))}},
-		{"negative-infinity", []float32{float32(math.Inf(-1))}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			mock := &mockCartographerClient{
-				beginTx: func(ctx context.Context, req *flowv1.BeginTransactionRequest) (*flowv1.BeginTransactionResponse, error) {
-					return &flowv1.BeginTransactionResponse{TransactionId: "tx-1"}, nil
-				},
-			}
-			g := newMockGraph(mock)
-			tx, err := g.BeginTransaction()
-			if err != nil {
-				t.Fatalf("BeginTransaction returned error: %v", err)
-			}
-			_, err = tx.UpdateEntity(testUUIDEntity, nil, tc.emb)
-			if err == nil {
-				t.Fatal("expected error for NaN/finite embedding on UpdateEntity")
-			}
-		})
-	}
-}
-
-func TestFullTextSearch(t *testing.T) {
-	mock := &mockCartographerClient{
-		fullTextSearch: func(ctx context.Context, req *flowv1.FullTextSearchRequest) (*flowv1.FullTextSearchResponse, error) {
-			if req.GetQuery() == "" {
-				t.Error("expected non-empty query")
-			}
-			return &flowv1.FullTextSearchResponse{}, nil
-		},
-	}
-	g := newMockGraph(mock)
-	_, err := g.FullTextSearch("test query", componentType)
-	if err != nil {
-		t.Fatalf("FullTextSearch returned error: %v", err)
-	}
-}
-
-func TestFullTextSearch_LosslessIdentityLikeProperties(t *testing.T) {
-	mock := &mockCartographerClient{
-		fullTextSearch: func(ctx context.Context, req *flowv1.FullTextSearchRequest) (*flowv1.FullTextSearchResponse, error) {
-			return &flowv1.FullTextSearchResponse{
-				Results: []*flowv1.Entity{
-					{
-						EntityId:   "f1",
-						EntityType: componentType,
-						Properties: map[string]string{
-							"entity_id":   "flattened-id",
-							"entity_type": "FlattenedType",
-							"name":        "search-hit",
-						},
-					},
-				},
-			}, nil
-		},
-	}
-	g := newMockGraph(mock)
-	results, err := g.FullTextSearch("search hit", componentType)
-	if err != nil {
-		t.Fatalf("FullTextSearch returned error: %v", err)
-	}
-	if len(results) != 1 {
-		t.Fatalf("expected 1 result, got %d", len(results))
-	}
-	e := results[0]
-	if e.ID != "f1" {
-		t.Errorf("expected identity ID f1, got %q", e.ID)
-	}
-	if e.Type != componentType {
-		t.Errorf("expected identity type Component, got %q", e.Type)
-	}
-	if e.Properties["entity_id"] != "flattened-id" {
-		t.Errorf("expected identity-like property entity_id preserved, got %q", e.Properties["entity_id"])
-	}
-	if e.Properties["entity_type"] != "FlattenedType" {
-		t.Errorf("expected identity-like property entity_type preserved, got %q", e.Properties["entity_type"])
-	}
-	if e.Properties["name"] != "search-hit" {
-		t.Errorf("expected property name search-hit, got %q", e.Properties["name"])
-	}
-}
-
-func TestListEntities(t *testing.T) {
-	mock := &mockCartographerClient{
-		listEntities: func(ctx context.Context, req *flowv1.ListEntitiesRequest) (*flowv1.ListEntitiesResponse, error) {
-			if req.GetEntityType() != componentType {
-				t.Errorf("expected entity type Component, got %s", req.GetEntityType())
-			}
-			return &flowv1.ListEntitiesResponse{}, nil
-		},
-	}
-	g := newMockGraph(mock)
-	_, err := g.ListEntities("Component")
-	if err != nil {
-		t.Fatalf("ListEntities returned error: %v", err)
-	}
-}
-
-func TestListEntities_Pagination(t *testing.T) {
-	var capturedPageSize int32
-	var capturedPageToken string
-	mock := &mockCartographerClient{
-		listEntities: func(ctx context.Context, req *flowv1.ListEntitiesRequest) (*flowv1.ListEntitiesResponse, error) {
-			capturedPageSize = req.GetPageSize()
-			capturedPageToken = req.GetPageToken()
-			return &flowv1.ListEntitiesResponse{
-				Entities:      []*flowv1.Entity{},
-				NextPageToken: "next-token",
-			}, nil
-		},
-	}
-	g := newMockGraph(mock)
-
-	// First page
-	page, err := g.ListEntities(componentType, WithPageSize(50))
-	if err != nil {
-		t.Fatalf("ListEntities returned error: %v", err)
-	}
-	if capturedPageSize != 50 {
-		t.Errorf("expected page size 50, got %d", capturedPageSize)
-	}
-	if page.NextPageToken != "next-token" {
-		t.Errorf("expected next page token, got %q", page.NextPageToken)
-	}
-
-	// Second page
-	_, err = g.ListEntities(componentType, WithPageSize(50), WithPageToken("next-token"))
-	if err != nil {
-		t.Fatalf("ListEntities returned error: %v", err)
-	}
-	if capturedPageToken != "next-token" {
-		t.Errorf("expected page token 'next-token', got %q", capturedPageToken)
-	}
-}
-
-func TestListEntities_EmptyResult(t *testing.T) {
-	mock := &mockCartographerClient{
-		listEntities: func(ctx context.Context, req *flowv1.ListEntitiesRequest) (*flowv1.ListEntitiesResponse, error) {
-			return &flowv1.ListEntitiesResponse{}, nil
-		},
-	}
-	g := newMockGraph(mock)
-	page, err := g.ListEntities("NonExistent")
-	if err != nil {
-		t.Fatalf("ListEntities returned error: %v", err)
-	}
-	if len(page.Entities) != 0 {
-		t.Errorf("expected empty entities, got %d", len(page.Entities))
-	}
-	if page.NextPageToken != "" {
-		t.Errorf("expected empty next page token, got %q", page.NextPageToken)
-	}
-}
-
-// The type-omitted read-search tests below exercise the SPEC type-omitted
-// wildcard branch (SPEC line 247: the Sidecar validates request entityType,
-// or against READ:graph/entity/* "when omitted") at the SDK metadata-wiring
-// level, on a fresh/non-bootstrapped graph (no entities, still succeeds).
-// The SDK wire path is identical for a concrete type and the omitted type
-// (both skip capability annotation), so each asserts the request carries the
-// empty entityType the Sidecar interprets as the wildcard, and that an empty
-// graph resolves a successful empty result.
-
-func TestSearchNeighbors_WildcardOmittedOnEmptyGraph(t *testing.T) {
-	var capturedType string
-	mock := &mockCartographerClient{
-		searchNeighbors: func(ctx context.Context,
-			req *flowv1.SearchNeighborsRequest,
-		) (*flowv1.SearchNeighborsResponse, error) {
-			capturedType = req.GetEntityType()
-			return &flowv1.SearchNeighborsResponse{}, nil
-		},
-	}
-	g := newMockGraph(mock)
-	results, err := g.SearchNeighbors([]float32{0.1, 0.2}, "", 10)
-	if err != nil {
-		t.Fatalf("SearchNeighbors returned error: %v", err)
-	}
-	if capturedType != "" {
-		t.Errorf("expected omitted entityType (wildcard branch) on request, got %q", capturedType)
-	}
-	if len(results) != 0 {
-		t.Errorf("expected empty results on fresh graph, got %d", len(results))
-	}
-}
-
-func TestFullTextSearch_WildcardOmittedOnEmptyGraph(t *testing.T) {
-	var capturedType string
-	mock := &mockCartographerClient{
-		fullTextSearch: func(ctx context.Context, req *flowv1.FullTextSearchRequest) (*flowv1.FullTextSearchResponse, error) {
-			capturedType = req.GetEntityType()
-			return &flowv1.FullTextSearchResponse{}, nil
-		},
-	}
-	g := newMockGraph(mock)
-	results, err := g.FullTextSearch("query", "")
-	if err != nil {
-		t.Fatalf("FullTextSearch returned error: %v", err)
-	}
-	if capturedType != "" {
-		t.Errorf("expected omitted entityType (wildcard branch) on request, got %q", capturedType)
-	}
-	if len(results) != 0 {
-		t.Errorf("expected empty results on fresh graph, got %d", len(results))
-	}
-}
-
-func TestListEntities_WildcardOmittedOnEmptyGraph(t *testing.T) {
-	var capturedType string
-	mock := &mockCartographerClient{
-		listEntities: func(ctx context.Context, req *flowv1.ListEntitiesRequest) (*flowv1.ListEntitiesResponse, error) {
-			capturedType = req.GetEntityType()
-			return &flowv1.ListEntitiesResponse{}, nil
-		},
-	}
-	g := newMockGraph(mock)
-	page, err := g.ListEntities("")
-	if err != nil {
-		t.Fatalf("ListEntities returned error: %v", err)
-	}
-	if capturedType != "" {
-		t.Errorf("expected omitted entityType (wildcard branch) on request, got %q", capturedType)
-	}
-	if len(page.Entities) != 0 {
-		t.Errorf("expected empty entities on fresh graph, got %d", len(page.Entities))
-	}
-}
+// The Graph domain object no longer exists (its methods were deleted as dead
+// production surface), so the write-path tests construct a Transaction handle
+// directly via newMockTx.
 
 func TestCreateEntity(t *testing.T) {
 	mock := &mockCartographerClient{
-		beginTx: func(ctx context.Context, req *flowv1.BeginTransactionRequest) (*flowv1.BeginTransactionResponse, error) {
-			return &flowv1.BeginTransactionResponse{TransactionId: "tx-1"}, nil
-		},
 		createEntity: func(ctx context.Context, req *flowv1.CreateEntityRequest) (*flowv1.CreateEntityResponse, error) {
 			return &flowv1.CreateEntityResponse{
 				EntityId:   "test-id",
@@ -757,11 +236,7 @@ func TestCreateEntity(t *testing.T) {
 			}, nil
 		},
 	}
-	g := newMockGraph(mock)
-	tx, err := g.BeginTransaction()
-	if err != nil {
-		t.Fatalf("BeginTransaction returned error: %v", err)
-	}
+	tx := newMockTx(mock)
 	props := map[string]string{"name": "test"}
 	entity, err := tx.CreateEntity(componentType, nil, props, nil)
 	if err != nil {
@@ -781,9 +256,6 @@ func TestCreateEntity(t *testing.T) {
 func TestCreateEntity_NilIDSendsEmpty(t *testing.T) {
 	var capturedID string
 	mock := &mockCartographerClient{
-		beginTx: func(ctx context.Context, req *flowv1.BeginTransactionRequest) (*flowv1.BeginTransactionResponse, error) {
-			return &flowv1.BeginTransactionResponse{TransactionId: "tx-1"}, nil
-		},
 		createEntity: func(ctx context.Context, req *flowv1.CreateEntityRequest) (*flowv1.CreateEntityResponse, error) {
 			capturedID = req.GetId()
 			return &flowv1.CreateEntityResponse{
@@ -792,11 +264,7 @@ func TestCreateEntity_NilIDSendsEmpty(t *testing.T) {
 			}, nil
 		},
 	}
-	g := newMockGraph(mock)
-	tx, err := g.BeginTransaction()
-	if err != nil {
-		t.Fatalf("BeginTransaction returned error: %v", err)
-	}
+	tx := newMockTx(mock)
 	entity, err := tx.CreateEntity("Component", nil, nil, nil)
 	if err != nil {
 		t.Fatalf("CreateEntity returned error: %v", err)
@@ -809,11 +277,11 @@ func TestCreateEntity_NilIDSendsEmpty(t *testing.T) {
 	}
 }
 
+// TestCreateEntity_PopulatesMap pins SPEC R3's ID-to-type cache population
+// from creation responses on the Transaction layer: the created entity's
+// response type is recorded keyed by entity ID.
 func TestCreateEntity_PopulatesMap(t *testing.T) {
 	mock := &mockCartographerClient{
-		beginTx: func(ctx context.Context, req *flowv1.BeginTransactionRequest) (*flowv1.BeginTransactionResponse, error) {
-			return &flowv1.BeginTransactionResponse{TransactionId: "tx-1"}, nil
-		},
 		createEntity: func(ctx context.Context, req *flowv1.CreateEntityRequest) (*flowv1.CreateEntityResponse, error) {
 			return &flowv1.CreateEntityResponse{
 				EntityId:   "entity-1",
@@ -821,12 +289,8 @@ func TestCreateEntity_PopulatesMap(t *testing.T) {
 			}, nil
 		},
 	}
-	g := newMockGraph(mock)
-	tx, err := g.BeginTransaction()
-	if err != nil {
-		t.Fatalf("BeginTransaction returned error: %v", err)
-	}
-	_, err = tx.CreateEntity("Component", nil, nil, nil)
+	tx := newMockTx(mock)
+	_, err := tx.CreateEntity("Component", nil, nil, nil)
 	if err != nil {
 		t.Fatalf("CreateEntity returned error: %v", err)
 	}
@@ -838,9 +302,6 @@ func TestCreateEntity_PopulatesMap(t *testing.T) {
 
 func TestUpdateEntity(t *testing.T) {
 	mock := &mockCartographerClient{
-		beginTx: func(ctx context.Context, req *flowv1.BeginTransactionRequest) (*flowv1.BeginTransactionResponse, error) {
-			return &flowv1.BeginTransactionResponse{TransactionId: "tx-1"}, nil
-		},
 		updateEntity: func(ctx context.Context, req *flowv1.UpdateEntityRequest) (*flowv1.UpdateEntityResponse, error) {
 			return &flowv1.UpdateEntityResponse{
 				EntityId:   req.GetId(),
@@ -849,12 +310,8 @@ func TestUpdateEntity(t *testing.T) {
 			}, nil
 		},
 	}
-	g := newMockGraph(mock)
-	g.idTypeMap.store(testUUIDEntity, "Component")
-	tx, err := g.BeginTransaction()
-	if err != nil {
-		t.Fatalf("BeginTransaction returned error: %v", err)
-	}
+	tx := newMockTx(mock)
+	tx.idTypeMap.store(testUUIDEntity, "Component")
 	entity, err := tx.UpdateEntity(testUUIDEntity, map[string]string{"name": "updated"}, nil)
 	if err != nil {
 		t.Fatalf("UpdateEntity returned error: %v", err)
@@ -866,9 +323,6 @@ func TestUpdateEntity(t *testing.T) {
 
 func TestDeleteEntity(t *testing.T) {
 	mock := &mockCartographerClient{
-		beginTx: func(ctx context.Context, req *flowv1.BeginTransactionRequest) (*flowv1.BeginTransactionResponse, error) {
-			return &flowv1.BeginTransactionResponse{TransactionId: "tx-1"}, nil
-		},
 		deleteEntity: func(ctx context.Context, req *flowv1.DeleteEntityRequest) (*flowv1.DeleteEntityResponse, error) {
 			return &flowv1.DeleteEntityResponse{
 				EntityId:   req.GetId(),
@@ -876,12 +330,8 @@ func TestDeleteEntity(t *testing.T) {
 			}, nil
 		},
 	}
-	g := newMockGraph(mock)
-	g.idTypeMap.store(testUUIDEntity, "Component")
-	tx, err := g.BeginTransaction()
-	if err != nil {
-		t.Fatalf("BeginTransaction returned error: %v", err)
-	}
+	tx := newMockTx(mock)
+	tx.idTypeMap.store(testUUIDEntity, "Component")
 	entity, err := tx.DeleteEntity(testUUIDEntity)
 	if err != nil {
 		t.Fatalf("DeleteEntity returned error: %v", err)
@@ -898,9 +348,6 @@ func TestDeleteEntity(t *testing.T) {
 
 func TestDeleteEntity_ReturnsEmbedding(t *testing.T) {
 	mock := &mockCartographerClient{
-		beginTx: func(ctx context.Context, req *flowv1.BeginTransactionRequest) (*flowv1.BeginTransactionResponse, error) {
-			return &flowv1.BeginTransactionResponse{TransactionId: "tx-1"}, nil
-		},
 		deleteEntity: func(ctx context.Context, req *flowv1.DeleteEntityRequest) (*flowv1.DeleteEntityResponse, error) {
 			return &flowv1.DeleteEntityResponse{
 				EntityId:   req.GetId(),
@@ -909,11 +356,7 @@ func TestDeleteEntity_ReturnsEmbedding(t *testing.T) {
 			}, nil
 		},
 	}
-	g := newMockGraph(mock)
-	tx, err := g.BeginTransaction()
-	if err != nil {
-		t.Fatalf("BeginTransaction returned error: %v", err)
-	}
+	tx := newMockTx(mock)
 	entity, err := tx.DeleteEntity(testUUIDEntity)
 	if err != nil {
 		t.Fatalf("DeleteEntity returned error: %v", err)
@@ -923,118 +366,8 @@ func TestDeleteEntity_ReturnsEmbedding(t *testing.T) {
 	}
 }
 
-func TestListEntities_LosslessIdentityLikeProperties(t *testing.T) {
-	mock := &mockCartographerClient{
-		listEntities: func(ctx context.Context, req *flowv1.ListEntitiesRequest) (*flowv1.ListEntitiesResponse, error) {
-			return &flowv1.ListEntitiesResponse{
-				Entities: []*flowv1.Entity{
-					{
-						EntityId:   "e1",
-						EntityType: componentType,
-						Properties: map[string]string{
-							"entity_id":   clobberedIDProp,
-							"entity_type": clobberedTypeProp,
-							"name":        "real",
-						},
-					},
-				},
-			}, nil
-		},
-	}
-	g := newMockGraph(mock)
-	page, err := g.ListEntities(componentType)
-	if err != nil {
-		t.Fatalf("ListEntities returned error: %v", err)
-	}
-	if len(page.Entities) != 1 {
-		t.Fatalf("expected 1 entity, got %d", len(page.Entities))
-	}
-	e := page.Entities[0]
-	if e.ID != "e1" {
-		t.Errorf("expected identity ID e1, got %q", e.ID)
-	}
-	if e.Type != componentType {
-		t.Errorf("expected identity type Component, got %q", e.Type)
-	}
-	if e.Properties["entity_id"] != clobberedIDProp {
-		t.Errorf("expected identity-like property entity_id preserved, got %q", e.Properties["entity_id"])
-	}
-	if e.Properties["entity_type"] != clobberedTypeProp {
-		t.Errorf("expected identity-like property entity_type preserved, got %q", e.Properties["entity_type"])
-	}
-	if e.Properties["name"] != "real" {
-		t.Errorf("expected property name real, got %q", e.Properties["name"])
-	}
-}
-
-// TestFullTextSearch_ReturnsEmbedding pins the read-search conversion
-// surfacing the proto Entity message's embedding field (SPEC R2 Entity
-// message; proto/flow/v1/cartographer.proto Entity.embedding), matching the
-// write-path conversions (CreateEntity/UpdateEntity/DeleteEntity) so the
-// read-search paths do not silently drop data the server sent.
-func TestFullTextSearch_ReturnsEmbedding(t *testing.T) {
-	mock := &mockCartographerClient{
-		fullTextSearch: func(ctx context.Context, req *flowv1.FullTextSearchRequest) (*flowv1.FullTextSearchResponse, error) {
-			return &flowv1.FullTextSearchResponse{
-				Results: []*flowv1.Entity{
-					{
-						EntityId:   "f1",
-						EntityType: componentType,
-						Embedding:  []float32{0.1, 0.2, 0.3},
-					},
-				},
-			}, nil
-		},
-	}
-	g := newMockGraph(mock)
-	results, err := g.FullTextSearch("query", componentType)
-	if err != nil {
-		t.Fatalf("FullTextSearch returned error: %v", err)
-	}
-	if len(results) != 1 {
-		t.Fatalf("expected 1 result, got %d", len(results))
-	}
-	if len(results[0].Embedding) != 3 || results[0].Embedding[0] != 0.1 || results[0].Embedding[2] != 0.3 {
-		t.Errorf("expected embedding [0.1 0.2 0.3], got %v", results[0].Embedding)
-	}
-}
-
-// TestListEntities_ReturnsEmbedding pins the ListEntities conversion
-// surfacing the proto Entity message's embedding field, matching the
-// write-path conversions.
-func TestListEntities_ReturnsEmbedding(t *testing.T) {
-	mock := &mockCartographerClient{
-		listEntities: func(ctx context.Context, req *flowv1.ListEntitiesRequest) (*flowv1.ListEntitiesResponse, error) {
-			return &flowv1.ListEntitiesResponse{
-				Entities: []*flowv1.Entity{
-					{
-						EntityId:   "e1",
-						EntityType: componentType,
-						Embedding:  []float32{0.4, 0.5},
-					},
-				},
-			}, nil
-		},
-	}
-	g := newMockGraph(mock)
-	page, err := g.ListEntities(componentType)
-	if err != nil {
-		t.Fatalf("ListEntities returned error: %v", err)
-	}
-	if len(page.Entities) != 1 {
-		t.Fatalf("expected 1 entity, got %d", len(page.Entities))
-	}
-	if len(page.Entities[0].Embedding) != 2 ||
-		page.Entities[0].Embedding[0] != 0.4 || page.Entities[0].Embedding[1] != 0.5 {
-		t.Errorf("expected embedding [0.4 0.5], got %v", page.Entities[0].Embedding)
-	}
-}
-
 func TestCreateEdge(t *testing.T) {
 	mock := &mockCartographerClient{
-		beginTx: func(ctx context.Context, req *flowv1.BeginTransactionRequest) (*flowv1.BeginTransactionResponse, error) {
-			return &flowv1.BeginTransactionResponse{TransactionId: "tx-1"}, nil
-		},
 		createEdge: func(ctx context.Context, req *flowv1.CreateEdgeRequest) (*flowv1.CreateEdgeResponse, error) {
 			return &flowv1.CreateEdgeResponse{
 				EdgeId:       testUUIDEdge,
@@ -1044,12 +377,8 @@ func TestCreateEdge(t *testing.T) {
 			}, nil
 		},
 	}
-	g := newMockGraph(mock)
-	g.idTypeMap.store(testUUIDFrom, "Component")
-	tx, err := g.BeginTransaction()
-	if err != nil {
-		t.Fatalf("BeginTransaction returned error: %v", err)
-	}
+	tx := newMockTx(mock)
+	tx.idTypeMap.store(testUUIDFrom, "Component")
 	edge, err := tx.CreateEdge("DEPENDS_ON", testUUIDFrom, testUUIDTo, nil)
 	if err != nil {
 		t.Fatalf("CreateEdge returned error: %v", err)
@@ -1064,9 +393,6 @@ func TestCreateEdge(t *testing.T) {
 
 func TestDeleteEdge(t *testing.T) {
 	mock := &mockCartographerClient{
-		beginTx: func(ctx context.Context, req *flowv1.BeginTransactionRequest) (*flowv1.BeginTransactionResponse, error) {
-			return &flowv1.BeginTransactionResponse{TransactionId: "tx-1"}, nil
-		},
 		deleteEdge: func(ctx context.Context, req *flowv1.DeleteEdgeRequest) (*flowv1.DeleteEdgeResponse, error) {
 			return &flowv1.DeleteEdgeResponse{
 				EdgeId:       req.GetId(),
@@ -1076,11 +402,7 @@ func TestDeleteEdge(t *testing.T) {
 			}, nil
 		},
 	}
-	g := newMockGraph(mock)
-	tx, err := g.BeginTransaction()
-	if err != nil {
-		t.Fatalf("BeginTransaction returned error: %v", err)
-	}
+	tx := newMockTx(mock)
 	edge, err := tx.DeleteEdge(testUUIDEdge)
 	if err != nil {
 		t.Fatalf("DeleteEdge returned error: %v", err)
@@ -1090,199 +412,8 @@ func TestDeleteEdge(t *testing.T) {
 	}
 }
 
-func TestBeginTransaction(t *testing.T) {
-	mock := &mockCartographerClient{
-		beginTx: func(ctx context.Context, req *flowv1.BeginTransactionRequest) (*flowv1.BeginTransactionResponse, error) {
-			return &flowv1.BeginTransactionResponse{
-				TransactionId:  "tx-1",
-				AppliedTimeout: durationpb.New(30 * time.Minute),
-			}, nil
-		},
-	}
-	g := newMockGraph(mock)
-	tx, err := g.BeginTransaction()
-	if err != nil {
-		t.Fatalf("BeginTransaction returned error: %v", err)
-	}
-	if tx.ID() != "tx-1" {
-		t.Errorf("expected tx ID tx-1, got %s", tx.ID())
-	}
-	// SPEC R2: the applied timeout returned by BeginTransaction must be
-	// propagated to the Transaction handle's timeout.
-	if tx.timeout != 30*time.Minute {
-		t.Errorf("expected tx.timeout to equal server applied timeout 30m, got %v", tx.timeout)
-	}
-}
-
-// TestGraphExportGraph_NoEntityTypeMetadata pins SPEC R3: ExportGraph is not
-// among the SDK's entity-type-annotating RPCs. SPEC R3 enumerates only
-// CreateEdge/UpdateEntity/DeleteEntity (resolved type, wildcard fallback) and
-// DeleteEdge (always wildcard) for entity-type capability metadata; the SDK
-// attaches no entity-type capability metadata for any other Cartographer RPC.
-// The Sidecar gates ExportGraph on the fixed READ:graph/entity/* capability
-// and never reads entity_type, so the stream-establishing context must carry
-// no entity_type metadata key.
-//
-//nolint:dupl // Sync and ExportGraph no-annotation metadata tests share structure.
-func TestGraphExportGraph_NoEntityTypeMetadata(t *testing.T) {
-	mock := &mockCartographerClient{
-		exportGraph: func(ctx context.Context, req *flowv1.ExportGraphRequest,
-		) (grpc.ServerStreamingClient[flowv1.ExportGraphResponse], error) {
-			md, _ := metadata.FromOutgoingContext(ctx)
-			if vals := md.Get(metadataEntityTypeKey); len(vals) > 0 {
-				t.Errorf("expected no %s metadata on ExportGraph outgoing context, got %v", metadataEntityTypeKey, vals)
-			}
-			return &mockStream{chunks: []*flowv1.ExportGraphResponse{{Chunk: []byte("{}")}}}, nil
-		},
-	}
-	g := newMockGraph(mock)
-	stream, err := g.ExportGraph("json")
-	if err != nil {
-		t.Fatalf("ExportGraph returned error: %v", err)
-	}
-	defer stream.Stop()
-}
-
-func TestExportGraph_NilSession(t *testing.T) {
-	g := &Graph{}
-	_, err := g.ExportGraph("json")
-	if err == nil {
-		t.Fatal("expected error for nil session")
-	}
-}
-
-// TestGraphSync_NoEntityTypeMetadata pins SPEC R3: Sync is not among the SDK's
-// entity-type-annotating RPCs. SPEC R3 enumerates only
-// CreateEdge/UpdateEntity/DeleteEntity (resolved type, wildcard fallback) and
-// DeleteEdge (always wildcard) for entity-type capability metadata; the SDK
-// attaches no entity-type capability metadata for any other Cartographer RPC.
-// The Sidecar gates Sync on the fixed WRITE:graph/entity/* capability and
-// never reads entity_type, so the outgoing context must carry no entity_type
-// metadata key.
-//
-//nolint:dupl // Sync and ExportGraph no-annotation metadata tests share structure.
-func TestGraphSync_NoEntityTypeMetadata(t *testing.T) {
-	called := false
-	mock := &mockCartographerClient{
-		sync: func(ctx context.Context, req *flowv1.SyncRequest) (*flowv1.SyncResponse, error) {
-			called = true
-			md, _ := metadata.FromOutgoingContext(ctx)
-			if vals := md.Get(metadataEntityTypeKey); len(vals) > 0 {
-				t.Errorf("expected no %s metadata on Sync outgoing context, got %v", metadataEntityTypeKey, vals)
-			}
-			return &flowv1.SyncResponse{}, nil
-		},
-	}
-	g := newMockGraph(mock)
-	if err := g.Sync(); err != nil {
-		t.Fatalf("Sync returned error: %v", err)
-	}
-	if !called {
-		t.Fatal("expected Sync RPC to be invoked")
-	}
-}
-
-func TestSync_NilSession(t *testing.T) {
-	g := &Graph{}
-	if err := g.Sync(); err == nil {
-		t.Fatal("expected error for nil session")
-	}
-}
-
-func TestExportGraph_Success(t *testing.T) {
-	mock := &mockCartographerClient{
-		exportGraph: func(ctx context.Context, req *flowv1.ExportGraphRequest,
-		) (grpc.ServerStreamingClient[flowv1.ExportGraphResponse], error) {
-			if req.GetFormat() != "json" {
-				t.Errorf("expected format json, got %q", req.GetFormat())
-			}
-			return &mockStream{
-				chunks: []*flowv1.ExportGraphResponse{
-					{Chunk: []byte(`{"nodes":`)},
-					{Chunk: []byte(`[{"id":"1"}]`)},
-					{Chunk: []byte(`}`)},
-				},
-			}, nil
-		},
-	}
-	g := newMockGraph(mock)
-	stream, err := g.ExportGraph("json")
-	if err != nil {
-		t.Fatalf("ExportGraph returned error: %v", err)
-	}
-	defer stream.Stop()
-
-	var got []byte
-	for {
-		chunk, err := stream.Recv()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			t.Fatalf("Recv returned error: %v", err)
-		}
-		got = append(got, chunk.Data...)
-	}
-	expected := `{"nodes":[{"id":"1"}]}`
-	if string(got) != expected {
-		t.Errorf("expected %q, got %q", expected, string(got))
-	}
-}
-
-// TestExportGraph_AppliesPerCallDeadlineToEstablishment verifies that the
-// per-call deadline configured via session timeout bounds the stream
-// ESTABLISHMENT call, mirroring how session.call bounds unary RPCs. A mock
-// that parks until its context deadline fires proves a blackholed upstream
-// is cut during establishment rather than hanging on the deadline-less
-// session ctx.
-func TestExportGraph_AppliesPerCallDeadlineToEstablishment(t *testing.T) {
-	mock := &mockCartographerClient{
-		exportGraph: func(ctx context.Context, _ *flowv1.ExportGraphRequest,
-		) (grpc.ServerStreamingClient[flowv1.ExportGraphResponse], error) {
-			select {
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			case <-time.After(2 * time.Second):
-				return nil, errors.New("establishment deadline was not applied; call was not cut")
-			}
-		},
-	}
-	g := newMockGraph(mock)
-	g.session.timeout = 100 * time.Millisecond
-
-	_, err := g.ExportGraph("json")
-	if err == nil {
-		t.Fatal("expected ExportGraph establishment to be cut by the per-call deadline")
-	}
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("expected context.DeadlineExceeded to cut the call, got %v", err)
-	}
-}
-
-func TestGraphMethodsWithNilSession(t *testing.T) {
-	g := &Graph{}
-	tests := []struct {
-		name string
-		fn   func() error
-	}{
-		{"ExecuteCypher", func() error { _, err := g.ExecuteCypher("", nil); return err }},
-		{"SearchNeighbors", func() error { _, err := g.SearchNeighbors(nil, "", 0); return err }},
-		{"FullTextSearch", func() error { _, err := g.FullTextSearch("", ""); return err }},
-		{"ListEntities", func() error { _, err := g.ListEntities(""); return err }},
-		{"BeginTransaction", func() error { _, err := g.BeginTransaction(); return err }},
-		{"ExportGraph", func() error { _, err := g.ExportGraph("json"); return err }},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if err := tt.fn(); err == nil {
-				t.Error("expected error for nil session")
-			}
-		})
-	}
-}
-
 // ---------------------------------------------------------------------------
-// ID-to-type map tests
+// ID-to-type map unit tests
 // ---------------------------------------------------------------------------
 
 func TestIDTypeMap_StoreAndResolve(t *testing.T) {
@@ -1356,108 +487,18 @@ func TestIDTypeMap_ResolveUnknown(t *testing.T) {
 	}
 }
 
-func TestListEntities_PopulatesMap(t *testing.T) {
-	mock := &mockCartographerClient{
-		listEntities: func(ctx context.Context, req *flowv1.ListEntitiesRequest) (*flowv1.ListEntitiesResponse, error) {
-			return &flowv1.ListEntitiesResponse{
-				Entities: []*flowv1.Entity{
-					{EntityId: "e1", EntityType: "Component"},
-					{EntityId: "e2", EntityType: "Service"},
-				},
-			}, nil
-		},
-	}
-	g := newMockGraph(mock)
-	_, err := g.ListEntities(componentType)
-	if err != nil {
-		t.Fatalf("ListEntities returned error: %v", err)
-	}
-	typ, ok := g.idTypeMap.resolve("e1")
-	if !ok || typ != componentType {
-		t.Errorf("expected Component for e1, got %q (ok=%v)", typ, ok)
-	}
-	typ, ok = g.idTypeMap.resolve("e2")
-	if !ok || typ != "Service" {
-		t.Errorf("expected Service for e2, got %q (ok=%v)", typ, ok)
-	}
-}
-
-// TestSearchNeighbors_PopulatesMap pins SPEC R3's ID-to-type cache
-// population from query results on the Graph layer: SearchNeighbors results
-// carry the entity type, which the SDK records keyed by entity ID.
-func TestSearchNeighbors_PopulatesMap(t *testing.T) {
-	mock := &mockCartographerClient{
-		searchNeighbors: func(ctx context.Context,
-			req *flowv1.SearchNeighborsRequest,
-		) (*flowv1.SearchNeighborsResponse, error) {
-			return &flowv1.SearchNeighborsResponse{
-				Results: []*flowv1.SearchNeighborResult{
-					{EntityId: "n1", EntityType: "Component", Distance: 0.9},
-					{EntityId: "n2", EntityType: "Service", Distance: 0.8},
-				},
-			}, nil
-		},
-	}
-	g := newMockGraph(mock)
-	_, err := g.SearchNeighbors([]float32{0.1, 0.2}, componentType, 10)
-	if err != nil {
-		t.Fatalf("SearchNeighbors returned error: %v", err)
-	}
-	typ, ok := g.idTypeMap.resolve("n1")
-	if !ok || typ != componentType {
-		t.Errorf("expected Component for n1, got %q (ok=%v)", typ, ok)
-	}
-	typ, ok = g.idTypeMap.resolve("n2")
-	if !ok || typ != serviceType {
-		t.Errorf("expected Service for n2, got %q (ok=%v)", typ, ok)
-	}
-}
-
-// TestFullTextSearch_PopulatesMap pins SPEC R3's ID-to-type cache population
-// from query results on the Graph layer: FullTextSearch results carry the
-// entity type, which the SDK records keyed by entity ID.
-func TestFullTextSearch_PopulatesMap(t *testing.T) {
-	mock := &mockCartographerClient{
-		fullTextSearch: func(ctx context.Context, req *flowv1.FullTextSearchRequest) (*flowv1.FullTextSearchResponse, error) {
-			return &flowv1.FullTextSearchResponse{
-				Results: []*flowv1.Entity{
-					{EntityId: "f1", EntityType: "Component"},
-					{EntityId: "f2", EntityType: "Service"},
-				},
-			}, nil
-		},
-	}
-	g := newMockGraph(mock)
-	_, err := g.FullTextSearch("query", componentType)
-	if err != nil {
-		t.Fatalf("FullTextSearch returned error: %v", err)
-	}
-	typ, ok := g.idTypeMap.resolve("f1")
-	if !ok || typ != componentType {
-		t.Errorf("expected Component for f1, got %q (ok=%v)", typ, ok)
-	}
-	typ, ok = g.idTypeMap.resolve("f2")
-	if !ok || typ != serviceType {
-		t.Errorf("expected Service for f2, got %q (ok=%v)", typ, ok)
-	}
-}
-
+// TestDeleteEntity_RemovesFromMap pins tx.DeleteEntity evicting the deleted
+// ID from the local ID-to-type map: a deleted entity must not keep resolving
+// to a concrete type on a later capability annotation.
 func TestDeleteEntity_RemovesFromMap(t *testing.T) {
 	mock := &mockCartographerClient{
-		beginTx: func(ctx context.Context, req *flowv1.BeginTransactionRequest) (*flowv1.BeginTransactionResponse, error) {
-			return &flowv1.BeginTransactionResponse{TransactionId: "tx-1"}, nil
-		},
 		deleteEntity: func(ctx context.Context, req *flowv1.DeleteEntityRequest) (*flowv1.DeleteEntityResponse, error) {
 			return &flowv1.DeleteEntityResponse{EntityId: req.GetId()}, nil
 		},
 	}
-	g := newMockGraph(mock)
-	g.idTypeMap.store(testUUIDEntity, "Component")
-	tx, err := g.BeginTransaction()
-	if err != nil {
-		t.Fatalf("BeginTransaction returned error: %v", err)
-	}
-	_, err = tx.DeleteEntity(testUUIDEntity)
+	tx := newMockTx(mock)
+	tx.idTypeMap.store(testUUIDEntity, "Component")
+	_, err := tx.DeleteEntity(testUUIDEntity)
 	if err != nil {
 		t.Fatalf("DeleteEntity returned error: %v", err)
 	}
@@ -1501,561 +542,5 @@ func TestIDTypeMap_EmptyTypeNotStored(t *testing.T) {
 	}
 	if _, ok := m.resolve("id-1"); ok {
 		t.Error("expected empty-type entry not to be stored")
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Capability annotation tests (Graph write methods with unknown entity IDs)
-// ---------------------------------------------------------------------------
-
-//nolint:dupl // Graph and Transaction wildcard metadata tests share structure.
-func TestGraphUpdateEntity_UnknownIDSendsWildcard(t *testing.T) {
-	var capturedKey, capturedValue string
-	mock := &mockCartographerClient{
-		beginTx: func(ctx context.Context, req *flowv1.BeginTransactionRequest) (*flowv1.BeginTransactionResponse, error) {
-			return &flowv1.BeginTransactionResponse{TransactionId: "tx-1"}, nil
-		},
-		updateEntity: func(ctx context.Context, req *flowv1.UpdateEntityRequest) (*flowv1.UpdateEntityResponse, error) {
-			md, ok := metadata.FromOutgoingContext(ctx)
-			if !ok {
-				t.Fatal("no outgoing metadata")
-			}
-			vals := md.Get(metadataEntityTypeKey)
-			if len(vals) == 0 {
-				t.Fatal("no entity_type metadata")
-			}
-			capturedKey = metadataEntityTypeKey
-			capturedValue = vals[0]
-			return &flowv1.UpdateEntityResponse{EntityId: req.GetId(), EntityType: "Component"}, nil
-		},
-	}
-	g := newMockGraph(mock)
-	// testUUIDEntity is NOT in the map -> should produce wildcard
-	tx, err := g.BeginTransaction()
-	if err != nil {
-		t.Fatalf("BeginTransaction returned error: %v", err)
-	}
-	_, err = tx.UpdateEntity(testUUIDEntity, nil, nil)
-	if err != nil {
-		t.Fatalf("UpdateEntity returned error: %v", err)
-	}
-	if capturedKey != metadataEntityTypeKey {
-		t.Errorf("expected metadata key entity_type, got %q", capturedKey)
-	}
-	if capturedValue != "*" {
-		t.Errorf("expected wildcard *, got %q", capturedValue)
-	}
-}
-
-// TestGraphUpdateEntity_ResolvedTypeAnnotation proves the capability
-// annotation carries the resolved concrete <type> (e.g. Component), not the
-// wildcard, when the entity ID IS present in the local ID-to-type map. This
-// is SPEC R3's mode-1 resolution: the Sidecar can then block on a specific
-// <type> mismatch instead of falling back to a wildcard best-effort check.
-func TestGraphUpdateEntity_ResolvedTypeAnnotation(t *testing.T) {
-	var capturedKey, capturedValue string
-	mock := &mockCartographerClient{
-		beginTx: func(ctx context.Context, req *flowv1.BeginTransactionRequest) (*flowv1.BeginTransactionResponse, error) {
-			return &flowv1.BeginTransactionResponse{TransactionId: "tx-1"}, nil
-		},
-		updateEntity: func(ctx context.Context, req *flowv1.UpdateEntityRequest) (*flowv1.UpdateEntityResponse, error) {
-			md, ok := metadata.FromOutgoingContext(ctx)
-			if !ok {
-				t.Fatal("no outgoing metadata")
-			}
-			vals := md.Get(metadataEntityTypeKey)
-			if len(vals) == 0 {
-				t.Fatal("no entity_type metadata")
-			}
-			capturedKey = metadataEntityTypeKey
-			capturedValue = vals[0]
-			return &flowv1.UpdateEntityResponse{EntityId: req.GetId(), EntityType: componentType}, nil
-		},
-	}
-	g := newMockGraph(mock)
-	// testUUIDEntity IS in the map -> annotation must carry the resolved Component.
-	g.idTypeMap.store(testUUIDEntity, componentType)
-	tx, err := g.BeginTransaction()
-	if err != nil {
-		t.Fatalf("BeginTransaction returned error: %v", err)
-	}
-	_, err = tx.UpdateEntity(testUUIDEntity, nil, nil)
-	if err != nil {
-		t.Fatalf("UpdateEntity returned error: %v", err)
-	}
-	if capturedKey != metadataEntityTypeKey {
-		t.Errorf("expected metadata key entity_type, got %q", capturedKey)
-	}
-	if capturedValue != componentType {
-		t.Errorf("expected resolved type %q in annotation, got %q", componentType, capturedValue)
-	}
-}
-
-func TestGraphDeleteEntity_UnknownIDSendsWildcard(t *testing.T) {
-	var capturedKey, capturedValue string
-	mock := &mockCartographerClient{
-		beginTx: func(ctx context.Context, req *flowv1.BeginTransactionRequest) (*flowv1.BeginTransactionResponse, error) {
-			return &flowv1.BeginTransactionResponse{TransactionId: "tx-1"}, nil
-		},
-		deleteEntity: func(ctx context.Context, req *flowv1.DeleteEntityRequest) (*flowv1.DeleteEntityResponse, error) {
-			md, ok := metadata.FromOutgoingContext(ctx)
-			if !ok {
-				t.Fatal("no outgoing metadata")
-			}
-			vals := md.Get(metadataEntityTypeKey)
-			if len(vals) == 0 {
-				t.Fatal("no entity_type metadata")
-			}
-			capturedKey = metadataEntityTypeKey
-			capturedValue = vals[0]
-			return &flowv1.DeleteEntityResponse{EntityId: req.GetId()}, nil
-		},
-	}
-	g := newMockGraph(mock)
-	// testUUIDEntity is NOT in the map -> should produce wildcard
-	tx, err := g.BeginTransaction()
-	if err != nil {
-		t.Fatalf("BeginTransaction returned error: %v", err)
-	}
-	_, err = tx.DeleteEntity(testUUIDEntity)
-	if err != nil {
-		t.Fatalf("DeleteEntity returned error: %v", err)
-	}
-	if capturedKey != metadataEntityTypeKey {
-		t.Errorf("expected metadata key entity_type, got %q", capturedKey)
-	}
-	if capturedValue != "*" {
-		t.Errorf("expected wildcard *, got %q", capturedValue)
-	}
-}
-
-func TestGraphCreateEdge_UnknownFromIDSendsWildcard(t *testing.T) {
-	var capturedKey, capturedValue string
-	mock := &mockCartographerClient{
-		beginTx: func(ctx context.Context, req *flowv1.BeginTransactionRequest) (*flowv1.BeginTransactionResponse, error) {
-			return &flowv1.BeginTransactionResponse{TransactionId: "tx-1"}, nil
-		},
-		createEdge: func(ctx context.Context, req *flowv1.CreateEdgeRequest) (*flowv1.CreateEdgeResponse, error) {
-			md, ok := metadata.FromOutgoingContext(ctx)
-			if !ok {
-				t.Fatal("no outgoing metadata")
-			}
-			vals := md.Get(metadataEntityTypeKey)
-			if len(vals) == 0 {
-				t.Fatal("no entity_type metadata")
-			}
-			capturedKey = metadataEntityTypeKey
-			capturedValue = vals[0]
-			return &flowv1.CreateEdgeResponse{
-				EdgeId: "edge-1", FromEntityId: req.GetFromEntityId(), ToEntityId: req.GetToEntityId(),
-			}, nil
-		},
-	}
-	g := newMockGraph(mock)
-	// testUUIDFrom is NOT in the map -> should produce wildcard
-	tx, err := g.BeginTransaction()
-	if err != nil {
-		t.Fatalf("BeginTransaction returned error: %v", err)
-	}
-	_, err = tx.CreateEdge("DEPENDS_ON", testUUIDFrom, testUUIDTo, nil)
-	if err != nil {
-		t.Fatalf("CreateEdge returned error: %v", err)
-	}
-	if capturedKey != metadataEntityTypeKey {
-		t.Errorf("expected metadata key entity_type, got %q", capturedKey)
-	}
-	if capturedValue != "*" {
-		t.Errorf("expected wildcard *, got %q", capturedValue)
-	}
-}
-
-// TestGraphDeleteEntity_ResolvedTypeAnnotation proves SPEC R3's mode-1
-// resolution on the Graph write path: when the entity ID IS in the local
-// ID-to-type map, DeleteEntity's capability annotation carries the resolved
-// concrete <type> (e.g. Component), not the wildcard, enabling the Sidecar
-// to block on a specific <type> mismatch.
-//
-//nolint:dupl // Graph and Transaction resolved-type metadata tests share structure.
-func TestGraphDeleteEntity_ResolvedTypeAnnotation(t *testing.T) {
-	var capturedKey, capturedValue string
-	mock := &mockCartographerClient{
-		beginTx: func(ctx context.Context, req *flowv1.BeginTransactionRequest) (*flowv1.BeginTransactionResponse, error) {
-			return &flowv1.BeginTransactionResponse{TransactionId: "tx-1"}, nil
-		},
-		deleteEntity: func(ctx context.Context, req *flowv1.DeleteEntityRequest) (*flowv1.DeleteEntityResponse, error) {
-			md, ok := metadata.FromOutgoingContext(ctx)
-			if !ok {
-				t.Fatal("no outgoing metadata")
-			}
-			vals := md.Get(metadataEntityTypeKey)
-			if len(vals) == 0 {
-				t.Fatal("no entity_type metadata")
-			}
-			capturedKey = metadataEntityTypeKey
-			capturedValue = vals[0]
-			return &flowv1.DeleteEntityResponse{EntityId: req.GetId()}, nil
-		},
-	}
-	g := newMockGraph(mock)
-	// testUUIDEntity IS in the map -> annotation must carry the resolved Component.
-	g.idTypeMap.store(testUUIDEntity, componentType)
-	tx, err := g.BeginTransaction()
-	if err != nil {
-		t.Fatalf("BeginTransaction returned error: %v", err)
-	}
-	_, err = tx.DeleteEntity(testUUIDEntity)
-	if err != nil {
-		t.Fatalf("DeleteEntity returned error: %v", err)
-	}
-	if capturedKey != metadataEntityTypeKey {
-		t.Errorf("expected metadata key entity_type, got %q", capturedKey)
-	}
-	if capturedValue != componentType {
-		t.Errorf("expected resolved type %q in annotation, got %q", componentType, capturedValue)
-	}
-}
-
-// TestGraphCreateEdge_ResolvedTypeAnnotation proves SPEC R3's mode-1
-// resolution on the Graph write path: CreateEdge resolves the SOURCE entity
-// type from the local ID-to-type map, so when the from-entity ID IS known
-// the annotation carries the resolved concrete <type>, not the wildcard.
-//
-//nolint:dupl // Graph and Transaction resolved-type metadata tests share structure.
-func TestGraphCreateEdge_ResolvedTypeAnnotation(t *testing.T) {
-	var capturedKey, capturedValue string
-	mock := &mockCartographerClient{
-		beginTx: func(ctx context.Context, req *flowv1.BeginTransactionRequest) (*flowv1.BeginTransactionResponse, error) {
-			return &flowv1.BeginTransactionResponse{TransactionId: "tx-1"}, nil
-		},
-		createEdge: func(ctx context.Context, req *flowv1.CreateEdgeRequest) (*flowv1.CreateEdgeResponse, error) {
-			md, ok := metadata.FromOutgoingContext(ctx)
-			if !ok {
-				t.Fatal("no outgoing metadata")
-			}
-			vals := md.Get(metadataEntityTypeKey)
-			if len(vals) == 0 {
-				t.Fatal("no entity_type metadata")
-			}
-			capturedKey = metadataEntityTypeKey
-			capturedValue = vals[0]
-			return &flowv1.CreateEdgeResponse{
-				EdgeId: "edge-1", FromEntityId: req.GetFromEntityId(), ToEntityId: req.GetToEntityId(),
-			}, nil
-		},
-	}
-	g := newMockGraph(mock)
-	// testUUIDFrom IS in the map -> annotation must carry the resolved Component.
-	g.idTypeMap.store(testUUIDFrom, componentType)
-	tx, err := g.BeginTransaction()
-	if err != nil {
-		t.Fatalf("BeginTransaction returned error: %v", err)
-	}
-	_, err = tx.CreateEdge("DEPENDS_ON", testUUIDFrom, testUUIDTo, nil)
-	if err != nil {
-		t.Fatalf("CreateEdge returned error: %v", err)
-	}
-	if capturedKey != metadataEntityTypeKey {
-		t.Errorf("expected metadata key entity_type, got %q", capturedKey)
-	}
-	if capturedValue != componentType {
-		t.Errorf("expected resolved type %q in annotation, got %q", componentType, capturedValue)
-	}
-}
-
-func TestGraphDeleteEdge_SendsWildcardAndKey(t *testing.T) {
-	var capturedKey, capturedValue string
-	mock := &mockCartographerClient{
-		beginTx: func(ctx context.Context, req *flowv1.BeginTransactionRequest) (*flowv1.BeginTransactionResponse, error) {
-			return &flowv1.BeginTransactionResponse{TransactionId: "tx-1"}, nil
-		},
-		deleteEdge: func(ctx context.Context, req *flowv1.DeleteEdgeRequest) (*flowv1.DeleteEdgeResponse, error) {
-			md, ok := metadata.FromOutgoingContext(ctx)
-			if !ok {
-				t.Fatal("no outgoing metadata")
-			}
-			vals := md.Get(metadataEntityTypeKey)
-			if len(vals) == 0 {
-				t.Fatal("no entity_type metadata")
-			}
-			capturedKey = metadataEntityTypeKey
-			capturedValue = vals[0]
-			return &flowv1.DeleteEdgeResponse{
-				EdgeId: req.GetId(), EdgeType: "DEPENDS_ON",
-			}, nil
-		},
-	}
-	g := newMockGraph(mock)
-	tx, err := g.BeginTransaction()
-	if err != nil {
-		t.Fatalf("BeginTransaction returned error: %v", err)
-	}
-	_, err = tx.DeleteEdge(testUUIDEdge)
-	if err != nil {
-		t.Fatalf("DeleteEdge returned error: %v", err)
-	}
-	if capturedKey != metadataEntityTypeKey {
-		t.Errorf("expected metadata key entity_type, got %q", capturedKey)
-	}
-	if capturedValue != "*" {
-		t.Errorf("expected wildcard *, got %q", capturedValue)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// ExportStream tests
-// ---------------------------------------------------------------------------
-
-// mockStream implements grpc.ServerStreamingClient for testing.
-type mockStream struct {
-	grpc.ClientStream
-	chunks []*flowv1.ExportGraphResponse
-	pos    int
-	err    error
-}
-
-func (s *mockStream) Recv() (*flowv1.ExportGraphResponse, error) {
-	if s.err != nil {
-		return nil, s.err
-	}
-	if s.pos >= len(s.chunks) {
-		return nil, io.EOF // stream end
-	}
-	chunk := s.chunks[s.pos]
-	s.pos++
-	return chunk, nil
-}
-
-func TestExportStream_Recv(t *testing.T) {
-	_, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	stream := &mockStream{
-		chunks: []*flowv1.ExportGraphResponse{
-			{Chunk: []byte("chunk1")},
-			{Chunk: []byte("chunk2")},
-		},
-	}
-	es := newExportStream(cancel, stream)
-
-	chunk, err := es.Recv()
-	if err != nil {
-		t.Fatalf("Recv returned error: %v", err)
-	}
-	if string(chunk.Data) != "chunk1" {
-		t.Errorf("expected chunk1, got %s", string(chunk.Data))
-	}
-
-	chunk, err = es.Recv()
-	if err != nil {
-		t.Fatalf("Recv returned error: %v", err)
-	}
-	if string(chunk.Data) != "chunk2" {
-		t.Errorf("expected chunk2, got %s", string(chunk.Data))
-	}
-
-	// Stop the stream
-	es.Stop()
-}
-
-func TestExportStream_Stop(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	stream := &mockStream{chunks: []*flowv1.ExportGraphResponse{{Chunk: []byte("data")}}}
-	es := newExportStream(cancel, stream)
-
-	es.Stop()
-	// After stop, the context is cancelled
-	if ctx.Err() == nil {
-		t.Error("expected context to be cancelled after Stop")
-	}
-}
-
-// TestExportStream_StopCancelsStream pins the documented "Stop cancels the
-// stream" behaviour: the context the gRPC stream was established on must be
-// cancelled by Stop(). This fails if Stop only cancels a detached local
-// context, which would leak the stream until session close or server
-// completion. Both session-timeout configurations are exercised: the stream
-// is pinned to the cancellable context directly, or to its timeout-bounded
-// child.
-func TestExportStream_StopCancelsStream(t *testing.T) {
-	for _, tc := range []struct {
-		name    string
-		timeout time.Duration
-	}{
-		{"no session timeout", 0},
-		{"with session timeout", time.Hour},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			var streamCtx context.Context
-			mock := &mockCartographerClient{
-				exportGraph: func(ctx context.Context, _ *flowv1.ExportGraphRequest,
-				) (grpc.ServerStreamingClient[flowv1.ExportGraphResponse], error) {
-					streamCtx = ctx
-					return &mockStream{chunks: []*flowv1.ExportGraphResponse{{Chunk: []byte("data")}}}, nil
-				},
-			}
-			g := newMockGraph(mock)
-			g.session.timeout = tc.timeout
-			stream, err := g.ExportGraph("json")
-			if err != nil {
-				t.Fatalf("ExportGraph returned error: %v", err)
-			}
-			stream.Stop()
-			if streamCtx == nil {
-				t.Fatal("ExportGraph was not called")
-			}
-			if streamCtx.Err() == nil {
-				t.Error("expected the stream's pinned context to be cancelled after Stop")
-			}
-		})
-	}
-}
-
-// ---------------------------------------------------------------------------
-// WithTimeout / ListEntitiesOption tests
-// ---------------------------------------------------------------------------
-
-func TestWithPageSize(t *testing.T) {
-	opt := WithPageSize(50)
-	cfg := &listEntitiesConfig{}
-	opt(cfg)
-	if cfg.pageSize != 50 {
-		t.Errorf("expected page size 50, got %d", cfg.pageSize)
-	}
-}
-
-func TestWithPageToken(t *testing.T) {
-	opt := WithPageToken("token-1")
-	cfg := &listEntitiesConfig{}
-	opt(cfg)
-	if cfg.pageToken != "token-1" {
-		t.Errorf("expected token token-1, got %q", cfg.pageToken)
-	}
-}
-
-func TestWithTimeout(t *testing.T) {
-	opt := WithTimeout(48 * time.Hour)
-	cfg := &beginTxConfig{}
-	opt(cfg)
-	if cfg.timeout != 48*time.Hour {
-		t.Errorf("expected 48h timeout, got %v", cfg.timeout)
-	}
-}
-
-// TestBeginTransaction_WithTimeout pins the SPEC R2/R9 rejection model
-// (error-table row "Invalid transaction timeout duration"): a requested
-// timeout exceeding the 7-day hard maximum is rejected with INVALID_ARGUMENT
-// by the server — never silently capped — and the SDK surfaces that
-// rejection. The client sends the requested value verbatim (no local cap).
-func TestBeginTransaction_WithTimeout(t *testing.T) {
-	var captured *durationpb.Duration
-	mock := &mockCartographerClient{
-		beginTx: func(ctx context.Context, req *flowv1.BeginTransactionRequest) (*flowv1.BeginTransactionResponse, error) {
-			captured = req.GetTimeout()
-			return nil, status.Error(codes.InvalidArgument, "invalid transaction timeout duration")
-		},
-	}
-	g := newMockGraph(mock)
-	tx, err := g.BeginTransaction(WithTimeout(10 * 24 * time.Hour))
-	if err == nil {
-		t.Fatal("expected INVALID_ARGUMENT rejection for over-cap timeout")
-	}
-	if status.Code(err) != codes.InvalidArgument {
-		t.Errorf("expected INVALID_ARGUMENT, got %v", status.Code(err))
-	}
-	if tx != nil {
-		t.Error("expected no transaction to be returned on rejection")
-	}
-	if captured == nil {
-		t.Fatal("expected timeout to be set on request")
-	}
-	if captured.AsDuration() != 10*24*time.Hour {
-		t.Errorf("expected requested timeout 10d sent verbatim, got %v", captured.AsDuration())
-	}
-}
-
-// TestBeginTransaction_SurfacesAppliedTimeout verifies that on a valid (in-cap)
-// request the SDK surfaces the server's applied_timeout on the Transaction
-// handle (SPEC R2; learnings rule: no silent capping — surface the
-// server-applied timeout from BeginTransaction).
-func TestBeginTransaction_SurfacesAppliedTimeout(t *testing.T) {
-	mock := &mockCartographerClient{
-		beginTx: func(ctx context.Context, req *flowv1.BeginTransactionRequest) (*flowv1.BeginTransactionResponse, error) {
-			return &flowv1.BeginTransactionResponse{
-				TransactionId:  "11111111-1111-4111-8111-111111111111",
-				AppliedTimeout: durationpb.New(30 * time.Minute),
-			}, nil
-		},
-	}
-	g := newMockGraph(mock)
-	tx, err := g.BeginTransaction(WithTimeout(48 * time.Hour))
-	if err != nil {
-		t.Fatalf("BeginTransaction returned error: %v", err)
-	}
-	if tx.ID() != "11111111-1111-4111-8111-111111111111" {
-		t.Errorf("expected tx ID %q, got %q", "11111111-1111-4111-8111-111111111111", tx.ID())
-	}
-	if tx.timeout != 30*time.Minute {
-		t.Errorf("expected tx.timeout to equal server applied timeout 30m, got %v", tx.timeout)
-	}
-}
-
-// TestBeginTransaction_TimeoutAccessor pins the WithTimeout doc claim that
-// the server-applied timeout is surfaced on the resulting Transaction
-// handle: the granted applied_timeout must be readable by SDK callers via
-// the public Timeout() accessor (the underlying field is unexported, so
-// in-package reads alone do not surface it).
-func TestBeginTransaction_TimeoutAccessor(t *testing.T) {
-	mock := &mockCartographerClient{
-		beginTx: func(ctx context.Context, req *flowv1.BeginTransactionRequest) (*flowv1.BeginTransactionResponse, error) {
-			return &flowv1.BeginTransactionResponse{
-				TransactionId:  "tx-1",
-				AppliedTimeout: durationpb.New(45 * time.Minute),
-			}, nil
-		},
-	}
-	g := newMockGraph(mock)
-	tx, err := g.BeginTransaction(WithTimeout(24 * time.Hour))
-	if err != nil {
-		t.Fatalf("BeginTransaction returned error: %v", err)
-	}
-	if got := tx.Timeout(); got != 45*time.Minute {
-		t.Errorf("expected Timeout() to surface server-applied 45m, got %v", got)
-	}
-}
-
-// TestBeginTransaction_RejectsNonPositiveTimeout pins the SPEC error-table
-// row "Invalid transaction timeout duration" ("Timeout duration is
-// non-positive ... Applies to: ExtendTimeout, BeginTransaction") on the SDK
-// boundary: a non-positive WithTimeout value must be rejected locally by
-// BeginTransaction (mirroring ExtendTimeout's local rejection — no silent
-// capping), never silently discarded before reaching the wire.
-func TestBeginTransaction_RejectsNonPositiveTimeout(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		d    time.Duration
-	}{
-		{"zero", 0},
-		{"negative", -1 * time.Hour},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			called := false
-			mock := &mockCartographerClient{
-				beginTx: func(ctx context.Context, req *flowv1.BeginTransactionRequest) (*flowv1.BeginTransactionResponse, error) {
-					called = true
-					return &flowv1.BeginTransactionResponse{TransactionId: "tx-1"}, nil
-				},
-			}
-			g := newMockGraph(mock)
-			tx, err := g.BeginTransaction(WithTimeout(tc.d))
-			if err == nil {
-				t.Fatal("expected error for non-positive timeout")
-			}
-			if tx != nil {
-				t.Error("expected no transaction to be returned on rejection")
-			}
-			if called {
-				t.Error("expected BeginTransaction RPC not to be called for non-positive timeout")
-			}
-		})
 	}
 }

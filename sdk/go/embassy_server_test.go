@@ -134,7 +134,7 @@ func TestResolveEmbassyImportTypeMergesBuiltInAndFlowDefined(t *testing.T) {
 
 	resolved, ok := ResolveEmbassyImportType(
 		"law-petition",
-		DefaultSystemImportTypes(),
+		testSystemImportTypes(),
 		map[string]EmbassyFlowImportTypeSpec{"external-submission": {Node: "intake"}},
 	)
 	if !ok || !resolved.BuiltIn {
@@ -143,67 +143,10 @@ func TestResolveEmbassyImportTypeMergesBuiltInAndFlowDefined(t *testing.T) {
 
 	custom, ok := ResolveEmbassyImportType(
 		"external-submission",
-		DefaultSystemImportTypes(),
+		testSystemImportTypes(),
 		map[string]EmbassyFlowImportTypeSpec{"external-submission": {Node: "intake"}},
 	)
 	if !ok || custom.BuiltIn || custom.Spec == nil || custom.Spec.Node != "intake" {
 		t.Fatal("expected flow-defined import type to resolve with spec")
-	}
-}
-
-type stagingSpy struct {
-	manifest *flowv1.TransferManifest
-	chunks   []*flowv1.PackageChunk
-}
-
-func (s *stagingSpy) StageManifest(_ context.Context, manifest *flowv1.TransferManifest) error {
-	s.manifest = manifest
-	return nil
-}
-
-func (s *stagingSpy) StageChunk(_ context.Context, chunk *flowv1.PackageChunk) error {
-	s.chunks = append(s.chunks, chunk)
-	return nil
-}
-
-func (s *stagingSpy) Complete(_ context.Context) (*EmbassyStagedPackage, error) {
-	return &EmbassyStagedPackage{Manifest: s.manifest, Chunks: s.chunks}, nil
-}
-
-type materializerSpy struct {
-	importType EmbassyResolvedImportType
-	pkg        *EmbassyStagedPackage
-}
-
-func (m *materializerSpy) MaterializeImport(
-	_ context.Context, importType EmbassyResolvedImportType, pkg *EmbassyStagedPackage,
-) (*flowv1.StreamPackageResponse, error) {
-	m.importType = importType
-	m.pkg = pkg
-	return &flowv1.StreamPackageResponse{WorkitemId: "materialized-1"}, nil
-}
-
-func TestMaterializeStreamedPackageUsesStagerAndMaterializer(t *testing.T) {
-	t.Parallel()
-
-	stager := &stagingSpy{}
-	materializer := &materializerSpy{}
-	importType := EmbassyResolvedImportType{Name: "law-petition", BuiltIn: true}
-
-	resp, err := MaterializeStreamedPackage(context.Background(), stager, materializer, importType, []*flowv1.PackageChunk{
-		{Chunk: &flowv1.PackageChunk_Manifest{Manifest: &flowv1.TransferManifest{TransferId: "tx-stage"}}},
-		{Chunk: &flowv1.PackageChunk_Content{Content: []byte("payload")}},
-	})
-	if err != nil {
-		t.Fatalf("MaterializeStreamedPackage() returned error: %v", err)
-	}
-	if resp.GetWorkitemId() != "materialized-1" {
-		t.Fatalf("expected materialized workitem id, got %q", resp.GetWorkitemId())
-	}
-	if stager.manifest.GetTransferId() != "tx-stage" || len(materializer.pkg.Chunks) != 2 {
-		t.Fatal("expected staged package to include manifest and chunks")
-	}
-	if !materializer.importType.BuiltIn {
-		t.Fatal("expected built-in import type to be passed to materializer")
 	}
 }

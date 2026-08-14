@@ -145,23 +145,6 @@ func (a *Artefact) HasStamp(name string) (bool, error) {
 	return resp.GetExists(), nil
 }
 
-// GetFeedback returns all feedback items for the artefact.
-func (a *Artefact) GetFeedback() ([]*Feedback, error) {
-	resp, err := a.session.Archivist.GetFeedback(context.Background(), &flowv1.GetFeedbackRequest{
-		WorkitemId: a.session.workitemID,
-		ArtefactId: a.artefactID,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("flow sdk: get feedback failed: %w", err)
-	}
-	items := resp.GetFeedbackItems()
-	feedback := make([]*Feedback, 0, len(items))
-	for _, item := range items {
-		feedback = append(feedback, newFeedback(item, a.session))
-	}
-	return feedback, nil
-}
-
 // newArtefact creates an Artefact domain object from response fields.
 func newArtefact(sess *session, artefactID, governedArtefact string, content []byte, versionHash string) *Artefact {
 	return &Artefact{
@@ -171,16 +154,4 @@ func newArtefact(sess *session, artefactID, governedArtefact string, content []b
 		versionHash:      versionHash,
 		session:          sess,
 	}
-}
-
-// HasUnresolvedFeedback returns true if any feedback is unresolved.
-func (a *Artefact) HasUnresolvedFeedback() (bool, error) {
-	resp, err := a.session.Archivist.HasUnresolvedFeedback(context.Background(), &flowv1.HasUnresolvedFeedbackRequest{
-		WorkitemId: a.session.workitemID,
-		ArtefactId: a.artefactID,
-	})
-	if err != nil {
-		return false, fmt.Errorf("flow sdk: has unresolved feedback failed: %w", err)
-	}
-	return resp.GetHasUnresolved(), nil
 }

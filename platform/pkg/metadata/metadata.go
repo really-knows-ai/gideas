@@ -50,6 +50,14 @@ const (
 	// MetadataKeyCapabilitiesSignedAt is the gRPC metadata key carrying the
 	// Unix timestamp (seconds) used for the anti-replay staleness check.
 	MetadataKeyCapabilitiesSignedAt = "x-flow-capabilities-signed-at"
+
+	// MetadataKeyEntityType is the gRPC metadata key the SDK attaches to
+	// UpdateEntity/DeleteEntity/CreateEdge/DeleteEdge to carry the entity type
+	// it resolved from its local ID-to-type mapping (SPEC R3 / Capability
+	// Authorisation Chain). The Sidecar's CartographerProxy reads it to select
+	// the mode-1 specific-type capability gate (or the mode-2 wildcard
+	// best-effort check when the value is "*" or absent).
+	MetadataKeyEntityType = "entity_type"
 )
 
 // Signer identity values carried by the x-flow-capabilities-signed-by

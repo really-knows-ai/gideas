@@ -40,28 +40,6 @@ func (c *Client) RawLibrarian() flowv1.LibrarianServiceClient {
 	return c.session.Librarian
 }
 
-// RawFrictionLedger returns the raw FrictionLedgerServiceClient for advanced
-// use cases.
-func (c *Client) RawFrictionLedger() flowv1.FrictionLedgerServiceClient {
-	if c.session == nil {
-		return nil
-	}
-	return c.session.FrictionLedger
-}
-
-// ponytail: Resume stays on Client because it operates on arbitrary workitems
-// (not the current one). Consider moving to a WorkitemPool type or EntryClient
-// if the pattern becomes more common.
-func (c *Client) Resume(workitemID string) error {
-	_, err := c.session.Operator.ResumeWorkitem(context.Background(), &flowv1.ResumeWorkitemRequest{
-		WorkitemId: workitemID,
-	})
-	if err != nil {
-		return fmt.Errorf("flow sdk: resume failed: %w", err)
-	}
-	return nil
-}
-
 // ponytail: PublishAuditEvent stays on Client because it is a cross-cutting
 // audit emission that is not scoped to a single workitem.
 func (c *Client) PublishAuditEvent(

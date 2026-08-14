@@ -118,16 +118,6 @@ func (s *embassyServiceServer) ExportPackage(
 	return nil
 }
 
-// DefaultSystemImportTypes returns the built-in import types known to the SDK.
-func DefaultSystemImportTypes() map[string]EmbassyResolvedImportType {
-	return map[string]EmbassyResolvedImportType{
-		builtInLawPetitionImportType: {
-			Name:    builtInLawPetitionImportType,
-			BuiltIn: true,
-		},
-	}
-}
-
 // ResolveEmbassyImportType resolves an import type against the merged effective
 // namespace of built-in system import types and flow-authored import types.
 func ResolveEmbassyImportType(
@@ -145,32 +135,4 @@ func ResolveEmbassyImportType(
 	}
 
 	return EmbassyResolvedImportType{}, false
-}
-
-// MaterializeStreamedPackage stages incoming chunks then hands the staged
-// package to the materializer with the resolved import type.
-func MaterializeStreamedPackage(
-	ctx context.Context,
-	stager EmbassyPackageStager,
-	materializer EmbassyMaterializer,
-	importType EmbassyResolvedImportType,
-	chunks []*flowv1.PackageChunk,
-) (*flowv1.StreamPackageResponse, error) {
-	for _, chunk := range chunks {
-		if manifest := chunk.GetManifest(); manifest != nil {
-			if err := stager.StageManifest(ctx, manifest); err != nil {
-				return nil, err
-			}
-		}
-		if err := stager.StageChunk(ctx, chunk); err != nil {
-			return nil, err
-		}
-	}
-
-	staged, err := stager.Complete(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	return materializer.MaterializeImport(ctx, importType, staged)
 }

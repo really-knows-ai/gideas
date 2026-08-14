@@ -19,6 +19,15 @@ import (
 // Test schemas
 // ---------------------------------------------------------------------------
 
+// withHeartbeatInterval is the test-only AgentOption that overrides the
+// default managed-heartbeat interval (the production constructor was deleted
+// as test-only surface).
+func withHeartbeatInterval(d time.Duration) AgentOption {
+	return func(c *agentConfig) {
+		c.heartbeatInterval = d
+	}
+}
+
 // validHaikuSchema is a JSON Schema that requires an object with a "haiku"
 // string field.
 const validHaikuSchema = `{
@@ -120,12 +129,12 @@ func newTestAgent(t *testing.T, env *agentTestEnv, inferFn InferFunc) *Agent {
 		WithSchema([]byte(validHaikuSchema)),
 		WithModelName("test-model"),
 		WithQueryTemplate(simpleQueryTemplate(t)),
-		WithHeartbeatInterval(time.Hour), // effectively disable heartbeat
+		withHeartbeatInterval(time.Hour), // effectively disable heartbeat
 	)
 	if err != nil {
 		t.Fatalf("NewAgent() error: %v", err)
 	}
-	OverrideModelForTest(agent, inferFn)
+	agent.inferFn = inferFn
 	return agent
 }
 
@@ -249,7 +258,7 @@ func TestNewAgent_CustomHeartbeatInterval(t *testing.T) {
 		WithSchema([]byte(validHaikuSchema)),
 		WithModelName("test-model"),
 		WithQueryTemplate(simpleQueryTemplate(t)),
-		WithHeartbeatInterval(5*time.Second),
+		withHeartbeatInterval(5*time.Second),
 	)
 	if err != nil {
 		t.Fatalf("NewAgent() returned error: %v", err)
@@ -307,12 +316,12 @@ func TestAgent_Run_TemplateRendering(t *testing.T) {
 		WithModelName("test-model"),
 		WithQueryTemplate(tmpl),
 		WithSystemPrompt("You are a haiku poet."),
-		WithHeartbeatInterval(time.Hour),
+		withHeartbeatInterval(time.Hour),
 	)
 	if err != nil {
 		t.Fatalf("NewAgent() error: %v", err)
 	}
-	OverrideModelForTest(agent, inferFn)
+	agent.inferFn = inferFn
 
 	data := struct {
 		Topic string
@@ -482,13 +491,13 @@ func TestAgent_Run_OutputValidation_RetrySuccess(t *testing.T) {
 		WithSchema([]byte(validHaikuSchema)),
 		WithModelName("test-model"),
 		WithQueryTemplate(simpleQueryTemplate(t)),
-		WithHeartbeatInterval(time.Hour),
+		withHeartbeatInterval(time.Hour),
 		WithOutputValidationRetries(1),
 	)
 	if err != nil {
 		t.Fatalf("NewAgent() error: %v", err)
 	}
-	OverrideModelForTest(agent, inferFn)
+	agent.inferFn = inferFn
 
 	got, err := agent.Run(context.Background(), struct{ Input string }{Input: "input"})
 	if err != nil {
@@ -518,13 +527,13 @@ func TestAgent_Run_OutputValidation_RetryExhausted(t *testing.T) {
 		WithSchema([]byte(validHaikuSchema)),
 		WithModelName("test-model"),
 		WithQueryTemplate(simpleQueryTemplate(t)),
-		WithHeartbeatInterval(time.Hour),
+		withHeartbeatInterval(time.Hour),
 		WithOutputValidationRetries(2),
 	)
 	if err != nil {
 		t.Fatalf("NewAgent() error: %v", err)
 	}
-	OverrideModelForTest(agent, inferFn)
+	agent.inferFn = inferFn
 
 	_, err = agent.Run(context.Background(), struct{ Input string }{Input: "input"})
 	if err == nil {
@@ -720,12 +729,12 @@ func TestAgent_Run_HeartbeatDuringInference(t *testing.T) {
 		WithSchema([]byte(validHaikuSchema)),
 		WithModelName("test-model"),
 		WithQueryTemplate(simpleQueryTemplate(t)),
-		WithHeartbeatInterval(20*time.Millisecond),
+		withHeartbeatInterval(20*time.Millisecond),
 	)
 	if err != nil {
 		t.Fatalf("NewAgent() error: %v", err)
 	}
-	OverrideModelForTest(agent, inferFn)
+	agent.inferFn = inferFn
 
 	_, err = agent.Run(context.Background(), struct{ Input string }{Input: "input"})
 	if err != nil {
@@ -760,12 +769,12 @@ func TestAgent_Run_HeartbeatStopsAfterInfer(t *testing.T) {
 		WithSchema([]byte(validHaikuSchema)),
 		WithModelName("test-model"),
 		WithQueryTemplate(simpleQueryTemplate(t)),
-		WithHeartbeatInterval(10*time.Millisecond),
+		withHeartbeatInterval(10*time.Millisecond),
 	)
 	if err != nil {
 		t.Fatalf("NewAgent() error: %v", err)
 	}
-	OverrideModelForTest(agent, inferFn)
+	agent.inferFn = inferFn
 
 	_, err = agent.Run(context.Background(), struct{ Input string }{Input: "input"})
 	if err != nil {
@@ -849,12 +858,12 @@ func TestAgent_Run_TemplateRenderError(t *testing.T) {
 		WithSchema([]byte(validHaikuSchema)),
 		WithModelName("test-model"),
 		WithQueryTemplate(badTmpl),
-		WithHeartbeatInterval(time.Hour),
+		withHeartbeatInterval(time.Hour),
 	)
 	if err != nil {
 		t.Fatalf("NewAgent() error: %v", err)
 	}
-	OverrideModelForTest(agent, inferFn)
+	agent.inferFn = inferFn
 
 	_, err = agent.Run(context.Background(), struct{ Input string }{Input: "input"})
 	if err == nil {

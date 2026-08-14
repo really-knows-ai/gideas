@@ -200,36 +200,6 @@ func TestWorkitem_Suspend_WithTimeout(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Lifecycle — Resume
-// ---------------------------------------------------------------------------
-
-func TestWorkitem_Resume(t *testing.T) {
-	const wantID = "wi-resume-001"
-	wi, env := setupWorkitemTestEnv(t, wantID)
-
-	// First suspend to set local state.
-	wi.suspended = true
-
-	err := wi.Resume()
-	if err != nil {
-		t.Fatalf("Resume() returned error: %v", err)
-	}
-
-	req := env.spy.lastResumeReq
-	if req == nil {
-		t.Fatal("ResumeWorkitem was not called")
-	}
-	if req.GetWorkitemId() != wantID {
-		t.Fatalf("workitem_id = %q, want %q", req.GetWorkitemId(), wantID)
-	}
-
-	// Verify local cache was cleared.
-	if wi.suspended {
-		t.Fatal("expected wi.suspended=false after Resume()")
-	}
-}
-
-// ---------------------------------------------------------------------------
 // Lifecycle — Heartbeat
 // ---------------------------------------------------------------------------
 
@@ -520,31 +490,6 @@ func TestWorkitem_GetFeedback_SessionWired(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Feedback — HasUnresolvedFeedback
-// ---------------------------------------------------------------------------
-
-func TestWorkitem_HasUnresolvedFeedback(t *testing.T) {
-	const wantID = "wi-hasunresolved-001"
-	wi, env := setupWorkitemTestEnv(t, wantID)
-
-	unresolved, err := wi.HasUnresolvedFeedback(testArtefactID)
-	if err != nil {
-		t.Fatalf("HasUnresolvedFeedback() returned error: %v", err)
-	}
-	if !unresolved {
-		t.Fatal("expected HasUnresolved=true from spy response")
-	}
-
-	req := env.spy.lastHasUnresolvedReq
-	if req == nil {
-		t.Fatal("HasUnresolvedFeedback was not called on the server")
-	}
-	if req.GetArtefactId() != testArtefactID {
-		t.Fatalf("artefact_id = %q, want %q", req.GetArtefactId(), "artefact-001")
-	}
-}
-
-// ---------------------------------------------------------------------------
 // Laws — GetLawGroups
 // ---------------------------------------------------------------------------
 
@@ -727,10 +672,10 @@ func TestWorkitem_GetTopology(t *testing.T) {
 		t.Fatalf("metadata x-flow-workitem-id = %v, want %q", got, wantID)
 	}
 
-	// Verify topology accessors work.
-	nodes := flow.GetNodes()
-	if len(nodes) == 0 {
-		t.Fatal("expected at least one node")
+	// Verify the flow topology is surfaced.
+	ec := flow.GetExitContract()
+	if ec == nil {
+		t.Fatal("expected a non-nil exit contract from GetTopology")
 	}
 }
 

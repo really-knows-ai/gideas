@@ -35,20 +35,6 @@ func (c *ChildWorkitem) StoreArtefact(artefactID, governedArtefact string, conte
 	return nil
 }
 
-// StampArtefact applies a named governance stamp to the specified artefact
-// on the child Workitem.
-func (c *ChildWorkitem) StampArtefact(artefactID, stampName string) error {
-	_, err := c.session.Archivist.StampArtefact(context.Background(), &flowv1.StampArtefactRequest{
-		WorkitemId: c.id,
-		ArtefactId: artefactID,
-		StampName:  stampName,
-	})
-	if err != nil {
-		return fmt.Errorf("flow sdk: child stamp artefact failed: %w", err)
-	}
-	return nil
-}
-
 // RouteTo routes the child Workitem to the named target node.
 // The child must be in Pending state (not yet routed).
 func (c *ChildWorkitem) RouteTo(targetNode string) error {
@@ -61,37 +47,6 @@ func (c *ChildWorkitem) RouteTo(targetNode string) error {
 	})
 	if err != nil {
 		return fmt.Errorf("flow sdk: child route to failed: %w", err)
-	}
-	return nil
-}
-
-// RouteToOutput routes the child Workitem through the named output channel.
-// The child must be in Pending state (not yet routed).
-func (c *ChildWorkitem) RouteToOutput(outputName string) error {
-	_, err := c.session.Operator.RouteChild(context.Background(), &flowv1.RouteChildRequest{
-		ChildWorkitemId: c.id,
-		RoutingInstruction: &flowv1.RoutingInstruction{
-			Type:   flowv1.RoutingType_ROUTING_TYPE_ROUTE_TO_OUTPUT,
-			Target: outputName,
-		},
-	})
-	if err != nil {
-		return fmt.Errorf("flow sdk: child route to output failed: %w", err)
-	}
-	return nil
-}
-
-// Complete marks the child Workitem as complete with a simple completion
-// (no exit contract validation). The child must be assigned to a node.
-func (c *ChildWorkitem) Complete() error {
-	_, err := c.session.Operator.RouteChild(context.Background(), &flowv1.RouteChildRequest{
-		ChildWorkitemId: c.id,
-		RoutingInstruction: &flowv1.RoutingInstruction{
-			Type: flowv1.RoutingType_ROUTING_TYPE_COMPLETE,
-		},
-	})
-	if err != nil {
-		return fmt.Errorf("flow sdk: child complete failed: %w", err)
 	}
 	return nil
 }

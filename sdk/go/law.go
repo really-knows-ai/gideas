@@ -1,8 +1,6 @@
 package flow
 
 import (
-	"context"
-	"fmt"
 	"strings"
 
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
@@ -62,17 +60,6 @@ func (l *Law) GetRepresentations() []*flowv1.Representation {
 // PB returns the underlying proto Law pointer. Returns nil if the proto is nil.
 func (l *Law) PB() *flowv1.Law {
 	return l.pb
-}
-
-// Cite records usage of this law via the Librarian Cite RPC.
-func (l *Law) Cite() error {
-	_, err := l.librarian.Cite(context.Background(), &flowv1.CiteRequest{
-		LawIds: []string{l.ID()},
-	})
-	if err != nil {
-		return fmt.Errorf("flow sdk: cite law %q: %w", l.ID(), err)
-	}
-	return nil
 }
 
 // Attest stamps "law-<id>-<type>" on the given artefact.
