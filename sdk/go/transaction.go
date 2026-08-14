@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"regexp"
 	"sync"
+	"time"
 
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
 	flowmeta "github.com/foundry/flow/pkg/metadata"
+	"google.golang.org/protobuf/types/known/durationpb"
 )
 
 // ErrTransactionRolledBack is returned when a method is called on a
@@ -49,6 +51,50 @@ func (tx *Transaction) checkTerminal() error {
 	return nil
 }
 
+// TransactionDiff is the structured change set of a transaction (SPEC R9):
+// lists of added, modified, and deleted entities and edges.
+type TransactionDiff struct {
+	AddedEntities    []Entity
+	ModifiedEntities []Entity
+	DeletedEntities  []Entity
+	AddedEdges       []Edge
+	ModifiedEdges    []Edge
+	DeletedEdges     []Edge
+}
+
+// diffEntriesToEntities converts DiffEntry messages (which carry the entity
+// identity fields) into the domain Entity type.
+func diffEntriesToEntities(entries []*flowv1.DiffEntry) []Entity {
+	out := make([]Entity, 0, len(entries))
+	for _, e := range entries {
+		out = append(out, Entity{
+			ID:         e.GetId(),
+			Type:       e.GetType(),
+			Properties: e.GetProperties(),
+			Suspected:  e.GetSuspected(),
+			Embedding:  e.GetEmbedding(),
+		})
+	}
+	return out
+}
+
+// diffEntriesToEdges converts DiffEntry messages (which carry the edge
+// identity fields) into the domain Edge type.
+func diffEntriesToEdges(entries []*flowv1.DiffEntry) []Edge {
+	out := make([]Edge, 0, len(entries))
+	for _, e := range entries {
+		out = append(out, Edge{
+			ID:           e.GetId(),
+			Type:         e.GetType(),
+			FromEntityID: e.GetFromEntityId(),
+			ToEntityID:   e.GetToEntityId(),
+			Properties:   e.GetProperties(),
+			Suspected:    e.GetSuspected(),
+		})
+	}
+	return out
+}
+
 // ---------------------------------------------------------------------------
 // Read path methods (with transactionId injection)
 // ---------------------------------------------------------------------------
@@ -58,44 +104,34 @@ func (tx *Transaction) ListEntities(entityType string, opts ...ListEntitiesOptio
 	if err := tx.checkTerminal(); err != nil {
 		return nil, err
 	}
+	return listEntitiesPage(tx.session, tx.idTypeMap, entityType, opts, tx.id)
+}
 
-	cfg := &listEntitiesConfig{}
-	for _, o := range opts {
-		o(cfg)
-	}
-
-	req := &flowv1.ListEntitiesRequest{
-		EntityType:    entityType,
-		PageSize:      cfg.pageSize,
-		PageToken:     cfg.pageToken,
-		TransactionId: tx.id,
-	}
-
-	var resp *flowv1.ListEntitiesResponse
-	err := tx.session.call(tx.session.ctx, func(ctx context.Context) error {
-		var callErr error
-		resp, callErr = tx.session.Cartographer.ListEntities(ctx, req)
-		return callErr
-	}, "")
-	if err != nil {
+// ExecuteCypher executes a read-only Cypher query within the transaction
+// (SPEC R2). params is an optional JSON object bound to the query parameters.
+func (tx *Transaction) ExecuteCypher(cypher string, params map[string]any) ([][]string, error) {
+	if err := tx.checkTerminal(); err != nil {
 		return nil, err
 	}
+	return executeCypherQuery(tx.session, cypher, params, tx.id)
+}
 
-	entities := make([]Entity, 0, len(resp.GetEntities()))
-	for _, e := range resp.GetEntities() {
-		entities = append(entities, Entity{
-			ID:         e.GetEntityId(),
-			Type:       e.GetEntityType(),
-			Properties: e.GetProperties(),
-			Embedding:  e.GetEmbedding(),
-		})
-		tx.idTypeMap.store(e.GetEntityId(), e.GetEntityType())
+// SearchNeighbors performs a vector similarity search within the transaction
+// (SPEC R2).
+func (tx *Transaction) SearchNeighbors(embedding []float32, entityType string, topK int) ([]SearchResult, error) {
+	if err := tx.checkTerminal(); err != nil {
+		return nil, err
 	}
+	return searchNeighborsResults(tx.session, tx.idTypeMap, embedding, entityType, topK, tx.id)
+}
 
-	return &EntityPage{
-		Entities:      entities,
-		NextPageToken: resp.GetNextPageToken(),
-	}, nil
+// FullTextSearch performs a full-text search within the transaction
+// (SPEC R2).
+func (tx *Transaction) FullTextSearch(query, entityType string) ([]Entity, error) {
+	if err := tx.checkTerminal(); err != nil {
+		return nil, err
+	}
+	return fullTextSearchResults(tx.session, tx.idTypeMap, query, entityType, tx.id)
 }
 
 // ---------------------------------------------------------------------------
@@ -298,6 +334,122 @@ func (tx *Transaction) DeleteEdge(id string) (*Edge, error) {
 		ToEntityID:   resp.GetToEntityId(),
 		Properties:   resp.GetProperties(),
 	}, nil
+}
+
+// ---------------------------------------------------------------------------
+// Lifecycle methods (SPEC R4 SDK-method-to-RPC mapping table)
+// ---------------------------------------------------------------------------
+
+// Diff returns the structured diff of the transaction's changes: lists of
+// added, modified, and deleted entities and edges (SPEC R9).
+func (tx *Transaction) Diff() (*TransactionDiff, error) {
+	if err := tx.checkTerminal(); err != nil {
+		return nil, err
+	}
+
+	req := &flowv1.GetTransactionDiffRequest{TransactionId: tx.id}
+
+	var resp *flowv1.GetTransactionDiffResponse
+	err := tx.session.call(tx.session.ctx, func(ctx context.Context) error {
+		var callErr error
+		resp, callErr = tx.session.Cartographer.GetTransactionDiff(ctx, req)
+		return callErr
+	}, "")
+	if err != nil {
+		return nil, err
+	}
+
+	return &TransactionDiff{
+		AddedEntities:    diffEntriesToEntities(resp.GetAddedEntities()),
+		ModifiedEntities: diffEntriesToEntities(resp.GetModifiedEntities()),
+		DeletedEntities:  diffEntriesToEntities(resp.GetDeletedEntities()),
+		AddedEdges:       diffEntriesToEdges(resp.GetAddedEdges()),
+		ModifiedEdges:    diffEntriesToEdges(resp.GetModifiedEdges()),
+		DeletedEdges:     diffEntriesToEdges(resp.GetDeletedEdges()),
+	}, nil
+}
+
+// Refresh re-hydrates the transaction's branch from the latest main and
+// re-applies the transaction's changes (SPEC R9). It fails with ABORTED when
+// an overlapping entity/edge was modified on main. Refresh does not reset the
+// transaction timeout — nodes that need to keep a long-running transaction
+// alive must call ExtendTimeout separately (SPEC R9).
+func (tx *Transaction) Refresh() error {
+	if err := tx.checkTerminal(); err != nil {
+		return err
+	}
+
+	req := &flowv1.RefreshTransactionRequest{TransactionId: tx.id}
+	return tx.session.call(tx.session.ctx, func(ctx context.Context) error {
+		_, callErr := tx.session.Cartographer.RefreshTransaction(ctx, req)
+		return callErr
+	}, "")
+}
+
+// Commit commits the transaction's changes back to main (SPEC R9). On success
+// the handle is marked committed and rejects every further operation locally,
+// so the R4 example's deferred `tx.Rollback()` after a successful Commit
+// surfaces the terminal error the caller ignores.
+func (tx *Transaction) Commit() error {
+	if err := tx.checkTerminal(); err != nil {
+		return err
+	}
+
+	req := &flowv1.CommitTransactionRequest{TransactionId: tx.id}
+	err := tx.session.call(tx.session.ctx, func(ctx context.Context) error {
+		_, callErr := tx.session.Cartographer.CommitTransaction(ctx, req)
+		return callErr
+	}, "")
+	if err != nil {
+		return err
+	}
+
+	tx.mu.Lock()
+	tx.committed = true
+	tx.mu.Unlock()
+	return nil
+}
+
+// Rollback discards the transaction's branch and returns the handle to its
+// terminal rolled-back state (SPEC R9). On success the handle rejects every
+// further operation locally.
+func (tx *Transaction) Rollback() error {
+	if err := tx.checkTerminal(); err != nil {
+		return err
+	}
+
+	req := &flowv1.RollbackTransactionRequest{TransactionId: tx.id}
+	err := tx.session.call(tx.session.ctx, func(ctx context.Context) error {
+		_, callErr := tx.session.Cartographer.RollbackTransaction(ctx, req)
+		return callErr
+	}, "")
+	if err != nil {
+		return err
+	}
+
+	tx.mu.Lock()
+	tx.rolledBack = true
+	tx.mu.Unlock()
+	return nil
+}
+
+// ExtendTimeout resets the transaction's expiry timer (SPEC R9). The duration
+// must be positive and the total lifetime must not exceed the 7-day hard
+// maximum; the Cartographer rejects violations with INVALID_ARGUMENT (no
+// silent capping), which the SDK surfaces.
+func (tx *Transaction) ExtendTimeout(duration time.Duration) error {
+	if err := tx.checkTerminal(); err != nil {
+		return err
+	}
+
+	req := &flowv1.ExtendTimeoutRequest{
+		TransactionId: tx.id,
+		Duration:      durationpb.New(duration),
+	}
+	return tx.session.call(tx.session.ctx, func(ctx context.Context) error {
+		_, callErr := tx.session.Cartographer.ExtendTimeout(ctx, req)
+		return callErr
+	}, "")
 }
 
 // ---------------------------------------------------------------------------

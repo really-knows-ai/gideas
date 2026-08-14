@@ -153,6 +153,17 @@ func (c *Client) GetWorkitem(workitemID ...string) (*Workitem, error) {
 	}
 }
 
+// GetGraph returns the Graph domain object for the Cartographer knowledge
+// graph (SPEC R4). The Graph exposes read operations and administrative RPCs
+// (Sync, ExportGraph) plus transaction creation (BeginTransaction); it
+// exposes no mutation methods — all mutations require a Transaction handle.
+func (c *Client) GetGraph() (*Graph, error) {
+	if c.session == nil {
+		return nil, fmt.Errorf("flow sdk: client not initialised")
+	}
+	return &Graph{session: c.session, idTypeMap: newIDTypeMap()}, nil
+}
+
 // GetFlow returns the Flow topology for the current namespace.
 func (c *Client) GetFlow() (*Flow, error) {
 	if c.session == nil {

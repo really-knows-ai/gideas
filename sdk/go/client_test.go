@@ -627,6 +627,34 @@ func TestGetFlow(t *testing.T) {
 	}
 }
 
+// TestGetGraph pins the SPEC R4 entry surface: Client.GetGraph returns a Graph
+// bound to the client's session and carrying the SDK's bounded local
+// ID-to-type cache (SPEC R3).
+func TestGetGraph(t *testing.T) {
+	env := setupTestEnv(t, "workitem-getgraph-001")
+
+	g, err := env.client.GetGraph()
+	if err != nil {
+		t.Fatalf("GetGraph() returned error: %v", err)
+	}
+	if g == nil {
+		t.Fatal("expected non-nil Graph")
+	}
+	if g.session != env.client.session {
+		t.Error("expected Graph to share the client's session")
+	}
+	if g.idTypeMap == nil {
+		t.Error("expected Graph to carry the SDK's ID-to-type cache")
+	}
+}
+
+func TestGetGraph_UninitialisedClient(t *testing.T) {
+	client := &Client{}
+	if _, err := client.GetGraph(); err == nil {
+		t.Fatal("expected error for an uninitialised client")
+	}
+}
+
 func TestGetLaw_NewEntryMethod(t *testing.T) {
 	env := setupTestEnv(t, "workitem-getlaw-entry-001")
 

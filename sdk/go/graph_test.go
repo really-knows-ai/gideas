@@ -2,11 +2,17 @@ package flow
 
 import (
 	"context"
+	"io"
 	"testing"
 	"time"
 
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/durationpb"
+	"google.golang.org/protobuf/types/known/structpb"
 )
 
 const metadataEntityTypeKey = "entity_type"
@@ -28,6 +34,7 @@ const (
 	testUUIDFrom   = "8c3a6d5e-9f1b-4e2a-8c4d-1f2e3a4b5c6d"
 	testUUIDTo     = "1f2e3a4b-5c6d-4e7f-8a9b-0c1d2e3f4a5b"
 	testUUIDEdge   = "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d"
+	testUUIDTx     = "9c4a3e2f-1b2d-4a6b-8c9d-0e1f2a3b4c5e"
 )
 
 // ---------------------------------------------------------------------------
@@ -222,9 +229,22 @@ func (m *mockCartographerClient) Sync(
 // Transaction write-method tests
 // ---------------------------------------------------------------------------
 //
-// The Graph domain object no longer exists (its methods were deleted as dead
-// production surface), so the write-path tests construct a Transaction handle
-// directly via newMockTx.
+// The write-path tests construct a Transaction handle directly via newMockTx:
+// mutation methods exist only on the Transaction surface (SPEC R4 — the Graph
+// exposes read and administrative methods only), so each test exercises the
+// Transaction handle in isolation from the Graph that produced it.
+
+// newMockGraph returns a Graph bound to the mock Cartographer client, for
+// testing the Graph read/admin surface in isolation.
+func newMockGraph(mock *mockCartographerClient) *Graph {
+	ctx, cancel := context.WithCancel(context.Background())
+	sess := &session{
+		Cartographer: mock,
+		ctx:          ctx,
+		cancel:       cancel,
+	}
+	return &Graph{session: sess, idTypeMap: newIDTypeMap()}
+}
 
 func TestCreateEntity(t *testing.T) {
 	mock := &mockCartographerClient{
@@ -542,5 +562,450 @@ func TestIDTypeMap_EmptyTypeNotStored(t *testing.T) {
 	}
 	if _, ok := m.resolve("id-1"); ok {
 		t.Error("expected empty-type entry not to be stored")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Graph read/admin method tests (SPEC R4)
+// ---------------------------------------------------------------------------
+
+// TestGraph_ExecuteCypher pins the Graph's read-only Cypher surface: the
+// statement reaches the wire, nil params omit the params field, and rows are
+// surfaced as flat string tuples in wire order (SPEC R2).
+func TestGraph_ExecuteCypher(t *testing.T) {
+	var capturedCypher string
+	var capturedParams *structpb.Value
+	mock := &mockCartographerClient{
+		executeCypher: func(ctx context.Context, req *flowv1.ExecuteCypherRequest) (*flowv1.ExecuteCypherResponse, error) {
+			capturedCypher = req.GetCypher()
+			capturedParams = req.GetParams()
+			return &flowv1.ExecuteCypherResponse{
+				Rows: []*flowv1.Row{
+					{Values: []string{"c1", "Component"}},
+					{Values: []string{"c2", "Service"}},
+				},
+			}, nil
+		},
+	}
+	g := newMockGraph(mock)
+
+	rows, err := g.ExecuteCypher("MATCH (c:Component) RETURN c", nil)
+	if err != nil {
+		t.Fatalf("ExecuteCypher returned error: %v", err)
+	}
+	if capturedCypher != "MATCH (c:Component) RETURN c" {
+		t.Errorf("expected cypher statement on the wire, got %q", capturedCypher)
+	}
+	if capturedParams != nil {
+		t.Error("expected no params field for a nil params map")
+	}
+	if len(rows) != 2 || rows[0][0] != "c1" || rows[0][1] != "Component" || rows[1][0] != "c2" {
+		t.Errorf("expected 2 rows with flat string values in wire order, got %v", rows)
+	}
+}
+
+// TestGraph_ExecuteCypher_JSONObjectParams pins the params wire shape: a
+// non-nil params map must arrive as a JSON object (struct value) — the SPEC
+// error-table row "ExecuteCypher params not a JSON object" names
+// google.protobuf.Struct, so the SDK must never send a scalar or list.
+func TestGraph_ExecuteCypher_JSONObjectParams(t *testing.T) {
+	var capturedParams *structpb.Value
+	mock := &mockCartographerClient{
+		executeCypher: func(ctx context.Context, req *flowv1.ExecuteCypherRequest) (*flowv1.ExecuteCypherResponse, error) {
+			capturedParams = req.GetParams()
+			return &flowv1.ExecuteCypherResponse{}, nil
+		},
+	}
+	g := newMockGraph(mock)
+
+	_, err := g.ExecuteCypher("MATCH (c:Component {name:$name}) RETURN c", map[string]any{"name": "auth"})
+	if err != nil {
+		t.Fatalf("ExecuteCypher returned error: %v", err)
+	}
+	if capturedParams == nil {
+		t.Fatal("expected params field to be set for a non-nil params map")
+	}
+	s := capturedParams.GetStructValue()
+	if s == nil {
+		t.Fatal("expected params to arrive as a struct (JSON object), not a scalar or list")
+	}
+	if got := s.Fields["name"].GetStringValue(); got != "auth" {
+		t.Errorf("expected params.name=auth, got %q", got)
+	}
+}
+
+// TestGraph_SearchNeighbors pins the Graph's vector-search surface: the
+// embedding, entityType, and topK reach the wire, no transactionId is
+// attached (main read), and results surface as SearchResult with the raw
+// distance and populate the ID-to-type cache (SPEC R2/R3).
+func TestGraph_SearchNeighbors(t *testing.T) {
+	var capturedReq *flowv1.SearchNeighborsRequest
+	mock := &mockCartographerClient{
+		searchNeighbors: func(
+			ctx context.Context, req *flowv1.SearchNeighborsRequest,
+		) (*flowv1.SearchNeighborsResponse, error) {
+			capturedReq = req
+			return &flowv1.SearchNeighborsResponse{
+				Results: []*flowv1.SearchNeighborResult{
+					{EntityId: "e1", EntityType: componentType, Properties: map[string]string{"name": "auth"}, Distance: 0.25},
+				},
+			}, nil
+		},
+	}
+	g := newMockGraph(mock)
+
+	results, err := g.SearchNeighbors([]float32{0.1, 0.2}, "Component", 5)
+	if err != nil {
+		t.Fatalf("SearchNeighbors returned error: %v", err)
+	}
+	if capturedReq.GetTransactionId() != "" {
+		t.Errorf("expected no transactionId on a main-graph read, got %q", capturedReq.GetTransactionId())
+	}
+	if capturedReq.GetEntityType() != componentType {
+		t.Errorf("expected entityType %s on the wire, got %q", componentType, capturedReq.GetEntityType())
+	}
+	if capturedReq.GetTopK() != 5 {
+		t.Errorf("expected topK 5 on the wire, got %d", capturedReq.GetTopK())
+	}
+	if len(capturedReq.GetEmbedding()) != 2 || capturedReq.GetEmbedding()[0] != 0.1 {
+		t.Errorf("expected embedding [0.1 0.2] on the wire, got %v", capturedReq.GetEmbedding())
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	if results[0].ID != "e1" || results[0].Type != componentType || results[0].Distance != 0.25 {
+		t.Errorf("unexpected SearchResult: %+v", results[0])
+	}
+	if results[0].Properties["name"] != "auth" {
+		t.Errorf("expected properties preserved on SearchResult, got %v", results[0].Properties)
+	}
+	if typ, ok := g.idTypeMap.resolve("e1"); !ok || typ != componentType {
+		t.Errorf("expected search result to seed the ID-to-type cache with %s, got %q (ok=%v)", componentType, typ, ok)
+	}
+}
+
+// TestGraph_FullTextSearch pins the Graph's full-text surface: query and
+// entityType reach the wire, and results surface as domain Entities and seed
+// the ID-to-type cache (SPEC R2/R3).
+func TestGraph_FullTextSearch(t *testing.T) {
+	var capturedReq *flowv1.FullTextSearchRequest
+	mock := &mockCartographerClient{
+		fullTextSearch: func(ctx context.Context, req *flowv1.FullTextSearchRequest) (*flowv1.FullTextSearchResponse, error) {
+			capturedReq = req
+			return &flowv1.FullTextSearchResponse{
+				Results: []*flowv1.Entity{
+					{EntityId: "e1", EntityType: componentType, Properties: map[string]string{"name": "auth service"}},
+				},
+			}, nil
+		},
+	}
+	g := newMockGraph(mock)
+
+	entities, err := g.FullTextSearch("auth service", "Component")
+	if err != nil {
+		t.Fatalf("FullTextSearch returned error: %v", err)
+	}
+	if capturedReq.GetQuery() != "auth service" {
+		t.Errorf("expected query on the wire, got %q", capturedReq.GetQuery())
+	}
+	if capturedReq.GetEntityType() != componentType {
+		t.Errorf("expected entityType %s on the wire, got %q", componentType, capturedReq.GetEntityType())
+	}
+	if len(entities) != 1 || entities[0].ID != "e1" || entities[0].Type != componentType {
+		t.Errorf("unexpected FullTextSearch results: %+v", entities)
+	}
+	if entities[0].Properties["name"] != "auth service" {
+		t.Errorf("expected properties preserved, got %v", entities[0].Properties)
+	}
+	if typ, ok := g.idTypeMap.resolve("e1"); !ok || typ != componentType {
+		t.Errorf("expected search result to seed the ID-to-type cache with %s, got %q (ok=%v)", componentType, typ, ok)
+	}
+}
+
+// TestGraph_ListEntities pins the Graph's listing surface: entityType reaches
+// the wire, no transactionId is attached (main read), and the page carries the
+// next page token and seeds the ID-to-type cache (SPEC R2/R3).
+func TestGraph_ListEntities(t *testing.T) {
+	var capturedReq *flowv1.ListEntitiesRequest
+	mock := &mockCartographerClient{
+		listEntities: func(ctx context.Context, req *flowv1.ListEntitiesRequest) (*flowv1.ListEntitiesResponse, error) {
+			capturedReq = req
+			return &flowv1.ListEntitiesResponse{
+				Entities:      []*flowv1.Entity{{EntityId: "e1", EntityType: componentType}},
+				NextPageToken: "tok-2",
+			}, nil
+		},
+	}
+	g := newMockGraph(mock)
+
+	page, err := g.ListEntities("Component")
+	if err != nil {
+		t.Fatalf("ListEntities returned error: %v", err)
+	}
+	if capturedReq.GetEntityType() != componentType {
+		t.Errorf("expected entityType %s on the wire, got %q", componentType, capturedReq.GetEntityType())
+	}
+	if capturedReq.GetTransactionId() != "" {
+		t.Errorf("expected no transactionId on a main-graph read, got %q", capturedReq.GetTransactionId())
+	}
+	if page.NextPageToken != "tok-2" {
+		t.Errorf("expected next page token tok-2, got %q", page.NextPageToken)
+	}
+	if len(page.Entities) != 1 || page.Entities[0].ID != "e1" {
+		t.Errorf("unexpected entity page: %+v", page.Entities)
+	}
+	if typ, ok := g.idTypeMap.resolve("e1"); !ok || typ != componentType {
+		t.Errorf("expected list result to seed the ID-to-type cache with %s, got %q (ok=%v)", componentType, typ, ok)
+	}
+}
+
+// TestGraph_ListEntities_PaginationOptions pins the R4 functional-option
+// branches: WithPageSize and WithPageToken populate the request's page_size
+// and page_token (SPEC R4 example: ListEntities with pageSize + pageToken).
+func TestGraph_ListEntities_PaginationOptions(t *testing.T) {
+	var capturedReq *flowv1.ListEntitiesRequest
+	mock := &mockCartographerClient{
+		listEntities: func(ctx context.Context, req *flowv1.ListEntitiesRequest) (*flowv1.ListEntitiesResponse, error) {
+			capturedReq = req
+			return &flowv1.ListEntitiesResponse{NextPageToken: "tok-3"}, nil
+		},
+	}
+	g := newMockGraph(mock)
+
+	page, err := g.ListEntities("Component", WithPageSize(50), WithPageToken("tok-2"))
+	if err != nil {
+		t.Fatalf("ListEntities returned error: %v", err)
+	}
+	if capturedReq.GetPageSize() != 50 {
+		t.Errorf("expected page_size 50 on the wire, got %d", capturedReq.GetPageSize())
+	}
+	if capturedReq.GetPageToken() != "tok-2" {
+		t.Errorf("expected page_token tok-2 on the wire, got %q", capturedReq.GetPageToken())
+	}
+	// The R4 example chains the next page using page.NextPageToken.
+	if page.NextPageToken != "tok-3" {
+		t.Errorf("expected next page token tok-3, got %q", page.NextPageToken)
+	}
+}
+
+// TestGraph_ListEntities_DefaultOmitted pins the SPEC R4 default pageSize
+// branch: with no options the request carries pageSize 0 (treated as omitted
+// by the server, which defaults to 1000) and an empty page token.
+func TestGraph_ListEntities_DefaultOmitted(t *testing.T) {
+	var capturedReq *flowv1.ListEntitiesRequest
+	mock := &mockCartographerClient{
+		listEntities: func(ctx context.Context, req *flowv1.ListEntitiesRequest) (*flowv1.ListEntitiesResponse, error) {
+			capturedReq = req
+			return &flowv1.ListEntitiesResponse{}, nil
+		},
+	}
+	g := newMockGraph(mock)
+
+	if _, err := g.ListEntities("Component"); err != nil {
+		t.Fatalf("ListEntities returned error: %v", err)
+	}
+	if capturedReq.GetPageSize() != 0 {
+		t.Errorf("expected omitted pageSize (0) on the wire, got %d", capturedReq.GetPageSize())
+	}
+	if capturedReq.GetPageToken() != "" {
+		t.Errorf("expected empty page token on the wire, got %q", capturedReq.GetPageToken())
+	}
+}
+
+// TestGraph_Sync pins graph.Sync's wire mapping: a SyncRequest is sent and
+// the RPC result is surfaced (SPEC R2 administrative path).
+func TestGraph_Sync(t *testing.T) {
+	var called bool
+	mock := &mockCartographerClient{
+		sync: func(ctx context.Context, req *flowv1.SyncRequest) (*flowv1.SyncResponse, error) {
+			called = true
+			return &flowv1.SyncResponse{}, nil
+		},
+	}
+	g := newMockGraph(mock)
+
+	if err := g.Sync(); err != nil {
+		t.Fatalf("Sync returned error: %v", err)
+	}
+	if !called {
+		t.Error("expected the Sync RPC to be invoked")
+	}
+}
+
+// TestGraph_Sync_PropagatesRejection pins the SDK surfacing the server's
+// rejection verbatim (SPEC R2 error-table row "Remote not configured" →
+// FAILED_PRECONDITION).
+func TestGraph_Sync_PropagatesRejection(t *testing.T) {
+	mock := &mockCartographerClient{
+		sync: func(ctx context.Context, req *flowv1.SyncRequest) (*flowv1.SyncResponse, error) {
+			return nil, status.Error(codes.FailedPrecondition, "no remote configured")
+		},
+	}
+	g := newMockGraph(mock)
+
+	err := g.Sync()
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("expected FailedPrecondition surfaced from Sync, got %v (%v)", status.Code(err), err)
+	}
+}
+
+// fakeExportStream is a minimal grpc.ServerStreamingClient[ExportGraphResponse]
+// that serves pre-set byte chunks then io.EOF.
+type fakeExportStream struct {
+	ctx    context.Context
+	chunks [][]byte
+}
+
+func (s *fakeExportStream) Recv() (*flowv1.ExportGraphResponse, error) {
+	if len(s.chunks) == 0 {
+		return nil, io.EOF
+	}
+	chunk := s.chunks[0]
+	s.chunks = s.chunks[1:]
+	return &flowv1.ExportGraphResponse{Chunk: chunk}, nil
+}
+func (s *fakeExportStream) Header() (metadata.MD, error) { return nil, nil }
+func (s *fakeExportStream) Trailer() metadata.MD         { return nil }
+func (s *fakeExportStream) CloseSend() error             { return nil }
+func (s *fakeExportStream) Context() context.Context     { return s.ctx }
+func (s *fakeExportStream) SendMsg(any) error            { return nil }
+func (s *fakeExportStream) RecvMsg(any) error            { return nil }
+
+// TestGraph_ExportGraph pins graph.ExportGraph's wire mapping and stream
+// semantics (SPEC R2): the format reaches the request, the session per-call
+// timeout bounds the whole stream lifetime, chunks arrive in order, and the
+// stream ends with io.EOF.
+func TestGraph_ExportGraph(t *testing.T) {
+	var capturedFormat string
+	var capturedStreamCtx context.Context
+	mock := &mockCartographerClient{
+		exportGraph: func(
+			ctx context.Context, req *flowv1.ExportGraphRequest,
+		) (grpc.ServerStreamingClient[flowv1.ExportGraphResponse], error) {
+			capturedFormat = req.GetFormat()
+			capturedStreamCtx = ctx
+			return &fakeExportStream{ctx: ctx, chunks: [][]byte{[]byte(`{"nodes":[`), []byte(`]}`)}}, nil
+		},
+	}
+	g := newMockGraph(mock)
+	g.session.timeout = 5 * time.Second
+
+	stream, err := g.ExportGraph("json")
+	if err != nil {
+		t.Fatalf("ExportGraph returned error: %v", err)
+	}
+	if capturedFormat != "json" {
+		t.Errorf("expected format json on the request, got %q", capturedFormat)
+	}
+	// The session timeout must bound the stream: grpc-go pins the deadline
+	// context passed to the streaming RPC for its whole lifetime.
+	dl, ok := capturedStreamCtx.Deadline()
+	if !ok {
+		t.Fatal("expected the stream context to carry the session timeout deadline")
+	}
+	if remaining := time.Until(dl); remaining <= 0 || remaining > 5*time.Second {
+		t.Errorf("expected the stream deadline ~5s out, got %v remaining", remaining)
+	}
+
+	first, err := stream.Recv()
+	if err != nil {
+		t.Fatalf("first Recv() returned error: %v", err)
+	}
+	if string(first.GetChunk()) != `{"nodes":[` {
+		t.Errorf("unexpected first chunk %q", first.GetChunk())
+	}
+	second, err := stream.Recv()
+	if err != nil {
+		t.Fatalf("second Recv() returned error: %v", err)
+	}
+	if string(second.GetChunk()) != `]}` {
+		t.Errorf("unexpected second chunk %q", second.GetChunk())
+	}
+	if _, err := stream.Recv(); err != io.EOF {
+		t.Fatalf("expected io.EOF at the end of the stream, got %v", err)
+	}
+}
+
+// TestGraph_BeginTransaction pins graph.BeginTransaction (SPEC R4): the
+// requested WithTimeout reaches the wire, and the returned handle is wired to
+// the session and the Graph's shared ID-to-type cache so transaction writes
+// inject the transaction ID and resolve capability types against the same
+// cache the graph reads populate.
+func TestGraph_BeginTransaction(t *testing.T) {
+	var capturedTimeout time.Duration
+	var hadTimeout bool
+	mock := &mockCartographerClient{
+		beginTx: func(ctx context.Context, req *flowv1.BeginTransactionRequest) (*flowv1.BeginTransactionResponse, error) {
+			if req.GetTimeout() != nil {
+				hadTimeout = true
+				capturedTimeout = req.GetTimeout().AsDuration()
+			}
+			return &flowv1.BeginTransactionResponse{
+				TransactionId:  testUUIDTx,
+				AppliedTimeout: durationpb.New(48 * time.Hour),
+			}, nil
+		},
+	}
+	g := newMockGraph(mock)
+
+	tx, err := g.BeginTransaction(WithTimeout(48 * time.Hour))
+	if err != nil {
+		t.Fatalf("BeginTransaction returned error: %v", err)
+	}
+	if !hadTimeout || capturedTimeout != 48*time.Hour {
+		t.Errorf("expected the requested 48h timeout on the wire, got %v (present=%v)", capturedTimeout, hadTimeout)
+	}
+	if tx.id != testUUIDTx {
+		t.Errorf("expected tx handle ID %s, got %q", testUUIDTx, tx.id)
+	}
+	if tx.session != g.session {
+		t.Error("expected the tx handle to share the graph's session")
+	}
+	if tx.idTypeMap != g.idTypeMap {
+		t.Error("expected the tx handle to share the graph's ID-to-type cache")
+	}
+}
+
+// TestGraph_BeginTransaction_NoTimeoutOmitted pins the omitted-timeout
+// branch: without WithTimeout the request carries no timeout field and the
+// server applies its default transaction timeout.
+func TestGraph_BeginTransaction_NoTimeoutOmitted(t *testing.T) {
+	var hadTimeout bool
+	mock := &mockCartographerClient{
+		beginTx: func(ctx context.Context, req *flowv1.BeginTransactionRequest) (*flowv1.BeginTransactionResponse, error) {
+			hadTimeout = req.GetTimeout() != nil
+			return &flowv1.BeginTransactionResponse{TransactionId: testUUIDTx}, nil
+		},
+	}
+	g := newMockGraph(mock)
+
+	if _, err := g.BeginTransaction(); err != nil {
+		t.Fatalf("BeginTransaction returned error: %v", err)
+	}
+	if hadTimeout {
+		t.Error("expected no timeout field on the wire when WithTimeout is omitted (server default)")
+	}
+}
+
+// TestGraph_BeginTransaction_TimeoutPassedVerbatim pins the R9 WithTimeout
+// branch end to end: the requested duration is passed to the wire verbatim
+// (no silent capping), and a request exceeding the 7-day hard maximum is
+// rejected by the Cartographer with INVALID_ARGUMENT which the SDK surfaces.
+func TestGraph_BeginTransaction_TimeoutPassedVerbatim(t *testing.T) {
+	var captured time.Duration
+	mock := &mockCartographerClient{
+		beginTx: func(ctx context.Context, req *flowv1.BeginTransactionRequest) (*flowv1.BeginTransactionResponse, error) {
+			captured = req.GetTimeout().AsDuration()
+			return nil, status.Error(codes.InvalidArgument, "timeout exceeds the 7-day maximum")
+		},
+	}
+	g := newMockGraph(mock)
+
+	_, err := g.BeginTransaction(WithTimeout(10 * 24 * time.Hour))
+	if captured != 10*24*time.Hour {
+		t.Fatalf("expected the requested 10d timeout on the wire verbatim (no capping), got %v", captured)
+	}
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("expected InvalidArgument surfaced for an oversized timeout, got %v (%v)", status.Code(err), err)
 	}
 }
