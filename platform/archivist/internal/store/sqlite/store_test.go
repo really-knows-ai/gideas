@@ -322,6 +322,24 @@ func TestVersionTimestamps(t *testing.T) {
 // Feedback: can_wont_fix field tests
 // ---------------------------------------------------------------------------
 
+// feedbackByID reads back a single feedback record through the production
+// GetFeedback surface (there is no single-record read API). All feedback
+// tests operate on the (wi-1, art-1) pair.
+func feedbackByID(t *testing.T, ctx context.Context, s *Store, id string) *FeedbackRecord {
+	t.Helper()
+	records, err := s.GetFeedback(ctx, "wi-1", "art-1")
+	if err != nil {
+		t.Fatalf("GetFeedback: %v", err)
+	}
+	for i := range records {
+		if records[i].ID == id {
+			return &records[i]
+		}
+	}
+	t.Fatalf("feedback record %q not found", id)
+	return nil
+}
+
 func TestAddFeedback_CanWontFix(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -335,14 +353,8 @@ func TestAddFeedback_CanWontFix(t *testing.T) {
 		t.Fatal("expected non-empty feedback ID")
 	}
 
-	// Retrieve and verify.
-	f, err := s.GetFeedbackByID(ctx, id)
-	if err != nil {
-		t.Fatalf("GetFeedbackByID: %v", err)
-	}
-	if f == nil {
-		t.Fatal("expected feedback record")
-	}
+	// Retrieve and verify via the production GetFeedback surface.
+	f := feedbackByID(t, ctx, s, id)
 	if !f.CanWontFix {
 		t.Fatal("expected CanWontFix=true")
 	}
@@ -358,13 +370,7 @@ func TestAddFeedback_CanWontFixDefault(t *testing.T) {
 		t.Fatalf("AddFeedback: %v", err)
 	}
 
-	f, err := s.GetFeedbackByID(ctx, id)
-	if err != nil {
-		t.Fatalf("GetFeedbackByID: %v", err)
-	}
-	if f == nil {
-		t.Fatal("expected feedback record")
-	}
+	f := feedbackByID(t, ctx, s, id)
 	if f.CanWontFix {
 		t.Fatal("expected CanWontFix=false")
 	}
@@ -400,13 +406,7 @@ func TestResolveStaleFeedback_ResolvesOlderVersion(t *testing.T) {
 	}
 
 	// Verify old feedback is now RESOLVED.
-	fA, err := s.GetFeedbackByID(ctx, idA)
-	if err != nil {
-		t.Fatalf("GetFeedbackByID: %v", err)
-	}
-	if fA == nil {
-		t.Fatal("expected feedback record")
-	}
+	fA := feedbackByID(t, ctx, s, idA)
 	if fA.State != 6 {
 		t.Fatalf("expected state=RESOLVED(6), got %d", fA.State)
 	}
@@ -447,13 +447,7 @@ func TestResolveStaleFeedback_SkipsCanWontFixTrue(t *testing.T) {
 	}
 
 	// Verify feedback is still NEW.
-	f, err := s.GetFeedbackByID(ctx, id)
-	if err != nil {
-		t.Fatalf("GetFeedbackByID: %v", err)
-	}
-	if f == nil {
-		t.Fatal("expected feedback record")
-	}
+	f := feedbackByID(t, ctx, s, id)
 	if f.State != 1 {
 		t.Fatalf("expected state=NEW(1), got %d", f.State)
 	}
