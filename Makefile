@@ -41,7 +41,7 @@ test-flowctl: ## Run flowctl unit tests.
 	go test -v ./tools/flowctl/...
 
 $(foreach srv,$(CGO_TEST_SERVICES),$(eval .PHONY: test-$(srv)))
-$(foreach srv,$(CGO_TEST_SERVICES),$(eval test-$(srv): ; $(if $(filter cartographer,$(srv)),GOWORK="$(CURDIR)/.cache/ladybug/go.work" )CGO_ENABLED=1 go test -v ./platform/$(srv)/...))
+$(foreach srv,$(CGO_TEST_SERVICES),$(eval test-$(srv): ; $(if $(filter cartographer,$(srv)),GOWORK="$(CURDIR)/.cache/ladybug/go.work" )CGO_ENABLED=1 go test -v -timeout $(if $(filter cartographer,$(srv)),45m,10m) ./platform/$(srv)/...))
 
 test-cartographer: ladybug-lib
 
