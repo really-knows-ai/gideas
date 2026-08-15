@@ -272,9 +272,9 @@ func TestQueueManager_DecisionSignal_NoConsumer_DoesNotHang(t *testing.T) {
 	t.Setenv("FLOW_STORAGE_PATH", ":memory:")
 	t.Setenv("FLOW_HITL_PORT", "0")
 
-	qm, err := NewQueueManager()
+	qm, err := NewManager()
 	if err != nil {
-		t.Fatalf("NewQueueManager failed: %v", err)
+		t.Fatalf("NewManager failed: %v", err)
 	}
 	if err := qm.Start(context.Background()); err != nil {
 		t.Fatalf("Start failed: %v", err)
