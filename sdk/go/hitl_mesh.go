@@ -571,7 +571,6 @@ func mapGRPCError(err error) error {
 type DNSResolver struct {
 	ServiceName string
 	Namespace   string
-	SelfShardID string
 	Port        string
 }
 
@@ -585,11 +584,7 @@ func (r *DNSResolver) Resolve(ctx context.Context) ([]string, error) {
 
 	var peers []string
 	for _, ip := range ips {
-		addr := net.JoinHostPort(ip, r.Port)
-		// Exclude self — we identify by checking if the resolved address
-		// corresponds to our own pod. In a StatefulSet with headless service,
-		// each pod has a unique IP.
-		peers = append(peers, addr)
+		peers = append(peers, net.JoinHostPort(ip, r.Port))
 	}
 	return peers, nil
 }
