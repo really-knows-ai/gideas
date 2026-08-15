@@ -45,12 +45,12 @@ func TestArbiter_HappyPath_ConsensusRound1_ClerkChildAndSuspend(t *testing.T) {
 		t.Fatalf("expected 4 routed children, got %d", len(spy.RoutedChildren))
 	}
 	for i := range 3 {
-		if spy.RoutedChildren[i].TargetNode != defaultJurorNode {
-			t.Errorf("child %d routed to %q, want %q", i, spy.RoutedChildren[i].TargetNode, defaultJurorNode)
+		if spy.RoutedChildren[i].TargetNode != tally.DefaultJurorNode {
+			t.Errorf("child %d routed to %q, want %q", i, spy.RoutedChildren[i].TargetNode, tally.DefaultJurorNode)
 		}
 	}
-	if spy.RoutedChildren[3].TargetNode != defaultClerkNode {
-		t.Errorf("clerk child routed to %q, want %q", spy.RoutedChildren[3].TargetNode, defaultClerkNode)
+	if spy.RoutedChildren[3].TargetNode != tally.DefaultClerkNode {
+		t.Errorf("clerk child routed to %q, want %q", spy.RoutedChildren[3].TargetNode, tally.DefaultClerkNode)
 	}
 
 	// Should have suspended.
@@ -128,7 +128,7 @@ func TestArbiter_HungAfterMaxRounds_RoutesToHung(t *testing.T) {
 	spy.mu.Lock()
 	defer spy.mu.Unlock()
 
-	assertRoutedTo(t, spy, defaultHungOutput)
+	assertRoutedTo(t, spy, tally.DefaultHungOutput)
 
 	// No complete, no suspend.
 	if len(spy.CompletedReasons) != 0 {
@@ -405,7 +405,7 @@ func TestArbiter_ConsensusStrategy_SuperMajority_BelowThreshold(t *testing.T) {
 	defer spy.mu.Unlock()
 
 	// Below threshold → hung.
-	assertRoutedTo(t, spy, defaultHungOutput)
+	assertRoutedTo(t, spy, tally.DefaultHungOutput)
 }
 
 func TestArbiter_ConsensusStrategy_Unanimity(t *testing.T) {
@@ -457,7 +457,7 @@ func TestArbiter_ConsensusStrategy_Unanimity_NotMet(t *testing.T) {
 	spy.mu.Lock()
 	defer spy.mu.Unlock()
 
-	assertRoutedTo(t, spy, defaultHungOutput)
+	assertRoutedTo(t, spy, tally.DefaultHungOutput)
 }
 
 // ---------------------------------------------------------------------------
@@ -507,23 +507,23 @@ func TestArbiter_FanOutFailure_Error(t *testing.T) {
 
 func TestArbiter_ConfigDefaults(t *testing.T) {
 	cfg := &arbiterConfig{}
-	if cfg.jurySize() != defaultJurySize {
-		t.Errorf("jurySize = %d, want %d", cfg.jurySize(), defaultJurySize)
+	if cfg.EffectiveJurySize() != tally.DefaultJurySize {
+		t.Errorf("jurySize = %d, want %d", cfg.EffectiveJurySize(), tally.DefaultJurySize)
 	}
-	if cfg.jurorNode() != defaultJurorNode {
-		t.Errorf("jurorNode = %q, want %q", cfg.jurorNode(), defaultJurorNode)
+	if cfg.EffectiveJurorNode() != tally.DefaultJurorNode {
+		t.Errorf("jurorNode = %q, want %q", cfg.EffectiveJurorNode(), tally.DefaultJurorNode)
 	}
-	if cfg.clerkNode() != defaultClerkNode {
-		t.Errorf("clerkNode = %q, want %q", cfg.clerkNode(), defaultClerkNode)
+	if cfg.EffectiveClerkNode() != tally.DefaultClerkNode {
+		t.Errorf("clerkNode = %q, want %q", cfg.EffectiveClerkNode(), tally.DefaultClerkNode)
 	}
-	if cfg.hungOutput() != defaultHungOutput {
-		t.Errorf("hungOutput = %q, want %q", cfg.hungOutput(), defaultHungOutput)
+	if cfg.EffectiveHungOutput() != tally.DefaultHungOutput {
+		t.Errorf("hungOutput = %q, want %q", cfg.EffectiveHungOutput(), tally.DefaultHungOutput)
 	}
-	if cfg.maxRounds() != defaultMaxRounds {
-		t.Errorf("maxRounds = %d, want %d", cfg.maxRounds(), defaultMaxRounds)
+	if cfg.EffectiveMaxRounds() != tally.DefaultMaxRounds {
+		t.Errorf("maxRounds = %d, want %d", cfg.EffectiveMaxRounds(), tally.DefaultMaxRounds)
 	}
-	if cfg.consensusStrategy() != flowv1.ConsensusStrategy_CONSENSUS_STRATEGY_SIMPLE_MAJORITY {
-		t.Errorf("consensusStrategy = %v, want SIMPLE_MAJORITY", cfg.consensusStrategy())
+	if cfg.EffectiveConsensusStrategy() != flowv1.ConsensusStrategy_CONSENSUS_STRATEGY_SIMPLE_MAJORITY {
+		t.Errorf("consensusStrategy = %v, want SIMPLE_MAJORITY", cfg.EffectiveConsensusStrategy())
 	}
 }
 
@@ -841,9 +841,9 @@ func TestArbiter_HasCompletedChild_Detection(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := hasCompletedChild(tt.children)
+			got := tally.HasCompletedChild(tt.children)
 			if got != tt.want {
-				t.Errorf("hasCompletedChild = %v, want %v", got, tt.want)
+				t.Errorf("HasCompletedChild = %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -857,15 +857,19 @@ func TestArbiter_PostResume_NoCompletedChild_Error(t *testing.T) {
 		{WorkitemId: "c1", Phase: "Running"},
 	}
 
-	// This triggers post-resume detection (hasCompletedChild returns
+	// This triggers post-resume detection (HasCompletedChild returns
 	// false for Running), so it takes the first-invocation path.
-	// To test the defensive path in handlePostResume, call it directly.
+	// To test the defensive path, call the shared HandlePostResume
+	// directly.
 	children := []flow.ChildWorkitemStatus{
 		{WorkitemID: "c1", Phase: "Running"},
 	}
 
 	_, workitem := setupArbiterTest(t, spy)
-	err := handlePostResume(workitem, children)
+	err := tally.HandlePostResume("arbiter", workitem, children,
+		func(*flow.ChildWorkitemStatus) error { return nil },
+		func(*flow.ChildWorkitemStatus) error { return nil },
+	)
 	if err == nil {
 		t.Fatal("expected error when no completed child found")
 	}
@@ -935,7 +939,7 @@ func TestArbiter_HungMultipleRounds(t *testing.T) {
 		t.Fatalf("expected 9 children, got %d", len(spy.CreatedChildren))
 	}
 
-	assertRoutedTo(t, spy, defaultHungOutput)
+	assertRoutedTo(t, spy, tally.DefaultHungOutput)
 }
 
 func TestArbiter_SingleJuror_ConsensusAlways(t *testing.T) {

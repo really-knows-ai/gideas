@@ -46,6 +46,7 @@ import (
 	"github.com/foundry/flow/nodes/internal/artefacts"
 	"github.com/foundry/flow/nodes/internal/nodeconfig"
 	"github.com/foundry/flow/nodes/internal/nodeutil"
+	"github.com/foundry/flow/nodes/internal/tally"
 	flow "github.com/foundry/flow/sdk/go"
 )
 
@@ -175,28 +176,41 @@ func handleFacilitator(
 	if err != nil {
 		return fmt.Errorf("facilitator: get children: %w", err)
 	}
-	if hasCompletedChild(children) {
+	if tally.HasCompletedChild(children) {
 		nodeutil.EmitTelemetry(client, "foundry.facilitator.started", map[string]any{
 			"phase": "resume",
 		})
-		return handlePostResume(client, workitem, children)
+		return tally.HandlePostResume("facilitator", workitem, children,
+			func(child *flow.ChildWorkitemStatus) error {
+				slog.Info("facilitator: child cancelled, propagating cancellation")
+				nodeutil.EmitTelemetry(client, "foundry.facilitator.cancelled", map[string]any{
+					"child_id": child.WorkitemID,
+				})
+				if err := workitem.Complete(flow.WithReason(
+					flowv1.CompletionReason_COMPLETION_REASON_CANCELLED,
+				)); err != nil {
+					return fmt.Errorf("facilitator: complete with cancelled: %w", err)
+				}
+				return nil
+			},
+			func(child *flow.ChildWorkitemStatus) error {
+				slog.Info("facilitator: child succeeded, routing to resolved")
+				nodeutil.EmitTelemetry(client, "foundry.facilitator.resolved", map[string]any{
+					"child_id": child.WorkitemID,
+					"output":   outputResolved,
+				})
+				if err := workitem.RouteTo(outputResolved); err != nil {
+					return fmt.Errorf("facilitator: route to resolved: %w", err)
+				}
+				return nil
+			},
+		)
 	}
 
 	nodeutil.EmitTelemetry(client, "foundry.facilitator.started", map[string]any{
 		"phase": "first",
 	})
 	return handleFirstInvocation(ctx, client, workitem, cfg, wctx)
-}
-
-// hasCompletedChild returns true if at least one child is in the Completed
-// phase, indicating this is a post-resume invocation.
-func hasCompletedChild(children []flow.ChildWorkitemStatus) bool {
-	for _, ch := range children {
-		if ch.Phase == flow.PhaseCompleted {
-			return true
-		}
-	}
-	return false
 }
 
 // ── First invocation ─────────────────────────────────────────────────────
@@ -595,65 +609,4 @@ func buildAppendix(
 	}
 
 	return b.String(), nil
-}
-
-// ── Post-resume ──────────────────────────────────────────────────────────
-
-// handlePostResume runs after the Operator re-dispatches the Facilitator
-// because the suspend condition was met (all children completed). It checks
-// the child's CompletionReason and either routes to the resolved output or
-// completes with cancellation.
-//
-// The Facilitator creates exactly one child (the Arbiter). We find the
-// first completed child and inspect its reason. If the Arbiter was
-// cancelled (e.g. HITL abort), the Facilitator propagates the cancellation.
-// Otherwise, the dispute is resolved and we route back into the cycle.
-func handlePostResume(
-	client *flow.Client,
-	workitem *flow.Workitem,
-	children []flow.ChildWorkitemStatus,
-) error {
-	// Find the first completed child.
-	var completed *flow.ChildWorkitemStatus
-	for i := range children {
-		if children[i].Phase == flow.PhaseCompleted {
-			completed = &children[i]
-			break
-		}
-	}
-
-	// Defensive: should not happen since hasCompletedChild gates entry,
-	// but handle gracefully.
-	if completed == nil {
-		return fmt.Errorf("facilitator: post-resume but no completed child found")
-	}
-
-	slog.Info("facilitator: post-resume",
-		"child_id", completed.WorkitemID,
-		"completion_reason", completed.CompletionReason,
-	)
-
-	if completed.CompletionReason == flowv1.CompletionReason_COMPLETION_REASON_CANCELLED.String() {
-		slog.Info("facilitator: child cancelled, propagating cancellation")
-		nodeutil.EmitTelemetry(client, "foundry.facilitator.cancelled", map[string]any{
-			"child_id": completed.WorkitemID,
-		})
-		if err := workitem.Complete(flow.WithReason(
-			flowv1.CompletionReason_COMPLETION_REASON_CANCELLED,
-		)); err != nil {
-			return fmt.Errorf("facilitator: complete with cancelled: %w", err)
-		}
-		return nil
-	}
-
-	// Success (UNSPECIFIED = normal completion).
-	slog.Info("facilitator: child succeeded, routing to resolved")
-	nodeutil.EmitTelemetry(client, "foundry.facilitator.resolved", map[string]any{
-		"child_id": completed.WorkitemID,
-		"output":   outputResolved,
-	})
-	if err := workitem.RouteTo(outputResolved); err != nil {
-		return fmt.Errorf("facilitator: route to resolved: %w", err)
-	}
-	return nil
 }
