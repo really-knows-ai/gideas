@@ -43,13 +43,7 @@ type hitlAppraiseConfig struct {
 func main() {
 	slog.Info("hitl-appraise: starting")
 
-	qm, err := flow.NewQueueManager()
-	if err != nil {
-		slog.Error("hitl-appraise: create queue manager failed", "error", err)
-		os.Exit(1)
-	}
-
-	if err := flow.Start(handler(qm), flow.WithQueueManager(qm)); err != nil {
+	if err := nodeutil.RunHITLNode("hitl-appraise", handler); err != nil {
 		slog.Error("hitl-appraise: server failed", "error", err)
 		os.Exit(1)
 	}
@@ -58,20 +52,20 @@ func main() {
 // handler returns a flow.Handler that parks the Workitem in the HITL queue
 // and waits for a human decision.
 func handler(qm flow.QueueManager) flow.Handler {
-	return func(ctx context.Context, wctx *flowv1.WorkitemContext) error {
-		client, workitem, err := nodeutil.SetupHandler(ctx, wctx, "hitl-appraise")
-		if err != nil {
-			return err
-		}
-		defer func() { _ = client.Close() }()
-
+	return nodeutil.NewHITLHandler(qm, "hitl-appraise", func(
+		ctx context.Context,
+		client *flow.Client,
+		workitem *flow.Workitem,
+		qm flow.QueueManager,
+		wctx *flowv1.WorkitemContext,
+	) error {
 		cfg, err := nodeconfig.Load[hitlAppraiseConfig](nodeconfig.Path())
 		if err != nil {
 			return fmt.Errorf("hitl-appraise: load config: %w", err)
 		}
 
 		return handleAppraise(ctx, client, workitem, qm, cfg, wctx)
-	}
+	})
 }
 
 // handleAppraise is the core handler logic, extracted for testability.

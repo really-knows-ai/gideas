@@ -35,18 +35,12 @@ var validChoices = map[string]bool{
 func main() {
 	slog.Info("human-approval: starting")
 
-	qm, err := flow.NewQueueManager(
+	if err := nodeutil.RunHITLNode("human-approval", handler,
 		flow.WithQueueName("human-approval"),
 		flow.WithCustomRoutes(func(mux *http.ServeMux) {
 			mux.HandleFunc("GET /choices", handleChoices)
 		}),
-	)
-	if err != nil {
-		slog.Error("human-approval: create queue manager failed", "error", err)
-		os.Exit(1)
-	}
-
-	if err := flow.Start(handler(qm), flow.WithQueueManager(qm)); err != nil {
+	); err != nil {
 		slog.Error("human-approval: server failed", "error", err)
 		os.Exit(1)
 	}
@@ -55,15 +49,15 @@ func main() {
 // handler returns a flow.Handler that parks the Workitem in the HITL queue
 // and waits for a human decision (approve or cancel).
 func handler(qm flow.QueueManager) flow.Handler {
-	return func(ctx context.Context, wctx *flowv1.WorkitemContext) error {
-		client, workitem, err := nodeutil.SetupHandler(ctx, wctx, "human-approval")
-		if err != nil {
-			return err
-		}
-		defer func() { _ = client.Close() }()
-
+	return nodeutil.NewHITLHandler(qm, "human-approval", func(
+		ctx context.Context,
+		_ *flow.Client,
+		workitem *flow.Workitem,
+		qm flow.QueueManager,
+		wctx *flowv1.WorkitemContext,
+	) error {
 		return handleApproval(ctx, workitem, qm, wctx)
-	}
+	})
 }
 
 // handleApproval is the core handler logic, extracted for testability.
@@ -118,24 +112,10 @@ func handleApproval(
 // GET /choices
 // ---------------------------------------------------------------------------
 
-// choiceEntry is a single entry in the GET /choices response.
-type choiceEntry struct {
-	Value string `json:"value"`
-	Label string `json:"label"`
-	Type  string `json:"type"`
-}
-
-// choicesResponse is the JSON body returned by GET /choices.
-type choicesResponse struct {
-	Choices     []choiceEntry `json:"choices"`
-	HasFeedback bool          `json:"hasFeedback"`
-	HasCancel   bool          `json:"hasCancel"`
-}
-
 // handleChoices serves the hardcoded choice list for the human-approval node.
 func handleChoices(w http.ResponseWriter, r *http.Request) {
-	resp := choicesResponse{
-		Choices: []choiceEntry{
+	resp := nodeutil.ChoicesResponse{
+		Choices: []nodeutil.ChoiceEntry{
 			{Value: "approve", Label: "Approve", Type: "route"},
 			{Value: "cancel", Label: "Reject Petition", Type: "cancel"},
 		},

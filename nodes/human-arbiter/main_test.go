@@ -721,7 +721,7 @@ func TestHumanArbiter_ChoicesEndpoint(t *testing.T) {
 		t.Errorf("expected status 200, got %d", rec.Code)
 	}
 
-	var resp choicesResponse
+	var resp nodeutil.ChoicesResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("failed to parse response body: %v", err)
 	}

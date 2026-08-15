@@ -67,17 +67,11 @@ func main() {
 		os.Exit(1)
 	}
 
-	qm, err := flow.NewQueueManager(
-		flow.WithCustomRoutes(func(mux *http.ServeMux) {
-			mux.HandleFunc("GET /choices", handleChoices(cfg))
-		}),
-	)
-	if err != nil {
-		slog.Error("hitl-sort: create queue manager failed", "error", err)
-		os.Exit(1)
-	}
-
-	if err := flow.Start(handler(qm, cfg), flow.WithQueueManager(qm)); err != nil {
+	if err := nodeutil.RunHITLNode("hitl-sort", func(qm flow.QueueManager) flow.Handler {
+		return handler(qm, cfg)
+	}, flow.WithCustomRoutes(func(mux *http.ServeMux) {
+		mux.HandleFunc("GET /choices", handleChoices(cfg))
+	})); err != nil {
 		slog.Error("hitl-sort: server failed", "error", err)
 		os.Exit(1)
 	}
@@ -86,15 +80,15 @@ func main() {
 // handler returns a flow.Handler that parks the Workitem in the HITL queue,
 // waits for a human routing decision, and routes accordingly.
 func handler(qm flow.QueueManager, cfg *hitlSortConfig) flow.Handler {
-	return func(ctx context.Context, wctx *flowv1.WorkitemContext) error {
-		client, workitem, err := nodeutil.SetupHandler(ctx, wctx, "hitl-sort")
-		if err != nil {
-			return err
-		}
-		defer func() { _ = client.Close() }()
-
+	return nodeutil.NewHITLHandler(qm, "hitl-sort", func(
+		ctx context.Context,
+		client *flow.Client,
+		workitem *flow.Workitem,
+		qm flow.QueueManager,
+		wctx *flowv1.WorkitemContext,
+	) error {
 		return handleSort(ctx, client, workitem, qm, cfg, wctx)
-	}
+	})
 }
 
 // handleSort is the core handler logic, extracted for testability.

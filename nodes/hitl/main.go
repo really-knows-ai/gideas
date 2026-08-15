@@ -52,6 +52,13 @@ import (
 // choiceCancel is the reserved choice value for the cancel action.
 const choiceCancel = "cancel"
 
+// choiceType values classify a choice for the Dashboard. The type field is
+// part of the shared nodeutil.ChoiceEntry wire shape.
+const (
+	choiceTypeRoute  = "route"
+	choiceTypeCancel = "cancel"
+)
+
 // hitlConfig holds the node's configuration, loaded from a
 // ConfigMap-mounted YAML file via nodeconfig.Load.
 type hitlConfig struct {
@@ -59,14 +66,6 @@ type hitlConfig struct {
 	// If an output has no entry, the output name is used as-is.
 	ChoiceLabels map[string]string `yaml:"choiceLabels"`
 }
-
-// choiceType classifies a choice for the Dashboard.
-type choiceType string
-
-const (
-	choiceTypeRoute  choiceType = "route"
-	choiceTypeCancel choiceType = "cancel"
-)
 
 // derivedBehaviour holds everything the node needs at runtime, computed
 // once from topology and config during handler startup.
@@ -90,20 +89,6 @@ type derivedBehaviour struct {
 	validChoices map[string]bool
 }
 
-// choiceEntry is a single entry in the GET /choices response.
-type choiceEntry struct {
-	Value string     `json:"value"`
-	Label string     `json:"label"`
-	Type  choiceType `json:"type"`
-}
-
-// choicesResponse is the JSON body returned by GET /choices.
-type choicesResponse struct {
-	Choices     []choiceEntry `json:"choices"`
-	HasFeedback bool          `json:"hasFeedback"`
-	HasCancel   bool          `json:"hasCancel"`
-}
-
 func main() {
 	slog.Info("hitl: starting")
 
@@ -113,17 +98,9 @@ func main() {
 		os.Exit(1)
 	}
 
-	qm, err := flow.NewQueueManager(
-		flow.WithCustomRoutes(func(mux *http.ServeMux) {
-			mux.HandleFunc("GET /choices", handleChoices(cfg))
-		}),
-	)
-	if err != nil {
-		slog.Error("hitl: create queue manager failed", "error", err)
-		os.Exit(1)
-	}
-
-	if err := flow.Start(handler(qm), flow.WithQueueManager(qm)); err != nil {
+	if err := nodeutil.RunHITLNode("hitl", handler, flow.WithCustomRoutes(func(mux *http.ServeMux) {
+		mux.HandleFunc("GET /choices", handleChoices(cfg))
+	})); err != nil {
 		slog.Error("hitl: server failed", "error", err)
 		os.Exit(1)
 	}
@@ -132,15 +109,7 @@ func main() {
 // handler returns a flow.Handler that parks the Workitem in the HITL queue,
 // waits for a human decision, and routes or cancels accordingly.
 func handler(qm flow.QueueManager) flow.Handler {
-	return func(ctx context.Context, wctx *flowv1.WorkitemContext) error {
-		client, workitem, err := nodeutil.SetupHandler(ctx, wctx, "hitl")
-		if err != nil {
-			return err
-		}
-		defer func() { _ = client.Close() }()
-
-		return handleHITL(ctx, client, workitem, qm, wctx)
-	}
+	return nodeutil.NewHITLHandler(qm, "hitl", handleHITL)
 }
 
 // handleHITL is the core handler logic, extracted for testability.
@@ -248,14 +217,14 @@ func buildChoicesResponse(
 	topology *flow.Flow,
 	rawTopology *flowv1.GetFlowTopologyResponse,
 	cfg *hitlConfig,
-) *choicesResponse {
+) *nodeutil.ChoicesResponse {
 	behaviour := deriveBehaviour(topology, rawTopology)
 	labels := cfg.ChoiceLabels
 	if labels == nil {
 		labels = map[string]string{}
 	}
 
-	resp := &choicesResponse{
+	resp := &nodeutil.ChoicesResponse{
 		HasFeedback: behaviour.hasFeedback,
 		HasCancel:   behaviour.hasCancel,
 	}
@@ -266,7 +235,7 @@ func buildChoicesResponse(
 		if label == "" {
 			label = name
 		}
-		resp.Choices = append(resp.Choices, choiceEntry{
+		resp.Choices = append(resp.Choices, nodeutil.ChoiceEntry{
 			Value: name,
 			Label: label,
 			Type:  choiceTypeRoute,
@@ -279,7 +248,7 @@ func buildChoicesResponse(
 		if label == "" {
 			label = "Cancel"
 		}
-		resp.Choices = append(resp.Choices, choiceEntry{
+		resp.Choices = append(resp.Choices, nodeutil.ChoiceEntry{
 			Value: choiceCancel,
 			Label: label,
 			Type:  choiceTypeCancel,
