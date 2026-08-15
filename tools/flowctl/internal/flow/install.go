@@ -289,7 +289,6 @@ func InstallFlow(ctx context.Context, k8s *api.K8sClient, opts InstallOptions, s
 				}
 				return nil, fmt.Errorf("failed to verify CRDs: %w", err)
 			}
-			_ = parts // keep the compiler happy; parts are used for potential future validation
 		}
 	}
 
