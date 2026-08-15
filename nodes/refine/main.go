@@ -34,12 +34,10 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"log/slog"
 	"os"
-	"text/template"
 
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
 	"github.com/foundry/flow/nodes/internal/handlers"
@@ -61,55 +59,6 @@ type refineConfig struct {
 	TriageQueryTemplate   string `yaml:"triageQueryTemplate"`
 	RevisionSystemPrompt  string `yaml:"revisionSystemPrompt"`
 	RevisionQueryTemplate string `yaml:"revisionQueryTemplate"`
-}
-
-// ---------------------------------------------------------------------------
-// Agent Construction Helper
-// ---------------------------------------------------------------------------
-
-// buildAgent is the shared construction pattern for the triage and revision
-// agents. It renders the system prompt template, parses the query template,
-// and creates a flow.Agent with schema, model (GptOss120bOllama), and prompts.
-//
-// The model is created internally — model choice is a code-time decision
-// coupled to the prompts, not deploy-time config.
-func buildAgent(
-	client *flow.Client,
-	name string,
-	sysTmplStr string,
-	sysData any,
-	queryTmplStr string,
-	schema []byte,
-) (*flow.Agent, error) {
-	// 1. Render system prompt with config params.
-	sysTmpl, err := template.New("system").Parse(sysTmplStr)
-	if err != nil {
-		return nil, fmt.Errorf("%s: parse system template: %w", name, err)
-	}
-
-	var sysBuf bytes.Buffer
-	if err := sysTmpl.Execute(&sysBuf, sysData); err != nil {
-		return nil, fmt.Errorf("%s: render system prompt: %w", name, err)
-	}
-
-	// 2. Parse query template.
-	queryTmpl, err := template.New("query").Parse(queryTmplStr)
-	if err != nil {
-		return nil, fmt.Errorf("%s: parse query template: %w", name, err)
-	}
-
-	// 3. Create flow.Agent with schema, model, prompts.
-	agent, err := flow.NewAgent(client,
-		flow.WithSchema(schema),
-		flow.WithModelName("deepseek-v4-flash:cloud"),
-		flow.WithSystemPrompt(sysBuf.String()),
-		flow.WithQueryTemplate(queryTmpl),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("%s: create agent: %w", name, err)
-	}
-
-	return agent, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -141,7 +90,7 @@ func handler(ctx context.Context, wctx *flowv1.WorkitemContext) error {
 		return fmt.Errorf("refine: load config: %w", err)
 	}
 
-	// Create agents (model is created internally by buildAgent).
+	// Create agents (model is created internally by nodeutil.BuildAgent).
 	triageAgent, err := NewTriageAgent(client, cfg)
 	if err != nil {
 		return fmt.Errorf("refine: create triage agent: %w", err)

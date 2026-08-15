@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
+	"github.com/foundry/flow/nodes/internal/nodeutil"
 	flow "github.com/foundry/flow/sdk/go"
 )
 
@@ -106,7 +107,7 @@ type revisionTemplateQueryData struct {
 }
 
 // NewRevisionAgent creates a RevisionAgent with the given client and config.
-// The model (GptOss120bOllama) is created internally by buildAgent.
+// The model (GptOss120bOllama) is created internally by nodeutil.BuildAgent.
 // If cfg provides non-empty RevisionSystemPrompt or RevisionQueryTemplate
 // overrides, those replace the baked-in defaults.
 func NewRevisionAgent(client *flow.Client, cfg *refineConfig) (*RevisionAgent, error) {
@@ -127,7 +128,7 @@ func NewRevisionAgent(client *flow.Client, cfg *refineConfig) (*RevisionAgent, e
 
 	schema := revisionOutputSchema(cfg.OutputField)
 
-	agent, err := buildAgent(client, "revision agent",
+	agent, err := nodeutil.BuildAgent(client, "revision agent", "deepseek-v4-flash:cloud",
 		sysTmpl, sysData,
 		queryTmpl, schema)
 	if err != nil {
