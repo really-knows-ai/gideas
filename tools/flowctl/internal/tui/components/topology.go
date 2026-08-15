@@ -2,9 +2,9 @@ package components
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/foundry/flow/tools/flowctl/internal/tui/styles"
@@ -123,7 +123,7 @@ func (m FlowTopologyModel) View() string {
 	for k := range layers {
 		layerKeys = append(layerKeys, k)
 	}
-	sortInts(layerKeys)
+	sort.Ints(layerKeys)
 
 	// Track which nodes in each layer have edges to the next
 	for layerIdx, depth := range layerKeys {
@@ -274,21 +274,5 @@ func styleForNode(c types.TopologyColor) lipgloss.Style {
 		return styles.StyleTopologyVisited()
 	default:
 		return styles.StyleTopologyUnvisited()
-	}
-}
-
-// Update handles messages for the topology view.
-func (m FlowTopologyModel) Update(msg tea.Msg) (FlowTopologyModel, tea.Cmd) {
-	return m, nil
-}
-
-// sortInts sorts a small int slice in place (avoiding sort import for one helper).
-func sortInts(s []int) {
-	for i := 0; i < len(s); i++ {
-		for j := i + 1; j < len(s); j++ {
-			if s[i] > s[j] {
-				s[i], s[j] = s[j], s[i]
-			}
-		}
 	}
 }
