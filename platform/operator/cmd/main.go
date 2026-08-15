@@ -126,51 +126,13 @@ func main() {
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
 
-	// Env var overrides for Cartographer-related flags.
-	if proxyAddr == "" {
-		if v := os.Getenv("OPERATOR_PROXY_PORT"); v != "" {
-			proxyAddr = ":" + v
-		}
-	}
-	if proxyAddr == "" {
-		proxyAddr = ":50053"
-	}
-
-	if readinessTimeoutStr == "" {
-		if v := os.Getenv("CARTOGRAPHER_READINESS_TIMEOUT"); v != "" {
-			readinessTimeoutStr = v
-		}
-	}
-	if readinessTimeoutStr == "" {
-		readinessTimeoutStr = "5m"
-	}
-
-	if cartographerPortStr == "" {
-		if v := os.Getenv("CARTOGRAPHER_PORT"); v != "" {
-			cartographerPortStr = v
-		}
-	}
-	if cartographerPortStr == "" {
-		cartographerPortStr = "50051"
-	}
-
-	if cartographerImage == "" {
-		if v := os.Getenv("CARTOGRAPHER_IMAGE"); v != "" {
-			cartographerImage = v
-		}
-	}
-	if cartographerImage == "" {
-		cartographerImage = controller.DefaultCartographerImage
-	}
-
-	if capabilityStalenessWindow == "" {
-		if v := os.Getenv("CAPABILITY_STALENESS_WINDOW"); v != "" {
-			capabilityStalenessWindow = v
-		}
-	}
-	if capabilityStalenessWindow == "" {
-		capabilityStalenessWindow = "30s"
-	}
+	// Cartographer-related config (SPEC R6): each value resolves from its CLI
+	// flag, else its env-var override, else its SPEC default.
+	proxyAddr = resolveProxyAddress(proxyAddr)
+	readinessTimeoutStr = resolveReadinessTimeout(readinessTimeoutStr)
+	cartographerPortStr = resolveCartographerPort(cartographerPortStr)
+	cartographerImage = resolveCartographerImage(cartographerImage)
+	capabilityStalenessWindow = resolveCapabilityStalenessWindow(capabilityStalenessWindow)
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
@@ -579,4 +541,63 @@ func main() {
 		setupLog.Error(err, "Failed to run manager")
 		os.Exit(1)
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Cartographer config resolution (SPEC R6 env-var defaults)
+// ---------------------------------------------------------------------------
+
+// envDefault resolves a config value from a CLI flag, an environment-variable
+// override, or a compiled-in default, in that order of precedence. Empty
+// values are treated as unset.
+func envDefault(flagValue, envValue, defaultValue string) string {
+	if flagValue != "" {
+		return flagValue
+	}
+	if envValue != "" {
+		return envValue
+	}
+	return defaultValue
+}
+
+// resolveProxyAddress resolves the Cartographer gRPC proxy bind address (SPEC
+// R6): the --proxy-bind-address flag, else the OPERATOR_PROXY_PORT env var (a
+// bare port, prefixed with ":" to form a bind address), else the SPEC default
+// ":50053".
+func resolveProxyAddress(flagAddr string) string {
+	if flagAddr != "" {
+		return flagAddr
+	}
+	if v := os.Getenv("OPERATOR_PROXY_PORT"); v != "" {
+		return ":" + v
+	}
+	return ":50053"
+}
+
+// resolveReadinessTimeout resolves the Cartographer pod readiness timeout:
+// the --readiness-timeout flag, else the CARTOGRAPHER_READINESS_TIMEOUT env
+// var, else the SPEC default "5m".
+func resolveReadinessTimeout(flagValue string) string {
+	return envDefault(flagValue, os.Getenv("CARTOGRAPHER_READINESS_TIMEOUT"), "5m")
+}
+
+// resolveCartographerPort resolves the Cartographer gRPC port: the
+// --cartographer-port flag, else the CARTOGRAPHER_PORT env var, else the SPEC
+// default "50051".
+func resolveCartographerPort(flagValue string) string {
+	return envDefault(flagValue, os.Getenv("CARTOGRAPHER_PORT"), "50051")
+}
+
+// resolveCartographerImage resolves the Cartographer container image: the
+// --cartographer-image flag, else the CARTOGRAPHER_IMAGE env var, else the
+// compiled-in default (SPEC R6: the same image as the Operator release).
+func resolveCartographerImage(flagValue string) string {
+	return envDefault(flagValue, os.Getenv("CARTOGRAPHER_IMAGE"), controller.DefaultCartographerImage)
+}
+
+// resolveCapabilityStalenessWindow resolves the capability attestation
+// staleness window: the --capability-staleness-window flag, else the
+// CAPABILITY_STALENESS_WINDOW env var, else the SPEC default "30s".
+func resolveCapabilityStalenessWindow(flagValue string) string {
+	return envDefault(flagValue, os.Getenv("CAPABILITY_STALENESS_WINDOW"), "30s")
 }
