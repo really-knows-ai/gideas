@@ -86,6 +86,67 @@ func TestDeploymentEnvVars(t *testing.T) {
 	}
 }
 
+// TestDeploymentEnvVarsValueFromShapes pins the SPEC R6 step 3 env-var SHAPES for the three
+// reference-based env vars (foundrygraph_infra.go:305-332): OPERATOR_VERIFICATION_KEY and
+// SIDECAR_VERIFICATION_KEY must be rendered as valueFrom.secretKeyRef references to the
+// per-namespace verification-key Secrets using the data key "key" (never as literal values),
+// and POD_NAMESPACE must be rendered as valueFrom.fieldRef with fieldPath metadata.namespace
+// (SPEC R6 step 3: "OPERATOR_VERIFICATION_KEY and SIDECAR_VERIFICATION_KEY set from the
+// corresponding Secrets via valueFrom.secretKeyRef using the data key key" and "POD_NAMESPACE
+// from the Downward API (fieldRef: metadata.namespace)"). A regression that flattens any of
+// the three references into a literal Value must fail the test.
+func TestDeploymentEnvVarsValueFromShapes(t *testing.T) {
+	r := &FoundryGraphReconciler{CartographerPort: 50051, CapabilityStalenessWindow: "30s"}
+	fg := &flowv1.FoundryGraph{ObjectMeta: metav1.ObjectMeta{Name: defaultGraphName}}
+
+	env := r.deploymentEnvVars(fg)
+	envMap := make(map[string]corev1.EnvVar, len(env))
+	for _, e := range env {
+		envMap[e.Name] = e
+	}
+
+	for _, tc := range []struct {
+		name       string
+		secretName string // expected secretKeyRef.name; empty for the fieldRef var
+		secretKey  string // expected secretKeyRef.key
+		fieldPath  string // expected fieldRef.fieldPath; empty for the secretKeyRef vars
+	}{
+		{name: "OPERATOR_VERIFICATION_KEY", secretName: operatorKeySecretName, secretKey: "key"},
+		{name: "SIDECAR_VERIFICATION_KEY", secretName: sidecarKeySecretName, secretKey: "key"},
+		{name: "POD_NAMESPACE", fieldPath: "metadata.namespace"},
+	} {
+		e, ok := envMap[tc.name]
+		if !ok {
+			t.Fatalf("expected env var %q to be rendered", tc.name)
+		}
+		if e.Value != "" {
+			t.Errorf("%q must not carry a literal Value (SPEC R6 step 3 requires a reference), got %q", tc.name, e.Value)
+		}
+		if e.ValueFrom == nil {
+			t.Fatalf("expected %q to set ValueFrom, got %+v", tc.name, e)
+		}
+		switch {
+		case tc.secretName != "":
+			if e.ValueFrom.SecretKeyRef == nil {
+				t.Fatalf("expected %q to be a secretKeyRef (SPEC R6 step 3), got %+v", tc.name, e.ValueFrom)
+			}
+			if e.ValueFrom.SecretKeyRef.Name != tc.secretName {
+				t.Errorf("expected %q secretKeyRef.name=%q, got %q", tc.name, tc.secretName, e.ValueFrom.SecretKeyRef.Name)
+			}
+			if e.ValueFrom.SecretKeyRef.Key != tc.secretKey {
+				t.Errorf("expected %q secretKeyRef.key=%q, got %q", tc.name, tc.secretKey, e.ValueFrom.SecretKeyRef.Key)
+			}
+		case tc.fieldPath != "":
+			if e.ValueFrom.FieldRef == nil {
+				t.Fatalf("expected %q to be a fieldRef (SPEC R6 step 3), got %+v", tc.name, e.ValueFrom)
+			}
+			if e.ValueFrom.FieldRef.FieldPath != tc.fieldPath {
+				t.Errorf("expected %q fieldRef.fieldPath=%q, got %q", tc.name, tc.fieldPath, e.ValueFrom.FieldRef.FieldPath)
+			}
+		}
+	}
+}
+
 // TestDeploymentEnvVarsPullOnInit exercises the two REMOTE_PULL_ON_INIT value branches
 // (foundrygraph_infra.go:301-304): the env var must be rendered from the CRD spec field
 // versioning.remote.pullOnInit — "true" when the field is set, "false" when it is unset
