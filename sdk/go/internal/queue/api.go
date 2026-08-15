@@ -1,4 +1,4 @@
-package flow
+package queue
 
 import (
 	"encoding/json"
@@ -18,10 +18,10 @@ type apiErrorDetail struct {
 	Message string `json:"message"`
 }
 
-// newHITLRouter returns an *http.ServeMux with the HITL REST API routes.
+// newRouter returns an *http.ServeMux with the HITL REST API routes.
 // Uses Go 1.22+ enhanced routing with method+pattern matching.
 // Callers may add additional routes to the returned mux before serving.
-func newHITLRouter(qm QueueManager) *http.ServeMux {
+func newRouter(qm QueueManager) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /queue", handleListQueue(qm))
 	mux.HandleFunc("GET /queue/{id}", handleGetItem(qm))

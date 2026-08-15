@@ -1,4 +1,4 @@
-package flow
+package queue
 
 import (
 	"context"
@@ -17,14 +17,14 @@ import (
 // Tests — HITL QueueManager
 // ---------------------------------------------------------------------------
 
-func newTestManager(t *testing.T) *queueManagerImpl {
+func newTestManager(t *testing.T) *Manager {
 	t.Helper()
 	store, err := newQueueStore(":memory:", "mgr-shard-0", "")
 	if err != nil {
 		t.Fatalf("newQueueStore failed: %v", err)
 	}
 	mesh := newQueueMesh(store, "mgr-shard-0", &staticResolver{}, "50053", nil)
-	qm := &queueManagerImpl{
+	qm := &Manager{
 		store:   store,
 		mesh:    mesh,
 		shardID: "mgr-shard-0",
@@ -37,9 +37,9 @@ func TestQueueManager_Lifecycle(t *testing.T) {
 	t.Setenv("FLOW_STORAGE_PATH", ":memory:")
 	t.Setenv("FLOW_HITL_PORT", "0")
 
-	qm, err := NewQueueManager()
+	qm, err := NewManager()
 	if err != nil {
-		t.Fatalf("NewQueueManager failed: %v", err)
+		t.Fatalf("NewManager failed: %v", err)
 	}
 
 	if err := qm.Start(context.Background()); err != nil {
@@ -128,7 +128,7 @@ func TestQueueManager_GlobalQueue_MultiShard(t *testing.T) {
 	mesh0 := newQueueMesh(store0, "mgr-0", &staticResolver{}, "50053", nil)
 	mesh0.peers["mgr-1"] = connectToShard(t, shard1)
 
-	qm0 := &queueManagerImpl{
+	qm0 := &Manager{
 		store:   store0,
 		mesh:    mesh0,
 		shardID: "mgr-0",
@@ -154,7 +154,7 @@ func TestQueueManager_Telemetry_Enqueue(t *testing.T) {
 
 	tc := &telemetryCapture{}
 	mesh := newQueueMesh(store, "tel-shard", &staticResolver{}, "50053", tc.capture)
-	qm := &queueManagerImpl{
+	qm := &Manager{
 		store:   store,
 		mesh:    mesh,
 		shardID: "tel-shard",
@@ -223,7 +223,7 @@ func TestQueueManager_GetPeers(t *testing.T) {
 	mesh.peers["10.0.0.2:50053"] = nil
 	mesh.mu.Unlock()
 
-	qm := &queueManagerImpl{
+	qm := &Manager{
 		store:   store,
 		mesh:    mesh,
 		shardID: "peer-shard",
@@ -363,7 +363,7 @@ func TestQueueManager_WaitForDecision_CrossShard(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = storeA.close() })
 
-	qmA := &queueManagerImpl{
+	qmA := &Manager{
 		store:   storeA,
 		shardID: "shard-A",
 	}
@@ -411,7 +411,7 @@ func TestQueueManager_WaitForDecision_CrossShard(t *testing.T) {
 	t.Cleanup(func() { _ = connA.Close() })
 	meshB.peers["shard-A"] = flowv1.NewQueuePeerServiceClient(connA)
 
-	qmB := &queueManagerImpl{
+	qmB := &Manager{
 		store:   storeB,
 		mesh:    meshB,
 		shardID: "shard-B",
@@ -527,11 +527,11 @@ func TestQueueManager_WithQueueName_Stored(t *testing.T) {
 	t.Setenv("FLOW_STORAGE_PATH", ":memory:")
 	t.Setenv("FLOW_HITL_PORT", "0")
 
-	qm, err := NewQueueManager(
+	qm, err := NewManager(
 		WithQueueName("my-queue"),
 	)
 	if err != nil {
-		t.Fatalf("NewQueueManager failed: %v", err)
+		t.Fatalf("NewManager failed: %v", err)
 	}
 	if err := qm.Start(context.Background()); err != nil {
 		t.Fatalf("Start failed: %v", err)
@@ -560,9 +560,9 @@ func TestQueueManager_QueueName_DefaultsToFLOW_NODE_ID(t *testing.T) {
 	t.Setenv("FLOW_STORAGE_PATH", ":memory:")
 	t.Setenv("FLOW_HITL_PORT", "0")
 
-	qm, err := NewQueueManager()
+	qm, err := NewManager()
 	if err != nil {
-		t.Fatalf("NewQueueManager failed: %v", err)
+		t.Fatalf("NewManager failed: %v", err)
 	}
 	if qm.queueName != "test-node-id" {
 		t.Fatalf("expected queueName=test-node-id, got %q", qm.queueName)
@@ -594,11 +594,11 @@ func TestQueueManager_QueueName_EnqueueDecideWaitCycle(t *testing.T) {
 	t.Setenv("FLOW_STORAGE_PATH", ":memory:")
 	t.Setenv("FLOW_HITL_PORT", "0")
 
-	qm, err := NewQueueManager(
+	qm, err := NewManager(
 		WithQueueName("test-queue"),
 	)
 	if err != nil {
-		t.Fatalf("NewQueueManager failed: %v", err)
+		t.Fatalf("NewManager failed: %v", err)
 	}
 	if err := qm.Start(context.Background()); err != nil {
 		t.Fatalf("Start failed: %v", err)

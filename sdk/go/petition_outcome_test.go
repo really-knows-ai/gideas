@@ -2,10 +2,55 @@ package flow
 
 import (
 	"io"
+	"net"
 	"testing"
 
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
+	"google.golang.org/grpc"
 )
+
+// petitionOutcomeSpyServer is a minimal FederationServiceServer that serves a
+// fixed set of petition outcome events. Used to exercise the petition-outcome
+// helpers against a real federation subscription stream.
+type petitionOutcomeSpyServer struct {
+	flowv1.UnimplementedFederationServiceServer
+	events []*flowv1.PetitionOutcomeEvent
+}
+
+func (s *petitionOutcomeSpyServer) SubscribePetitionOutcomes(
+	_ *flowv1.SubscribePetitionOutcomesRequest,
+	stream grpc.ServerStreamingServer[flowv1.PetitionOutcomeEvent],
+) error {
+	for _, evt := range s.events {
+		if err := stream.Send(evt); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// setupPetitionOutcomeStreamClient starts a spy FederationService server and
+// returns a FederationClient connected to it via NewFederationClientForTest.
+func setupPetitionOutcomeStreamClient(t *testing.T, events []*flowv1.PetitionOutcomeEvent) *FederationClient {
+	t.Helper()
+
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to create listener: %v", err)
+	}
+
+	srv := grpc.NewServer()
+	flowv1.RegisterFederationServiceServer(srv, &petitionOutcomeSpyServer{events: events})
+	go func() { _ = srv.Serve(lis) }()
+	t.Cleanup(srv.GracefulStop)
+
+	client, err := NewFederationClientForTest(lis.Addr().String())
+	if err != nil {
+		t.Fatalf("NewFederationClientForTest failed: %v", err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	return client
+}
 
 // --- Slice 12.6.2 tests: petition-outcome event helpers ---
 
@@ -87,25 +132,22 @@ func TestIsPetitionRejected_Unspecified(t *testing.T) {
 }
 
 func TestPetitionOutcomeStream_DeserializesFromFederationStream(t *testing.T) {
-	spy := &federationSpyServer{
-		petitionOutcomeEvents: []*flowv1.PetitionOutcomeEvent{
-			{
-				PetitionId:     "pet-accepted",
-				Outcome:        flowv1.PetitionOutcome_PETITION_OUTCOME_ACCEPTED,
-				PublishedLawId: "law-from-petition",
-			},
-			{
-				PetitionId: "pet-rejected",
-				Outcome:    flowv1.PetitionOutcome_PETITION_OUTCOME_REJECTED,
-				Rejection: &flowv1.PublicationRejection{
-					Reason:            flowv1.PublicationRejectionReason_PUBLICATION_REJECTION_REASON_OUT_OF_SCOPE,
-					ConflictingLawIds: []string{"conflict-1"},
-					RemediationText:   "Scope mismatch",
-				},
+	client := setupPetitionOutcomeStreamClient(t, []*flowv1.PetitionOutcomeEvent{
+		{
+			PetitionId:     "pet-accepted",
+			Outcome:        flowv1.PetitionOutcome_PETITION_OUTCOME_ACCEPTED,
+			PublishedLawId: "law-from-petition",
+		},
+		{
+			PetitionId: "pet-rejected",
+			Outcome:    flowv1.PetitionOutcome_PETITION_OUTCOME_REJECTED,
+			Rejection: &flowv1.PublicationRejection{
+				Reason:            flowv1.PublicationRejectionReason_PUBLICATION_REJECTION_REASON_OUT_OF_SCOPE,
+				ConflictingLawIds: []string{"conflict-1"},
+				RemediationText:   "Scope mismatch",
 			},
 		},
-	}
-	client := setupFederationTestClient(t, spy)
+	})
 
 	stream, err := client.SubscribePetitionOutcomes("watcher-flow")
 	if err != nil {

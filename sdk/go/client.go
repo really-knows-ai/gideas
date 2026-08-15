@@ -4,10 +4,12 @@
 // management, workitem context injection, and convenience methods for common
 // operations. All calls are routed through the in-pod Sidecar.
 //
-// ponytail: this single flow package hosts the sidecar client, node server,
-// queue mesh, embassy and federation protocols and the cartographer graph
-// client; the package stays monolithic for release velocity, but if the queue
-// mesh or embassy server grows further they should move to internal subpackages.
+// The package hosts the client SDK core and node entry points (Client,
+// Workitem, Graph, Transaction, Agent, Start/Handler). The server-heavy
+// subsystems live in internal subpackages: the HITL queue mesh (gRPC
+// QueuePeerService, HTTP server, SQLite store, DNS discovery) in
+// internal/queue, the embassy/federation protocols in internal/embassy, and
+// the LLM provider implementations in internal/provider.
 package flow
 
 import (

@@ -1,172 +1,153 @@
 package flow
 
 import (
-	"context"
-	"fmt"
-	"os"
-
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
+
+	"github.com/foundry/flow/sdk/go/internal/embassy"
+)
+
+// Re-exported Embassy/Federation surface. The embassy transfer-protocol and
+// federation client helpers plus the server-side Embassy scaffold live in the
+// internal/embassy package; these aliases keep the public names stable on the
+// flow package for the node binaries (embassy, petition-watcher) that consume
+// them.
+type (
+	// EmbassyOption configures the EmbassyClient.
+	EmbassyOption = embassy.EmbassyOption
+
+	// EmbassyClient provides SDK helpers for the Embassy transfer protocol.
+	EmbassyClient = embassy.EmbassyClient
+
+	// EmbassyExportStream wraps the Embassy export stream.
+	EmbassyExportStream = embassy.EmbassyExportStream
+
+	// EmbassyFlowImportTypeSpec mirrors the flow-authored import type inputs.
+	EmbassyFlowImportTypeSpec = embassy.EmbassyFlowImportTypeSpec
+
+	// EmbassyResolvedImportType describes one effective import type.
+	EmbassyResolvedImportType = embassy.EmbassyResolvedImportType
+
+	// EmbassyServiceHandler is the server-side Embassy scaffold interface.
+	EmbassyServiceHandler = embassy.EmbassyServiceHandler
+
+	// EmbassyPackageStager stages streamed package chunks before materialisation.
+	EmbassyPackageStager = embassy.EmbassyPackageStager
+
+	// EmbassyMaterializer materialises a staged import package into a local result.
+	EmbassyMaterializer = embassy.EmbassyMaterializer
+
+	// EmbassyStagedPackage holds a manifest and its staged transfer chunks.
+	EmbassyStagedPackage = embassy.EmbassyStagedPackage
+
+	// EmbassyTrustSource identifies which trust topology governs a transfer.
+	EmbassyTrustSource = embassy.EmbassyTrustSource
+
+	// EmbassyTrustPolicy captures the parity checks shared by federation and treaty exchange.
+	EmbassyTrustPolicy = embassy.EmbassyTrustPolicy
+
+	// EmbassyImportRequest is the trust-relevant subset of an inbound transfer.
+	EmbassyImportRequest = embassy.EmbassyImportRequest
+
+	// FederationOption configures the FederationClient.
+	FederationOption = embassy.FederationOption
+
+	// FederationClient provides SDK helpers for the Federation service RPCs.
+	FederationClient = embassy.FederationClient
+
+	// PetitionTarget holds the authority Flow identity and Embassy endpoint.
+	PetitionTarget = embassy.PetitionTarget
+
+	// FlowEndpoint represents a discovered federation endpoint.
+	FlowEndpoint = embassy.FlowEndpoint
+
+	// LawUpdateWatcher wraps the server-streaming subscription for law updates.
+	LawUpdateWatcher = embassy.LawUpdateWatcher
+
+	// PetitionOutcomeWatcher wraps the server-streaming subscription for petition outcomes.
+	PetitionOutcomeWatcher = embassy.PetitionOutcomeWatcher
 )
 
 const (
 	// DefaultEmbassyAddress is the default gRPC endpoint for the Embassy service.
-	DefaultEmbassyAddress = "localhost:50059"
+	DefaultEmbassyAddress = embassy.DefaultEmbassyAddress
 
 	// EnvEmbassyAddress overrides the default Embassy gRPC address.
-	EnvEmbassyAddress = "EMBASSY_ADDRESS"
+	EnvEmbassyAddress = embassy.EnvEmbassyAddress
+
+	// DefaultFederationAddress is the default gRPC endpoint for the Federation service.
+	DefaultFederationAddress = embassy.DefaultFederationAddress
+
+	// EnvFederationAddress overrides the default Federation gRPC address.
+	EnvFederationAddress = embassy.EnvFederationAddress
+
+	// EmbassyTrustSourceFederation identifies federation-governed transfers.
+	EmbassyTrustSourceFederation = embassy.EmbassyTrustSourceFederation
+
+	// EmbassyTrustSourceTreaty identifies treaty-governed transfers.
+	EmbassyTrustSourceTreaty = embassy.EmbassyTrustSourceTreaty
 )
-
-// EmbassyOption configures the EmbassyClient.
-type EmbassyOption func(*embassyConfig)
-
-type embassyConfig struct {
-	address string
-}
-
-// WithEmbassyAddress overrides the default Embassy gRPC address.
-func WithEmbassyAddress(addr string) EmbassyOption {
-	return func(c *embassyConfig) {
-		c.address = addr
-	}
-}
-
-// EmbassyClient provides SDK helpers for the Embassy transfer protocol.
-type EmbassyClient struct {
-	conn    *grpc.ClientConn
-	embassy flowv1.EmbassyServiceClient
-}
-
-// EmbassyExportStream wraps the Embassy export stream.
-type EmbassyExportStream struct {
-	ctx    context.Context
-	cancel context.CancelFunc
-	stream grpc.ServerStreamingClient[flowv1.PackageChunk]
-}
 
 // NewEmbassyClient connects to the Embassy service.
 func NewEmbassyClient(opts ...EmbassyOption) (*EmbassyClient, error) {
-	cfg := &embassyConfig{address: DefaultEmbassyAddress}
-	for _, opt := range opts {
-		opt(cfg)
-	}
-	if envAddr := os.Getenv(EnvEmbassyAddress); envAddr != "" {
-		cfg.address = envAddr
-	}
-	return newEmbassyClient(cfg.address)
+	return embassy.NewEmbassyClient(opts...)
 }
 
 // NewEmbassyClientForTest creates an EmbassyClient connected to the given
 // address. Named to make misuse obvious — this is a cross-module test seam
 // used by the embassy node's export tests against a spy server.
 func NewEmbassyClientForTest(address string) (*EmbassyClient, error) {
-	return newEmbassyClient(address)
+	return embassy.NewEmbassyClientForTest(address)
 }
 
-func newEmbassyClient(address string) (*EmbassyClient, error) {
-	if address == "" {
-		address = DefaultEmbassyAddress
-	}
-
-	conn, err := grpc.NewClient(
-		address,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("flow sdk: embassy client: failed to connect to embassy at %s: %w", address, err)
-	}
-
-	return &EmbassyClient{
-		conn:    conn,
-		embassy: flowv1.NewEmbassyServiceClient(conn),
-	}, nil
+// WithEmbassyAddress overrides the default Embassy gRPC address.
+func WithEmbassyAddress(addr string) EmbassyOption {
+	return embassy.WithEmbassyAddress(addr)
 }
 
-// Close releases the underlying Embassy gRPC connection.
-func (c *EmbassyClient) Close() error {
-	if c.conn != nil {
-		return c.conn.Close()
-	}
-	return nil
+// NewEmbassyServer adapts an EmbassyServiceHandler to the generated gRPC server.
+func NewEmbassyServer(handler EmbassyServiceHandler) flowv1.EmbassyServiceServer {
+	return embassy.NewEmbassyServer(handler)
 }
 
-// PreflightManifest validates a transfer manifest before package streaming.
-func (c *EmbassyClient) PreflightManifest(
-	manifest *flowv1.TransferManifest, remoteFlowIdentity string,
-) (*flowv1.PreflightManifestResponse, error) {
-	if c.embassy == nil {
-		return nil, fmt.Errorf("flow sdk: embassy client: no embassy connection (set EMBASSY_ADDRESS)")
-	}
-
-	// ponytail: uses context.Background() per call. If per-client timeout
-	// configuration is needed later, EmbassyClient can store a base context.
-	ctx := context.Background()
-	resp, err := c.embassy.PreflightManifest(ctx, &flowv1.PreflightManifestRequest{
-		Manifest:   manifest,
-		TreatyName: remoteFlowIdentity,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("flow sdk: embassy client: preflight manifest failed: %w", err)
-	}
-	return resp, nil
+// ResolveEmbassyImportType resolves an import type against the merged effective
+// namespace of built-in system import types and flow-authored import types.
+func ResolveEmbassyImportType(
+	name string,
+	system map[string]EmbassyResolvedImportType,
+	flowImportTypes map[string]EmbassyFlowImportTypeSpec,
+) (EmbassyResolvedImportType, bool) {
+	return embassy.ResolveEmbassyImportType(name, system, flowImportTypes)
 }
 
-// StreamPackage sends a package stream to the receiving Embassy.
-func (c *EmbassyClient) StreamPackage(
-	packageChunks []*flowv1.PackageChunk,
-) (*flowv1.StreamPackageResponse, error) {
-	if c.embassy == nil {
-		return nil, fmt.Errorf("flow sdk: embassy client: no embassy connection (set EMBASSY_ADDRESS)")
-	}
-
-	// ponytail: uses context.Background() per call. If per-client timeout
-	// configuration is needed later, EmbassyClient can store a base context.
-	ctx := context.Background()
-	stream, err := c.embassy.StreamPackage(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("flow sdk: embassy client: open stream package failed: %w", err)
-	}
-
-	for _, chunk := range packageChunks {
-		if err := stream.Send(chunk); err != nil {
-			return nil, fmt.Errorf("flow sdk: embassy client: send package chunk failed: %w", err)
-		}
-	}
-
-	resp, err := stream.CloseAndRecv()
-	if err != nil {
-		return nil, fmt.Errorf("flow sdk: embassy client: close stream package failed: %w", err)
-	}
-	return resp, nil
+// ResolveEmbassyTrustSource chooses the active trust topology.
+func ResolveEmbassyTrustSource(hasTreaty bool) EmbassyTrustSource {
+	return embassy.ResolveEmbassyTrustSource(hasTreaty)
 }
 
-// ExportPackage starts a package export stream for the given Workitem and import type.
-func (c *EmbassyClient) ExportPackage(
-	workitemID, governedArtefact string,
-) (*EmbassyExportStream, error) {
-	if c.embassy == nil {
-		return nil, fmt.Errorf("flow sdk: embassy client: no embassy connection (set EMBASSY_ADDRESS)")
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	stream, err := c.embassy.ExportPackage(ctx, &flowv1.ExportPackageRequest{
-		WorkitemId: workitemID,
-		ImportType: governedArtefact,
-	})
-	if err != nil {
-		cancel()
-		return nil, fmt.Errorf("flow sdk: embassy client: export package failed: %w", err)
-	}
-	return &EmbassyExportStream{ctx: ctx, cancel: cancel, stream: stream}, nil
+// ValidateEmbassyTrustPolicy enforces import-type, subject, and bundle-size
+// parity checks across federation and treaty exchange.
+func ValidateEmbassyTrustPolicy(
+	policy EmbassyTrustPolicy,
+	req EmbassyImportRequest,
+	system map[string]EmbassyResolvedImportType,
+	flowImportTypes map[string]EmbassyFlowImportTypeSpec,
+) error {
+	return embassy.ValidateEmbassyTrustPolicy(policy, req, system, flowImportTypes)
 }
 
-// Recv returns the next exported package chunk from the Embassy stream.
-func (s *EmbassyExportStream) Recv() (*flowv1.PackageChunk, error) {
-	return s.stream.Recv()
+// NewFederationClient connects to the Federation service.
+func NewFederationClient(opts ...FederationOption) (*FederationClient, error) {
+	return embassy.NewFederationClient(opts...)
 }
 
-// Stop cancels the stream. Subsequent Recv calls return a context-cancelled error.
-func (s *EmbassyExportStream) Stop() {
-	s.cancel()
+// NewFederationClientForTest creates a FederationClient connected to the
+// given address. Named to make misuse obvious — this is a cross-module test
+// seam used by node packages (petition-watcher) to test against spy servers.
+func NewFederationClientForTest(address string) (*FederationClient, error) {
+	return embassy.NewFederationClientForTest(address)
+}
+
+// WithFederationAddress overrides the default Federation gRPC address.
+func WithFederationAddress(addr string) FederationOption {
+	return embassy.WithFederationAddress(addr)
 }
