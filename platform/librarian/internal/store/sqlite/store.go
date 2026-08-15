@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"math"
 	"sort"
-	"strings"
 	"time"
 
 	sqlite_vec "github.com/asg017/sqlite-vec-go-bindings/cgo"
@@ -784,58 +783,6 @@ func (s *Store) QueryLaws(ctx context.Context, filter QueryFilter) ([]Law, error
 	return laws, nil
 }
 
-// GetLawsByScope returns laws whose scope overlaps the given kinds, plus
-// all global laws. Used for conflict detection.
-func (s *Store) GetLawsByScope(ctx context.Context, appliesTo []string) ([]Law, error) {
-	if len(appliesTo) == 0 {
-		// If the incoming scope is empty (global), return all active laws.
-		return s.QueryLaws(ctx, QueryFilter{})
-	}
-
-	// Build placeholders.
-	placeholders := make([]string, len(appliesTo))
-	args := make([]any, len(appliesTo))
-	for i, kind := range appliesTo {
-		placeholders[i] = "?"
-		args[i] = kind
-	}
-
-	query := fmt.Sprintf(`
-		SELECT DISTINCT l.id FROM laws l
-		LEFT JOIN law_applies_to la ON l.id = la.law_id
-		WHERE l.active = 1
-		AND (la.artefact_kind IN (%s) OR la.law_id IS NULL)
-	`, strings.Join(placeholders, ","))
-
-	rows, err := s.db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("query scoped laws: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-
-	var lawIDs []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf("scan law id: %w", err)
-		}
-		lawIDs = append(lawIDs, id)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-
-	var laws []Law
-	for _, id := range lawIDs {
-		law, err := s.GetLaw(ctx, id)
-		if err != nil {
-			return nil, err
-		}
-		laws = append(laws, law)
-	}
-	return laws, rows.Err()
-}
-
 // ---------------------------------------------------------------------------
 // LawGroup CRUD Operations
 // ---------------------------------------------------------------------------
@@ -1118,26 +1065,6 @@ func (s *Store) DeleteVecEmbedding(ctx context.Context, lawID string) error {
 	}
 
 	return nil
-}
-
-// HasVecEmbedding reports whether a vec embedding exists for the given law.
-func (s *Store) HasVecEmbedding(ctx context.Context, lawID string) (bool, error) {
-	var rowIDRef int64
-	err := s.db.QueryRowContext(ctx,
-		`SELECT rowid_ref FROM law_embedding_map WHERE law_id = ?`, lawID,
-	).Scan(&rowIDRef)
-	if err == sql.ErrNoRows {
-		return false, nil
-	}
-	if err != nil {
-		return false, fmt.Errorf("check embedding map: %w", err)
-	}
-	return true, nil
-}
-
-// EmbeddingDimension returns the configured vector dimension.
-func (s *Store) EmbeddingDimension() int {
-	return s.embeddingDims
 }
 
 // VecSearchResult represents a single result from a vector similarity search.

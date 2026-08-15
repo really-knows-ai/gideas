@@ -731,52 +731,6 @@ func TestSetTier(t *testing.T) {
 	}
 }
 
-func TestGetLawsByScope(t *testing.T) {
-	s := newTestStore(t)
-	ctx := context.Background()
-
-	if _, err := s.CreateLaw(ctx, "law-s1", Law{
-		Goal:            "Scoped A",
-		Tier:            1,
-		AppliesTo:       []string{"source-code", "docs"},
-		Representations: []Representation{{Type: "text/plain", Content: "a"}},
-	}); err != nil {
-		t.Fatalf("CreateLaw law-s1: %v", err)
-	}
-	if _, err := s.CreateLaw(ctx, "law-s2", Law{
-		Goal:            "Global",
-		Tier:            1,
-		Representations: []Representation{{Type: "text/plain", Content: "g"}},
-	}); err != nil {
-		t.Fatalf("CreateLaw law-s2: %v", err)
-	}
-	if _, err := s.CreateLaw(ctx, "law-s3", Law{
-		Goal:            "Scoped B",
-		Tier:            1,
-		AppliesTo:       []string{"images"},
-		Representations: []Representation{{Type: "text/plain", Content: "b"}},
-	}); err != nil {
-		t.Fatalf("CreateLaw law-s3: %v", err)
-	}
-
-	laws, err := s.GetLawsByScope(ctx, []string{"docs"})
-	if err != nil {
-		t.Fatalf("GetLawsByScope: %v", err)
-	}
-
-	ids := map[string]bool{}
-	for _, l := range laws {
-		ids[l.ID] = true
-	}
-
-	if !ids["law-s1"] || !ids["law-s2"] {
-		t.Fatalf("expected law-s1 (overlapping scope) and law-s2 (global), got %v", ids)
-	}
-	if ids["law-s3"] {
-		t.Fatalf("law-s3 should not be included (no scope overlap)")
-	}
-}
-
 func TestGroup_Persistence(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -1094,6 +1048,19 @@ func TestRetireDisputeRecord_NonExistent(t *testing.T) {
 // Vec Embedding Tests (sqlite-vec)
 // ---------------------------------------------------------------------------
 
+// vecEmbeddingCount returns the number of law_embedding_map rows for a law.
+// It replaces the deleted HasVecEmbedding assertion.
+func vecEmbeddingCount(t *testing.T, s *Store, lawID string) int {
+	t.Helper()
+	var count int
+	if err := s.db.QueryRow(
+		`SELECT count(*) FROM law_embedding_map WHERE law_id = ?`, lawID,
+	).Scan(&count); err != nil {
+		t.Fatalf("count vec embedding map: %v", err)
+	}
+	return count
+}
+
 func TestUpsertVecEmbedding_Basic(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -1104,12 +1071,8 @@ func TestUpsertVecEmbedding_Basic(t *testing.T) {
 		t.Fatalf("UpsertVecEmbedding: %v", err)
 	}
 
-	has, err := s.HasVecEmbedding(ctx, "law-vec-1")
-	if err != nil {
-		t.Fatalf("HasVecEmbedding: %v", err)
-	}
-	if !has {
-		t.Fatal("expected vec embedding to exist")
+	if got := vecEmbeddingCount(t, s, "law-vec-1"); got != 1 {
+		t.Fatalf("expected 1 vec embedding, got %d", got)
 	}
 }
 
@@ -1128,12 +1091,8 @@ func TestUpsertVecEmbedding_Update(t *testing.T) {
 	}
 
 	// Should still have exactly one entry.
-	has, err := s.HasVecEmbedding(ctx, "law-vec-u")
-	if err != nil {
-		t.Fatalf("HasVecEmbedding: %v", err)
-	}
-	if !has {
-		t.Fatal("expected vec embedding to exist after update")
+	if got := vecEmbeddingCount(t, s, "law-vec-u"); got != 1 {
+		t.Fatalf("expected 1 vec embedding after update, got %d", got)
 	}
 }
 
@@ -1163,12 +1122,8 @@ func TestDeleteVecEmbedding_Basic(t *testing.T) {
 		t.Fatalf("DeleteVecEmbedding: %v", err)
 	}
 
-	has, err := s.HasVecEmbedding(ctx, "law-vec-del")
-	if err != nil {
-		t.Fatalf("HasVecEmbedding: %v", err)
-	}
-	if has {
-		t.Fatal("expected vec embedding to be deleted")
+	if got := vecEmbeddingCount(t, s, "law-vec-del"); got != 0 {
+		t.Fatalf("expected vec embedding to be deleted, got %d rows", got)
 	}
 }
 
@@ -1180,13 +1135,6 @@ func TestDeleteVecEmbedding_NonExistent(t *testing.T) {
 	err := s.DeleteVecEmbedding(ctx, "law-vec-ghost")
 	if err != nil {
 		t.Fatalf("expected no error for non-existent embedding, got: %v", err)
-	}
-}
-
-func TestEmbeddingDimension(t *testing.T) {
-	s := newTestStore(t)
-	if s.EmbeddingDimension() != testEmbeddingDims {
-		t.Fatalf("expected dimension %d, got %d", testEmbeddingDims, s.EmbeddingDimension())
 	}
 }
 
