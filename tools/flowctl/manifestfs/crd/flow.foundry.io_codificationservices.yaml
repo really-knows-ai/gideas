@@ -57,7 +57,7 @@ spec:
                 - StatefulSet
                 type: string
               image:
-                description: image is the container image for the Codification Service.
+                description: image is the container image for the service.
                 minLength: 1
                 type: string
               minReplicas:
@@ -183,7 +183,7 @@ spec:
                 type: integer
               conditions:
                 description: |-
-                  conditions represent the current state of the CodificationService resource.
+                  conditions represent the current state of the resource.
                   Standard Kubernetes conditions.
                 items:
                   description: Condition contains details for one aspect of the current
