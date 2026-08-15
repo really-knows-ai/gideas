@@ -193,9 +193,14 @@ func (qm *queueManagerImpl) Start(ctx context.Context, opts ...QueueManagerOptio
 			// WaitForDecision always finds the channel; it cleans up after
 			// consuming. Double-signaling does not occur in the current
 			// architecture: Decide signals local decisions, onDecide signals
-			// remote gRPC decisions — separate paths.
+			// remote gRPC decisions — separate paths. The send is
+			// non-blocking so a full decision channel can never hang the
+			// gRPC request handler.
 			if ch, ok := qm.decisions.Load(workitemID); ok {
-				ch.(chan string) <- choice
+				select {
+				case ch.(chan string) <- choice:
+				default:
+				}
 			}
 		},
 	}
@@ -329,8 +334,13 @@ func (qm *queueManagerImpl) Decide(ctx context.Context, workitemID, choice strin
 	// ponytail: Uses Load (not LoadAndDelete) so WaitForDecision always finds the
 	// channel. If no caller waits, entries leak until Stop. A cleanup sweep can be
 	// added if leaks become a concern.
+	// The send is non-blocking so a full decision channel can never hang the
+	// HTTP /decide handler; a redundant signal is dropped rather than blocking.
 	if ch, ok := qm.decisions.Load(workitemID); ok {
-		ch.(chan string) <- choice
+		select {
+		case ch.(chan string) <- choice:
+		default:
+		}
 	}
 	decisionTime := time.Duration(0)
 	if existing != nil {
