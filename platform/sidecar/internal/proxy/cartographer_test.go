@@ -386,6 +386,46 @@ func TestCartographerProxy_NodeCapabilities_NilPassThrough(t *testing.T) {
 	}
 }
 
+// TestCartographerProxy_NodeCapabilities_ParseTrimsAndDropsEmpty pins the
+// capability-string normalization of nodeCapabilities (SPEC R3 / Capability
+// Authorisation Chain): a node-originated request's comma-separated
+// x-flow-capabilities value is split, each entry trimmed, and empty entries
+// dropped — via the shared NormalizeCapabilities helper in pkg/metadata — so
+// the Sidecar's mode-1 exact gates agree with the Cartographer's authoritative
+// checks on the same capability string. It also pins the non-nil contract: a
+// node-originated request with an empty capability value yields a non-nil
+// empty slice (a zero-grant node), never nil (a system-to-system call).
+func TestCartographerProxy_NodeCapabilities_ParseTrimsAndDropsEmpty(t *testing.T) {
+	nodeCtx := func(caps string) context.Context {
+		return metadata.NewIncomingContext(context.Background(),
+			metadata.Pairs(
+				flowmeta.MetadataKeyNodeID, "wire-node",
+				flowmeta.MetadataKeyCapabilities, caps,
+			))
+	}
+
+	got := nodeCapabilities(nodeCtx(" WRITE:graph/entity/Component , READ:graph/entity/* ,, "))
+	want := []string{"WRITE:graph/entity/Component", "READ:graph/entity/*"}
+	if len(got) != len(want) {
+		t.Fatalf("nodeCapabilities = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("nodeCapabilities = %v, want %v", got, want)
+		}
+	}
+
+	// Empty/whitespace-only capability value still yields a non-nil empty
+	// slice: a zero-grant node is distinguishable from a system-to-system call.
+	empty := nodeCapabilities(nodeCtx("  "))
+	if empty == nil {
+		t.Fatal("expected non-nil empty capabilities for a zero-grant node")
+	}
+	if len(empty) != 0 {
+		t.Fatalf("expected empty capabilities for a zero-grant node, got %v", empty)
+	}
+}
+
 // TestCartographerProxy_CheckCapability_ExactOrLiteralWildcard pins the matching
 // semantics the Sidecar's mode-1/fixed gates share with the Cartographer's
 // authoritative CheckSpecificType/CheckWildcard exact-string gates (SPEC R3 /

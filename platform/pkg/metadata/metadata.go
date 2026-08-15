@@ -7,6 +7,8 @@
 // consuming module — never re-declared as bare literals in sibling modules.
 package metadata
 
+import "strings"
+
 // gRPC metadata keys for the Sidecar-injected flow identity, capability
 // attestation, and operator proxy routing headers.
 const (
@@ -88,3 +90,22 @@ const (
 // (SPEC R1: the singleton is conventionally named "flow-graph"; other
 // components reference this conventional name).
 const DefaultGraphName = "flow-graph"
+
+// NormalizeCapabilities splits a comma-separated capability grant string into
+// its entries, trimming whitespace around each entry and dropping empty
+// entries. It is the single source of truth for capability-string
+// normalization (SPEC R3 / Capability Authorisation Chain): the Cartographer's
+// ingress verifier, the Sidecar's nodeCapabilities, and the SDK's
+// CheckCapability must parse the x-flow-capabilities wire value identically,
+// so they import this helper instead of re-implementing the split/trim/drop
+// loop per module — duplicated copies of the same contract surface silently
+// diverge. Returns nil when no entries remain.
+func NormalizeCapabilities(caps string) []string {
+	var entries []string
+	for cap := range strings.SplitSeq(caps, ",") {
+		if cap = strings.TrimSpace(cap); cap != "" {
+			entries = append(entries, cap)
+		}
+	}
+	return entries
+}

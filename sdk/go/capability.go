@@ -130,8 +130,8 @@ func CheckCapability(ctx context.Context, required string) error {
 
 	caps := md.Get(MetadataKeyCapabilities)
 	for _, c := range caps {
-		for cap := range strings.SplitSeq(c, ",") {
-			if MatchCapability(strings.TrimSpace(cap), required) {
+		for _, cap := range flowmeta.NormalizeCapabilities(c) {
+			if MatchCapability(cap, required) {
 				return nil
 			}
 		}

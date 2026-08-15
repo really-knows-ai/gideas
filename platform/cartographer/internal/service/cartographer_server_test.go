@@ -1046,6 +1046,47 @@ func TestCapability_MissingMetadata(t *testing.T) {
 	}
 }
 
+// TestCapability_PresentButEmptyCapsFailsClosed pins the boundary between
+// "capability metadata absent" (system-to-system Operator pass-through,
+// TestCapability_MissingMetadata) and "capability metadata present but
+// empty/whitespace-only" (capability.go): a request that carries the
+// x-flow-capabilities key with an empty or whitespace-only value claims a
+// capability attestation but carries no capability entries, so it must fail
+// closed with PERMISSION_DENIED at the ingress interceptor instead of being
+// reclassified as a trusted system-to-system Operator call that skips
+// signature and staleness verification entirely (interceptor contract:
+// "If present but unverifiable ..., the interceptor returns PERMISSION_DENIED
+// before the handler runs").
+func TestCapability_PresentButEmptyCapsFailsClosed(t *testing.T) {
+	opPub, _ := generateTestKey()
+	scPub, _ := generateTestKey()
+	st, _ := openTestStore(t)
+	t.Cleanup(func() { _ = st.Close() })
+	gs, _ := gitstore.New(t.TempDir())
+	srv := NewCartographerServer(st, gs, opPub, scPub, nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000)
+
+	for _, tc := range []struct {
+		name string
+		caps string
+	}{
+		{"empty value", ""},
+		{"whitespace only", "   "},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			md := metadata.Pairs(flowmeta.MetadataKeyCapabilities, tc.caps)
+			ctx := metadata.NewIncomingContext(context.Background(), md)
+			_, err := srv.verifier.verify(ctx)
+			if err == nil {
+				t.Fatal("expected error for present-but-empty capabilities, got nil")
+			}
+			if status.Code(err) != codes.PermissionDenied ||
+				status.Convert(err).Message() != "invalid capability signature" {
+				t.Fatalf("expected PermissionDenied invalid-capability-signature, got %v", err)
+			}
+		})
+	}
+}
+
 // TestCapability_NilCapsFailClosed pins the fail-closed branch of every
 // node-facing capability gate (checkEntityCap, checkTxCap,
 // checkWildcardEntityCap — cartographer_server.go): when no capability
@@ -10711,6 +10752,43 @@ func TestCapability_StalenessBoundary_NegativeWindow(t *testing.T) {
 	_, err := srv.verifier.verify(ctx)
 	if err != nil {
 		t.Fatalf("expected success with negative staleness window, got: %v", err)
+	}
+}
+
+// TestCapability_FutureDatedSignedAtRejected pins the anti-replay boundary for
+// a future-dated x-flow-capabilities-signed-at (capability.go): the staleness
+// check is two-sided — an attestation signed in the future (elapsed < 0) is
+// stale just as one past the window (elapsed > window) is — so a captured
+// attestation replayed with a forged future timestamp can never outlive the
+// anti-replay window (SPEC error table "Stale capability signature
+// (anti-replay)": missing, malformed, or expired).
+func TestCapability_FutureDatedSignedAtRejected(t *testing.T) {
+	opPub, _ := generateTestKey()
+	scPub, scPriv := generateTestKey()
+	st, _ := openTestStore(t)
+	t.Cleanup(func() { _ = st.Close() })
+	gs, _ := gitstore.New(t.TempDir())
+	srv := NewCartographerServer(st, gs, opPub, scPub, nil, "",
+		30*time.Second, "test-ns", 30*time.Minute, 100000)
+
+	// Signed one hour in the future: time.Since(future) is negative.
+	future := time.Now().Add(time.Hour).Unix()
+	payload := fmt.Sprintf("READ:graph/entity/Component|%d", future)
+	sig := base64.StdEncoding.EncodeToString(ed25519.Sign(scPriv, []byte(payload)))
+	md := metadata.Pairs(
+		flowmeta.MetadataKeyCapabilities, "READ:graph/entity/Component",
+		flowmeta.MetadataKeyCapabilitiesSignature, sig,
+		flowmeta.MetadataKeyCapabilitiesSignedAt, fmt.Sprintf("%d", future),
+		flowmeta.MetadataKeyCapabilitiesSignedBy, "sidecar",
+	)
+	ctx := metadata.NewIncomingContext(context.Background(), md)
+	_, err := srv.verifier.verify(ctx)
+	if err == nil {
+		t.Fatal("expected error for future-dated signed-at, got nil")
+	}
+	if status.Code(err) != codes.PermissionDenied ||
+		status.Convert(err).Message() != capabilityStaleMsg {
+		t.Fatalf("expected PermissionDenied stale-capability, got %v", err)
 	}
 }
 
