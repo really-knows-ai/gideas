@@ -703,68 +703,29 @@ func createVectorIndexOnConn(conn *lbug.Connection, entityType string) error {
 }
 
 // findEntityByID probes each entity type table looking for the given ID.
-// ponytail: O(#entity_types) scan. Upgrade path: maintain a global ID→type index.
+// Shares the probe loop with findEdgeByID via probeByID; only the query and
+// row parse differ.
 func findEntityByID(conn *lbug.Connection, typeDefs map[string]*store.EntityTypeDef, id string) (*store.Entity, error) {
-	for typeName := range typeDefs {
-		q := fmt.Sprintf("MATCH (n:%s {id: $id}) RETURN n;", quoteID(typeName))
-		stmt, err := conn.Prepare(q)
-		if err != nil {
-			return nil, fmt.Errorf("prepare entity query for %q: %w", typeName, err)
-		}
-		result, err := conn.Execute(stmt, map[string]any{"id": id})
-		stmt.Close()
-		if err != nil {
-			return nil, fmt.Errorf("execute entity query for %q: %w", typeName, err)
-		}
-		if result.HasNext() {
-			tuple, err := result.Next()
-			if err != nil {
-				result.Close()
-				return nil, fmt.Errorf("read entity row for %q: %w", typeName, err)
-			}
-			m, err := tuple.GetAsMap()
-			tuple.Close()
-			result.Close()
-			if err != nil {
-				return nil, fmt.Errorf("parse entity row for %q: %w", typeName, err)
-			}
+	return probeByID(conn, slices.Collect(maps.Keys(typeDefs)), id, "entity", store.ErrEntityNotFound,
+		func(typeName string) string {
+			return fmt.Sprintf("MATCH (n:%s {id: $id}) RETURN n;", quoteID(typeName))
+		},
+		func(typeName string, m map[string]any) (*store.Entity, error) {
 			node, ok := m["n"].(lbug.Node)
 			if !ok {
 				return nil, fmt.Errorf("unexpected type in entity result for %q: got %T, expected Node", typeName, m["n"])
 			}
 			return entityFromNode(node, typeName, typeDefs[typeName].EnableVectorIndex), nil
-		}
-		result.Close()
-	}
-	return nil, fmt.Errorf("%w: entity with id %q", store.ErrEntityNotFound, id)
+		})
 }
 
 // findEdgeByID probes each edge type table for the given edge ID.
-// ponytail: O(#edge_types) scan. Upgrade path: maintain a global ID→edge type index.
 func findEdgeByID(conn *lbug.Connection, typeDefs map[string]*store.EdgeTypeDef, id string) (*store.Edge, error) {
-	for typeName := range typeDefs {
-		q := fmt.Sprintf("MATCH (s)-[r:%s {id: $id}]->(t) RETURN s.id, t.id, r;", quoteID(typeName))
-		stmt, err := conn.Prepare(q)
-		if err != nil {
-			return nil, fmt.Errorf("prepare edge query for %q: %w", typeName, err)
-		}
-		result, err := conn.Execute(stmt, map[string]any{"id": id})
-		stmt.Close()
-		if err != nil {
-			return nil, fmt.Errorf("execute edge query for %q: %w", typeName, err)
-		}
-		if result.HasNext() {
-			tuple, err := result.Next()
-			if err != nil {
-				result.Close()
-				return nil, fmt.Errorf("read edge row for %q: %w", typeName, err)
-			}
-			m, err := tuple.GetAsMap()
-			tuple.Close()
-			result.Close()
-			if err != nil {
-				return nil, fmt.Errorf("parse edge row for %q: %w", typeName, err)
-			}
+	return probeByID(conn, slices.Collect(maps.Keys(typeDefs)), id, "edge", store.ErrEdgeNotFound,
+		func(typeName string) string {
+			return fmt.Sprintf("MATCH (s)-[r:%s {id: $id}]->(t) RETURN s.id, t.id, r;", quoteID(typeName))
+		},
+		func(typeName string, m map[string]any) (*store.Edge, error) {
 			fromID := fmt.Sprintf("%v", m["s.id"])
 			toID := fmt.Sprintf("%v", m["t.id"])
 			rel, ok := m["r"].(lbug.Relationship)
@@ -772,10 +733,48 @@ func findEdgeByID(conn *lbug.Connection, typeDefs map[string]*store.EdgeTypeDef,
 				return nil, fmt.Errorf("unexpected type in edge result for %q: got %T, expected Relationship", typeName, m["r"])
 			}
 			return edgeFromRel(rel, typeName, fromID, toID), nil
+		})
+}
+
+// probeByID probes each type table looking for the given ID, returning the
+// first row found parsed by parse. kind names the probed kind in error text
+// ("entity"/"edge") and notFound is the sentinel returned when no table holds
+// the ID. findEntityByID and findEdgeByID share this loop, differing only in
+// their query and parse closures.
+// ponytail: O(#types) scan. Upgrade path: maintain a global ID→type index.
+func probeByID[T any](
+	conn *lbug.Connection, typeNames []string, id, kind string, notFound error,
+	query func(typeName string) string,
+	parse func(typeName string, m map[string]any) (T, error),
+) (T, error) {
+	var zero T
+	for _, typeName := range typeNames {
+		stmt, err := conn.Prepare(query(typeName))
+		if err != nil {
+			return zero, fmt.Errorf("prepare %s query for %q: %w", kind, typeName, err)
+		}
+		result, err := conn.Execute(stmt, map[string]any{"id": id})
+		stmt.Close()
+		if err != nil {
+			return zero, fmt.Errorf("execute %s query for %q: %w", kind, typeName, err)
+		}
+		if result.HasNext() {
+			tuple, err := result.Next()
+			if err != nil {
+				result.Close()
+				return zero, fmt.Errorf("read %s row for %q: %w", kind, typeName, err)
+			}
+			m, err := tuple.GetAsMap()
+			tuple.Close()
+			result.Close()
+			if err != nil {
+				return zero, fmt.Errorf("parse %s row for %q: %w", kind, typeName, err)
+			}
+			return parse(typeName, m)
 		}
 		result.Close()
 	}
-	return nil, fmt.Errorf("%w: edge with id %q", store.ErrEdgeNotFound, id)
+	return zero, fmt.Errorf("%w: %s with id %q", notFound, kind, id)
 }
 
 // entityFromNode converts a LadybugDB Node to a store.Entity. The embedding key
