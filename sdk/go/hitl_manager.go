@@ -176,7 +176,6 @@ func (qm *queueManagerImpl) Start(ctx context.Context, opts ...QueueManagerOptio
 			resolver = &DNSResolver{
 				ServiceName: serviceName,
 				Namespace:   namespace,
-				SelfShardID: qm.shardID,
 				Port:        peerPort,
 			}
 		} else {
