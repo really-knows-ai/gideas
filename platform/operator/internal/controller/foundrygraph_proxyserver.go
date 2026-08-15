@@ -308,10 +308,13 @@ func (s *ProxyServer) ExportGraph(req *flowv1gen.ExportGraphRequest, stream flow
 	}
 
 	// A pre-stream rejection or transport failure — the Cartographer returns
-	// INVALID_ARGUMENT (unsupported format), RESOURCE_EXHAUSTED (buffer allocation), or
+	// INVALID_ARGUMENT (unsupported format), RESOURCE_EXHAUSTED (buffer allocation),
+	// PERMISSION_DENIED (capability ingress verification: an invalid or stale
+	// operator-signed capability — rotated verification key or expired signature), or
 	// UNAVAILABLE (upstream unreachable — the lazy grpc.NewClient dial delivers the
 	// connect failure on the first Recv) BEFORE sending any chunk (SPEC error table rows
-	// "Unsupported export format", "ExportGraph buffer allocation failure", and
+	// "Unsupported export format", "ExportGraph buffer allocation failure", "Invalid
+	// capability metadata signature", "Stale capability signature (anti-replay)", and
 	// "ExportGraph stream-establishment failure", all "no data sent"); those statuses
 	// arrive at the proxy's first Recv with no chunk forwarded, so pass them through
 	// verbatim and let the documented CLI error codes surface (matching the sidecar
@@ -329,7 +332,7 @@ func (s *ProxyServer) ExportGraph(req *flowv1gen.ExportGraphRequest, stream flow
 		if err != nil {
 			if !sentAny {
 				if st, ok := status.FromError(err); ok {
-					if c := st.Code(); c == codes.InvalidArgument || c == codes.ResourceExhausted || c == codes.Unavailable {
+					if c := st.Code(); c == codes.InvalidArgument || c == codes.ResourceExhausted || c == codes.PermissionDenied || c == codes.Unavailable {
 						return err
 					}
 				}
