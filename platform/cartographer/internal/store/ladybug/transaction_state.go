@@ -157,3 +157,51 @@ func writeAtomicBranchState(path string, data []byte) error {
 	}
 	return nil
 }
+
+// cleanupOrphanedTempFiles removes atomic-write temporaries stranded by a
+// crash in a prior process lifetime. The three atomic-write primitives —
+// writeAtomicBranchState (.state-*.tmp), stageSchemaMetadata (.schema-*.tmp),
+// and probePVCWritable (health-*.tmp) — stage each durable write in a temp
+// file that is renamed onto its target (or, for the health probe, removed)
+// only after the write is fully synced, so a crash at any point before that
+// rename/removal leaks the temp file. Neither existing sweep covers them:
+// cleanupOrphanedTempBranches (service/recovery.go) deliberately skips them —
+// branchKeyFromFile matches only .lbug/.schema.json/.state.json branch files —
+// and the health probe writes to the data root, outside branches/ entirely.
+// The leak is pure garbage: every recovery path reads only the renamed target
+// (<txID>.state.json, schema.json, or the branch metadata), which a torn temp
+// never affects because the rename is atomic, so removing the temp can neither
+// lose data nor change what recovery observes.
+//
+// The match (a .state-/.schema-/health- prefix with a .tmp suffix) cannot
+// collide with a live file: live names are <txID>.lbug/.schema.json/.state.json,
+// main.lbug, schema.json, and the branches/ and graph-repo/ directories. The
+// sweep runs on Open, before any store method can create a new temp, so a
+// matched file is never an in-flight write.
+//
+// ponytail: the sweep is best-effort and discards errors. A leftover temp is
+// provably harmless garbage, so failing Open over an unremovable one would
+// wedge startup on debris the next Open simply retries; a removal failure
+// leaves the temp in place until a later Open, no worse than the pre-fix
+// leak. Ceiling: a persistently unremovable temp leaks one small file per
+// crash with no signal. Upgrade path: report the sweep outcome through a
+// logger or Health once the store carries one.
+func cleanupOrphanedTempFiles(dataDir string) {
+	for _, dir := range []string{dataDir, filepath.Join(dataDir, "branches")} {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			for _, pattern := range []string{".state-*.tmp", ".schema-*.tmp", "health-*.tmp"} {
+				if matched, _ := filepath.Match(pattern, entry.Name()); matched {
+					_ = os.Remove(filepath.Join(dir, entry.Name()))
+					break
+				}
+			}
+		}
+	}
+}

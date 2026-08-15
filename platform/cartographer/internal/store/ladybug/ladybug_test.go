@@ -8875,6 +8875,90 @@ func TestOpenCorruptDatabase_RemovesTornWalCompanions(t *testing.T) {
 	})
 }
 
+// TestOpenCleansOrphanedAtomicTempFiles pins the crash-window cleanup for the
+// three atomic-write primitives (writeAtomicBranchState, stageSchemaMetadata,
+// probePVCWritable): each stages its durable write in a temp file
+// (.state-*.tmp / .schema-*.tmp / health-*.tmp) that is renamed onto its
+// target (or, for the health probe, removed) only after the write is fully
+// synced, so a crash at any point before that leaks the temp file.
+// cleanupOrphanedTempBranches (service/recovery.go) deliberately skips them —
+// branchKeyFromFile matches only .lbug/.schema.json/.state.json branch files —
+// so without Open's sweep every crash leaks one small file per primitive
+// forever. The sweep must remove every stranded temp family while leaving the
+// live files — a branch's state/schema records (the renamed targets of the
+// .state-* and .schema-* temps) and main's schema metadata — untouched.
+func TestOpenCleansOrphanedAtomicTempFiles(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	schema := &flowv1.Schema{EntityTypes: []*flowv1.EntityType{{
+		Name: "Component", Properties: []*flowv1.Property{{Name: "name", Type: "string"}},
+	}}}
+	if err := s.ApplySchema(context.Background(), schema); err != nil {
+		t.Fatalf("ApplySchema: %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	// Plant the crash residue: one temp from each atomic-write primitive, in
+	// the directory each primitive writes to — branches/ for the branch state
+	// and branch schema metadata, the data root for main's schema.json and the
+	// health probe.
+	orphans := []string{
+		filepath.Join(dir, "branches", ".state-123456.tmp"),
+		filepath.Join(dir, "branches", ".schema-234567.tmp"),
+		filepath.Join(dir, ".schema-345678.tmp"),
+		filepath.Join(dir, "health-456789.tmp"),
+	}
+	for _, p := range orphans {
+		if err := os.WriteFile(p, []byte("torn temp"), 0600); err != nil {
+			t.Fatalf("plant orphaned temp %q: %v", p, err)
+		}
+	}
+	// Live files sharing the swept directories must survive the sweep: a
+	// branch's durable state and schema records (named differently than any
+	// temp pattern), plus main.lbug and schema.json produced by the setup
+	// Open/ApplySchema above.
+	live := []string{
+		filepath.Join(dir, "branches", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.state.json"),
+		filepath.Join(dir, "branches", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.schema.json"),
+		filepath.Join(dir, "main.lbug"),
+		filepath.Join(dir, "schema.json"),
+	}
+	for _, p := range live[:2] {
+		if err := os.WriteFile(p, []byte("live record"), 0600); err != nil {
+			t.Fatalf("plant live file %q: %v", p, err)
+		}
+	}
+	for _, p := range live[2:] {
+		if _, err := os.Stat(p); err != nil {
+			t.Fatalf("live file %q missing before reopen: %v", p, err)
+		}
+	}
+
+	reopened, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open after crash residue: %v", err)
+	}
+	defer closeStore(t, reopened)
+	for _, p := range orphans {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Fatalf("orphaned temp %q survived Open cleanup: %v", p, err)
+		}
+	}
+	for _, p := range live {
+		if _, err := os.Stat(p); err != nil {
+			t.Fatalf("live file %q was removed by Open cleanup: %v", p, err)
+		}
+	}
+	if !reopened.TableExists("Component") {
+		t.Fatal("schema metadata did not survive the sweep")
+	}
+}
+
 // A catalog table with NO schema-metadata entry must fail closed on reopen:
 // validateMetadataAgainstCatalog rejects any catalog type absent from the
 // metadata. ApplySchema publishes the metadata before the DDL loop

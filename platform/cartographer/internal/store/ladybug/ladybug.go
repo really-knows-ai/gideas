@@ -73,6 +73,12 @@ func Open(path string) (store.Store, error) {
 		return nil, fmt.Errorf("create branches dir: %w", err)
 	}
 
+	// Sweep atomic-write temporaries stranded by a crash in a prior process
+	// lifetime (cleanupOrphanedTempFiles). The sweep must run before the
+	// database is opened so no in-flight write can be mistaken for an orphan,
+	// and so a pre-existing leak never survives into the new process.
+	cleanupOrphanedTempFiles(path)
+
 	dbPath := filepath.Join(path, "main.lbug")
 	database, err := lbug.OpenDatabase(dbPath, lbug.DefaultSystemConfig())
 	if err != nil {
