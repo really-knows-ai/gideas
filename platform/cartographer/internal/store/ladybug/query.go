@@ -37,14 +37,21 @@ func (db *ladybugDB) ExecuteCypher(
 		// this comes from Prepare, unchanged (SPEC R3, SPEC:260; error-table
 		// row "Invalid Cypher syntax", SPEC:979). That includes mutation/DDL
 		// clauses the LadybugDB v0.17.0 grammar cannot parse (top-level
-		// FOREACH, `MATCH ... REMOVE ...`, index/constraint DDL): the grammar
-		// gap surfaces INVALID_ARGUMENT (ErrInvalidCypher) — never
-		// PERMISSION_DENIED (ErrMutationCypher), per the R7 §5 note on
-		// grammar-unparseable clauses (SPEC:493-497). Statements that parse
-		// and are classified as mutation/DDL are rejected by the IsReadOnly
-		// guard below with PERMISSION_DENIED (row "ExecuteCypher with mutation
-		// statement", SPEC:976) — the syntax gate precedes read-only
-		// enforcement (check order, SPEC:1015).
+		// FOREACH, `MATCH ... REMOVE ...`, index/constraint DDL): the syntax
+		// gate precedes read-only enforcement (check order, SPEC:1015), so an
+		// unparseable statement surfaces INVALID_ARGUMENT (ErrInvalidCypher),
+		// never PERMISSION_DENIED (ErrMutationCypher), regardless of the
+		// clause it spells. This holds even though R7 §5 classifies FOREACH
+		// as a mutation clause (SPEC:490) and the "ExecuteCypher with mutation
+		// statement" error-table row is PERMISSION_DENIED (SPEC:976): that
+		// classification is what the IsReadOnly guard below would produce had
+		// the grammar parsed FOREACH, but v0.17.0 does not implement the
+		// clause, so the syntax error surfaces first. (The LOAD CSV note,
+		// SPEC:493-497, is the read-only side of the same gate — a read-only
+		// clause the grammar cannot parse must never be rejected as
+		// PERMISSION_DENIED.) Statements that parse and are classified as
+		// mutation/DDL are rejected by the IsReadOnly guard below with
+		// PERMISSION_DENIED.
 		return nil, fmt.Errorf("%w: prepare: %v", store.ErrInvalidCypher, err)
 	}
 	defer stmt.Close()
@@ -144,9 +151,11 @@ func (db *ladybugDB) ExtractEntityTypes(ctx context.Context, cypher string) ([]s
 // `WHERE m:Service` — are also extracted as referenced labels, so a query
 // like `MATCH (n:Component)-[r]->(m) WHERE m:Service RETURN m` yields
 // [Component Service] and cannot be authorised for Service rows by a caller
-// holding only the Component per-type grant (SPEC R3). Relationship-type
-// specifiers (`-[r:DEPENDS_ON]->`) and map-literal key/value pairs are not
-// entity-type labels and are skipped.
+// holding only the Component per-type grant (SPEC R3). A `WHERE x:Label`
+// predicate inside a list comprehension is extracted the same way: the
+// analyzer recurses into list-literal and list-comprehension interiors rather
+// than skipping them. Relationship-type specifiers (`-[r:DEPENDS_ON]->`) and
+// map-literal key/value pairs are not entity-type labels and are skipped.
 //
 // The analyzer is deliberately not a full Cypher parser: the SPEC check order
 // runs syntax validation (Prepare) before this point, so it only classifies
@@ -189,6 +198,26 @@ func extractEntityTypeLabels(cypher string) []string {
 		}
 		return true
 	}
+	if !scanLabels(s, addLabel) {
+		return nil
+	}
+	if len(labels) == 0 {
+		return nil
+	}
+	return labels
+}
+
+// scanLabels scans s — a comment/string-stripped Cypher fragment — for the
+// entity-type labels its node patterns and bare label predicates reference,
+// invoking addLabel for each distinct label. It returns false (failing closed)
+// when it meets a label shape it cannot classify, so the caller abandons the
+// extraction and the service falls back to the READ:graph/entity/* wildcard
+// check (SPEC:260). scanLabels is applied to the whole statement and recurses
+// into list-literal and list-comprehension interiors, so a `WHERE x:Label`
+// predicate inside a comprehension is extracted like any other referenced
+// label (SPEC R3 every-referenced-type rule) instead of being silently
+// skipped.
+func scanLabels(s string, addLabel func(string) bool) bool {
 	i := 0
 	for i < len(s) {
 		switch s[i] {
@@ -216,7 +245,7 @@ func extractEntityTypeLabels(cypher string) []string {
 					continue // artifact of the ':' split (leading/trailing separator)
 				}
 				if !addLabel(label) {
-					return nil
+					return false
 				}
 			}
 		case '{':
@@ -227,15 +256,29 @@ func extractEntityTypeLabels(cypher string) []string {
 			}
 			i = close + 1
 		case '[':
-			// A relationship specifier's edge type — `-[r:TYPE]->` — and list
-			// literal contents are not entity-type labels (per-type grants are
-			// entity grants, SPEC R3). The `WHERE x:Label` predicate inside a
-			// list comprehension is a missed shape with the same fail-closed
-			// exposure as the pre-fix bare-WHERE gap; distinguishing it from a
-			// relationship specifier needs the parser upgrade path below.
 			close, ok := matchingBracket(s, i)
 			if !ok {
 				break
+			}
+			if isRelationshipSpecifier(s, i, close) {
+				// A relationship specifier's edge type — `-[r:TYPE]->`,
+				// `<-[:T]-`, `-[r:T]-` — is not an entity-type label
+				// (per-type grants are entity grants, SPEC R3), so the group
+				// is skipped rather than scanned.
+				i = close + 1
+				continue
+			}
+			// A list literal or list comprehension. A `WHERE x:Label`
+			// predicate inside a comprehension references an entity-type label
+			// the every-referenced-type rule (SPEC R3) requires authorising; a
+			// plain list literal references none. Recursing into the interior
+			// extracts the label — or fails closed on an unclassifiable shape —
+			// instead of silently skipping it: a partial subset that skipped
+			// the interior would let a caller holding only the extracted types
+			// execute a query that also touches the missed type, widening
+			// access beyond the extracted set (SPEC R3 / SPEC:260).
+			if !scanLabels(s[i+1:close], addLabel) {
+				return false
 			}
 			i = close + 1
 		case ':':
@@ -247,20 +290,62 @@ func extractEntityTypeLabels(cypher string) []string {
 			// predicate; an unclassifiable one abandons the extraction.
 			label, end, ok := barePredicateLabel(s, i)
 			if !ok {
-				return nil
+				return false
 			}
 			if !addLabel(label) {
-				return nil
+				return false
 			}
 			i = end
 		default:
 			i++
 		}
 	}
-	if len(labels) == 0 {
-		return nil
+	return true
+}
+
+// isRelationshipSpecifier reports whether the bracket group at s[open:close+1]
+// is a relationship specifier — `-[r]->`, `<-[:T]-`, `-[r]-`, including
+// anonymous (`-[:T]->`) and variable-length (`-[*1..2]->`) forms — rather than
+// a list literal or list comprehension. Relationship types are not entity-type
+// labels, so specifiers are skipped while list brackets are scanned for label
+// predicates (see scanLabels).
+func isRelationshipSpecifier(s string, open, close int) bool {
+	// Outgoing `-[r]->`: the `-` and `>` immediately after the bracket close
+	// the arrow. No expression context uses a `->` operator, so this is
+	// unambiguous.
+	if close+2 < len(s) && s[close+1] == '-' && s[close+2] == '>' {
+		return true
 	}
-	return labels
+	// Incoming `<-[:T]-`: the `<` and `-` immediately before the bracket.
+	if open >= 2 && s[open-2] == '<' && s[open-1] == '-' {
+		return true
+	}
+	// Undirected `-[r]-`: `-` immediately before and after the bracket, with an
+	// interior that is not a list comprehension (a comprehension always carries
+	// an `IN` iterator or `|` projection, neither of which appears in a
+	// relationship body).
+	return open >= 1 && s[open-1] == '-' && close+1 < len(s) && s[close+1] == '-' &&
+		!isListComprehension(s[open+1:close])
+}
+
+// isListComprehension reports whether the bracket interior s is a list
+// comprehension (`[x IN coll WHERE pred | expr]` / `[x IN coll | expr]`)
+// rather than a plain list literal or a relationship specifier's body. A
+// comprehension always carries a `|` projection separator or an `IN` iterator;
+// a plain list literal and a relationship body carry neither.
+func isListComprehension(s string) bool {
+	if strings.Contains(s, "|") {
+		return true
+	}
+	// Word-boundary `IN` (tolerates `x IN[coll]` with no space after IN).
+	for i := 0; i+2 <= len(s); i++ {
+		if s[i:i+2] == "IN" &&
+			(i == 0 || !isIdentifierChar(s[i-1])) &&
+			(i+2 == len(s) || !isIdentifierChar(s[i+2])) {
+			return true
+		}
+	}
+	return false
 }
 
 // barePredicateLabel parses the label of a bare `identifier:Label` predicate

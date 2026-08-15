@@ -2446,6 +2446,32 @@ func TestExtractEntityTypeLabels(t *testing.T) {
 			"MATCH (n) WHERE n:Service RETURN n", []string{"Service"}},
 		{"bare-where-predicate-whitespace-after-colon",
 			"MATCH (n) WHERE n: Service RETURN n", []string{"Service"}},
+		// A `WHERE x:Label` predicate inside a list comprehension references
+		// the same labels as node patterns and must be extracted, never
+		// silently skipped (SPEC R3 every-referenced-type rule). Regression for
+		// the pre-fix partial-subset extraction that returned only the labels
+		// outside the bracket group.
+		{"list-comprehension-predicate",
+			"MATCH (n:Component) RETURN [x IN collect(n) WHERE x:Service | x]",
+			[]string{"Component", "Service"}},
+		{"list-comprehension-predicate-only",
+			"RETURN [x IN collect(n) WHERE x:Service | x]", []string{"Service"}},
+		{"list-comprehension-no-predicate",
+			"MATCH (n:Component) RETURN [x IN collect(n) | x.name]", []string{"Component"}},
+		{"list-literal-ignored",
+			"MATCH (n:Component) RETURN [1, 2, 3]", []string{"Component"}},
+		{"nested-list-comprehension-predicate",
+			"RETURN [x IN [y IN coll WHERE y:Service | y] | x]", []string{"Service"}},
+		// An unclassifiable label predicate inside a comprehension fails
+		// closed to the READ:graph/entity/* wildcard fallback, never a partial
+		// subset.
+		{"list-comprehension-unclassifiable-fails-closed",
+			"MATCH (n:Component) RETURN [x IN collect(n) WHERE x:$label | x]", nil},
+		// Relationship specifiers — directed and undirected — carry edge types,
+		// not entity-type labels, and must not be extracted as entity labels.
+		{"undirected-relationship-type-ignored",
+			"MATCH (a:Component)-[r:DEPENDS_ON]-(b:Service) RETURN a",
+			[]string{"Component", "Service"}},
 		// A bare label predicate whose label form the analyzer cannot classify
 		// fails closed to the READ:graph/entity/* wildcard fallback, never a
 		// partial subset.
