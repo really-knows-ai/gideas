@@ -844,11 +844,17 @@ func TestExportGraphNonConformingUpstreamStatusIsInternal(t *testing.T) {
 
 // TestExportGraphPreStreamRejectionPassesThrough asserts that a pre-stream rejection — a
 // status the Cartographer returns BEFORE sending any chunk (SPEC error table rows
-// "Unsupported export format" → INVALID_ARGUMENT and "ExportGraph buffer allocation
-// failure" → RESOURCE_EXHAUSTED, both "no data sent") — surfaces through the proxy
-// verbatim rather than being flattened to INTERNAL. These statuses arrive at the proxy's
-// first Recv with no chunk forwarded, so the documented CLI error codes must reach the
-// caller (the sidecar relay preserves upstream statuses identically).
+// "Unsupported export format" → INVALID_ARGUMENT, "ExportGraph buffer allocation
+// failure" → RESOURCE_EXHAUSTED, and the ExportGraph capability rows "Invalid capability
+// metadata signature" / "Stale capability signature (anti-replay)" → PERMISSION_DENIED,
+// all "no data sent") — surfaces through the proxy verbatim rather than being flattened to
+// INTERNAL. These statuses arrive at the proxy's first Recv with no chunk forwarded, so
+// the documented CLI error codes must reach the caller (the sidecar relay preserves
+// upstream statuses identically). The PERMISSION_DENIED row pins the stale-capability /
+// rotated-key case: a capability signed by a rotated operator key (or outside the
+// staleness window) is rejected by the Cartographer's ingress verifier, and that
+// rejection must surface as PERMISSION_DENIED — never as the INTERNAL reserved for a
+// mid-stream failure.
 func TestExportGraphPreStreamRejectionPassesThrough(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -856,6 +862,7 @@ func TestExportGraphPreStreamRejectionPassesThrough(t *testing.T) {
 	}{
 		{"unsupported format", codes.InvalidArgument},
 		{"buffer allocation failure", codes.ResourceExhausted},
+		{"stale operator-signed capability (rotated key)", codes.PermissionDenied},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rt := NewProxyRoutingTable()
