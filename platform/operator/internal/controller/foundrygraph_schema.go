@@ -61,46 +61,28 @@ func diffSchema(oldSpec, newSpec *flowv1.FoundryGraphSpec) SchemaDiffResult {
 // edge type are destructive; added types, added properties, and rule changes that
 // preserve every edge type's FROM/TO endpoint set are non-destructive (SPEC R6).
 func diffEntityTypes(oldSpec, newSpec *flowv1.FoundryGraphSpec) (destructive, nonDestructive bool) {
-	oldTypes := make(map[string]flowv1.EntityTypeSpec, len(oldSpec.EntityTypes))
-	for _, et := range oldSpec.EntityTypes {
-		oldTypes[et.Name] = et
-	}
-	newTypes := make(map[string]flowv1.EntityTypeSpec, len(newSpec.EntityTypes))
-	for _, et := range newSpec.EntityTypes {
-		newTypes[et.Name] = et
-	}
-
-	// Removed entity types are destructive.
-	for name := range oldTypes {
-		if _, exists := newTypes[name]; !exists {
-			destructive = true
-		}
-	}
-
-	// Added types, property changes, and rule changes per surviving type.
+	// enableVectorIndex toggles and rule changes are entity-only extras on the shared
+	// diffTypeLists comparison; rulesChanged is aggregated across surviving types and
+	// consumed by the SPEC R6 endpoint-set check below.
 	rulesChanged := false
-	for name, newET := range newTypes {
-		oldET, exists := oldTypes[name]
-		if !exists {
-			nonDestructive = true
-			continue
-		}
-
-		if oldET.EnableVectorIndex && !newET.EnableVectorIndex {
-			destructive = true
-		}
-		if !oldET.EnableVectorIndex && newET.EnableVectorIndex {
-			nonDestructive = true
-		}
-
-		d, nd := diffProperties(oldET.Properties, newET.Properties)
-		destructive = destructive || d
-		nonDestructive = nonDestructive || nd
-
-		if !rulesEqual(oldET.Rules, newET.Rules) {
-			rulesChanged = true
-		}
-	}
+	destructive, nonDestructive = diffTypeLists(
+		oldSpec.EntityTypes, newSpec.EntityTypes,
+		func(et flowv1.EntityTypeSpec) string { return et.Name },
+		func(et flowv1.EntityTypeSpec) []flowv1.PropertySpec { return et.Properties },
+		func(oldET, newET flowv1.EntityTypeSpec) (bool, bool) {
+			d, nd := false, false
+			if oldET.EnableVectorIndex && !newET.EnableVectorIndex {
+				d = true
+			}
+			if !oldET.EnableVectorIndex && newET.EnableVectorIndex {
+				nd = true
+			}
+			if !rulesEqual(oldET.Rules, newET.Rules) {
+				rulesChanged = true
+			}
+			return d, nd
+		},
+	)
 
 	// SPEC R6: a rule modification that adds or removes a FROM/TO pair on an
 	// already-applied edge type is destructive — LadybugDB fixes a rel table's
@@ -124,29 +106,55 @@ func diffEntityTypes(oldSpec, newSpec *flowv1.FoundryGraphSpec) (destructive, no
 // diffEdgeTypes compares the edge-type sets between old and new specs with the same
 // semantics as diffEntityTypes (edge types carry no enableVectorIndex flag).
 func diffEdgeTypes(oldSpec, newSpec *flowv1.FoundryGraphSpec) (destructive, nonDestructive bool) {
-	oldTypes := make(map[string]flowv1.EdgeTypeSpec, len(oldSpec.EdgeTypes))
-	for _, et := range oldSpec.EdgeTypes {
-		oldTypes[et.Name] = et
+	return diffTypeLists(
+		oldSpec.EdgeTypes, newSpec.EdgeTypes,
+		func(et flowv1.EdgeTypeSpec) string { return et.Name },
+		func(et flowv1.EdgeTypeSpec) []flowv1.PropertySpec { return et.Properties },
+	)
+}
+
+// diffTypeLists is the shared engine behind diffEntityTypes and diffEdgeTypes. Removed
+// types are destructive; added types and per-type property changes are classified by
+// diffProperties (removed or type-changed properties destructive, added properties and
+// Required toggles non-destructive). extra, when given, reports type-specific changes
+// for a type surviving in both specs (the entity-only enableVectorIndex/rule checks).
+func diffTypeLists[T any](
+	oldList, newList []T,
+	getName func(T) string,
+	getProps func(T) []flowv1.PropertySpec,
+	extra ...func(oldT, newT T) (destructive, nonDestructive bool),
+) (destructive, nonDestructive bool) {
+	oldTypes := make(map[string]T, len(oldList))
+	for _, t := range oldList {
+		oldTypes[getName(t)] = t
 	}
-	newTypes := make(map[string]flowv1.EdgeTypeSpec, len(newSpec.EdgeTypes))
-	for _, et := range newSpec.EdgeTypes {
-		newTypes[et.Name] = et
+	newTypes := make(map[string]T, len(newList))
+	for _, t := range newList {
+		newTypes[getName(t)] = t
 	}
 
+	// Removed types are destructive.
 	for name := range oldTypes {
 		if _, exists := newTypes[name]; !exists {
 			destructive = true
 		}
 	}
-	for name, newET := range newTypes {
-		oldET, exists := oldTypes[name]
+
+	// Added types, property changes, and type-specific changes per surviving type.
+	for name, newT := range newTypes {
+		oldT, exists := oldTypes[name]
 		if !exists {
 			nonDestructive = true
 			continue
 		}
-		d, nd := diffProperties(oldET.Properties, newET.Properties)
+		d, nd := diffProperties(getProps(oldT), getProps(newT))
 		destructive = destructive || d
 		nonDestructive = nonDestructive || nd
+		for _, x := range extra {
+			d, nd = x(oldT, newT)
+			destructive = destructive || d
+			nonDestructive = nonDestructive || nd
+		}
 	}
 	return destructive, nonDestructive
 }
