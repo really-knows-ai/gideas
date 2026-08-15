@@ -4,6 +4,7 @@ go 1.26.0
 
 require (
 	github.com/foundry/flow/gen v0.0.0
+	github.com/foundry/flow/pkg/metadata v0.0.0
 	github.com/foundry/flow/sdk/go v0.0.0
 	github.com/google/cel-go v0.26.0
 	github.com/google/uuid v1.6.0
@@ -17,7 +18,6 @@ require (
 	cel.dev/expr v0.25.1 // indirect
 	github.com/antlr4-go/antlr/v4 v4.13.1 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
-	github.com/foundry/flow/pkg/metadata v0.0.0 // indirect
 	github.com/kr/pretty v0.3.1 // indirect
 	github.com/mattn/go-sqlite3 v1.14.34 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect

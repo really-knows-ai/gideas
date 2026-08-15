@@ -1,10 +1,11 @@
 // Package metadata defines the wire-format contract values shared by every
 // Flow service: the gRPC metadata keys the Sidecar injects and the Operator
 // proxy routes on, the signer identities carried in the capability
-// attestation header, the ExportGraph wire-format identifiers, and the
-// conventional singleton FoundryGraph name. These values are
-// contract-defining: they are defined once here and imported by every
-// consuming module — never re-declared as bare literals in sibling modules.
+// attestation header, the ExportGraph wire-format identifiers, the HITL
+// GET /choices wire contract, and the conventional singleton FoundryGraph
+// name. These values are contract-defining: they are defined once here and
+// imported by every consuming module — never re-declared as bare literals in
+// sibling modules.
 package metadata
 
 import "strings"

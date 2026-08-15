@@ -9,6 +9,8 @@ import (
 	"io"
 	"net/http"
 	"time"
+
+	flowmeta "github.com/foundry/flow/pkg/metadata"
 )
 
 // QueueItem represents a HITL queue item returned by the node's REST API.
@@ -21,19 +23,13 @@ type QueueItem struct {
 	ClaimedAt  string `json:"claimed_at"`
 }
 
-// Choice represents a single decision option from GET /choices.
-type Choice struct {
-	Value string `json:"value"`
-	Label string `json:"label"`
-	Type  string `json:"type"` // "route" or "cancel"
-}
+// Choice represents a single decision option from GET /choices. The wire
+// contract is defined once in the shared metadata package and re-exported
+// here so the TUI can reference it as api.Choice.
+type Choice = flowmeta.Choice
 
 // ChoicesResponse is the optional GET /choices response.
-type ChoicesResponse struct {
-	Choices     []Choice `json:"choices"`
-	HasFeedback bool     `json:"hasFeedback"`
-	HasCancel   bool     `json:"hasCancel"`
-}
+type ChoicesResponse = flowmeta.ChoicesResponse
 
 type ackResponse struct {
 	Acknowledged bool `json:"acknowledged"`
