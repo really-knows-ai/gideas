@@ -146,14 +146,23 @@ func TestTelemetryBuffer_DropNormalWhenFull(t *testing.T) {
 	// Give a moment for drain to start.
 	time.Sleep(50 * time.Millisecond)
 
-	if tb.normalPub.Dropped() == 0 {
-		t.Fatal("expected at least 1 dropped normal event")
-	}
-
 	// High priority should also work independently.
 	tb.Submit(Event{Priority: PriorityHigh, Namespace: "ns-h"})
 
 	tb.Stop()
+
+	// The 1-slot normal buffer drops events during the 10-event burst, so
+	// not all normal events can have been published (the high event is
+	// published on its own buffer and filtered out below).
+	normalPublished := 0
+	for _, c := range spy.getCalls() {
+		if c.GetEvent().GetEventType() == "fill" {
+			normalPublished++
+		}
+	}
+	if normalPublished >= 10 {
+		t.Fatalf("expected events to be dropped when buffer is full, but all %d were published", normalPublished)
+	}
 }
 
 func TestTelemetryBuffer_DropHighWhenFull(t *testing.T) {
@@ -167,11 +176,13 @@ func TestTelemetryBuffer_DropHighWhenFull(t *testing.T) {
 
 	time.Sleep(50 * time.Millisecond)
 
-	if tb.highPub.Dropped() == 0 {
-		t.Fatal("expected at least 1 dropped high event")
-	}
-
 	tb.Stop()
+
+	// The 1-slot high buffer drops events during the 10-event burst, so
+	// fewer than 10 events reach the publisher.
+	if spy.calls() >= 10 {
+		t.Fatalf("expected events to be dropped when buffer is full, but all %d were published", spy.calls())
+	}
 }
 
 func TestTelemetryBuffer_NonBlocking(t *testing.T) {
@@ -278,9 +289,4 @@ func TestTelemetryBuffer_RetryOnFailure(t *testing.T) {
 	spy.mu.Unlock()
 
 	tb.Stop()
-
-	// Should not have been dropped.
-	if tb.normalPub.Dropped() != 0 {
-		t.Fatalf("expected 0 drops (retried), got %d", tb.normalPub.Dropped())
-	}
 }

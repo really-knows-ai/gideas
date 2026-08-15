@@ -120,11 +120,6 @@ func (p *AsyncPublisher) Stop() {
 	p.wg.Wait()
 }
 
-// Dropped returns the total number of events dropped due to a full buffer.
-func (p *AsyncPublisher) Dropped() int64 {
-	return p.dropped.Load()
-}
-
 // drainLoop consumes events from the buffered channel and publishes them
 // with retry. It exits when stopCh is closed, after draining remaining
 // events best-effort.
