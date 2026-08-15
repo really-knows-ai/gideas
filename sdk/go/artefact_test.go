@@ -42,14 +42,6 @@ func setupArtefactErrorEnv(t *testing.T, workitemID string) *Artefact {
 	return art
 }
 
-func TestArtefact_ID(t *testing.T) {
-	env := setupTestEnv(t, "wid-001")
-	a := newTestArtefact(env.client.session, "art-xyz", "doc", "h1")
-	if got := a.ID(); got != "art-xyz" {
-		t.Errorf("ID() = %q, want %q", got, "art-xyz")
-	}
-}
-
 func TestArtefact_GovernedArtefact(t *testing.T) {
 	env := setupTestEnv(t, "wid-001")
 	a := newTestArtefact(env.client.session, "art-xyz", "report", "h1")

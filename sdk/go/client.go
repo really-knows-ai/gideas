@@ -3,6 +3,11 @@
 // The Client wraps the generated gRPC service stubs and handles connection
 // management, workitem context injection, and convenience methods for common
 // operations. All calls are routed through the in-pod Sidecar.
+//
+// ponytail: this single flow package hosts the sidecar client, node server,
+// queue mesh, embassy and federation protocols and the cartographer graph
+// client; the package stays monolithic for release velocity, but if the queue
+// mesh or embassy server grows further they should move to internal subpackages.
 package flow
 
 import (
