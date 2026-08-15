@@ -500,11 +500,11 @@ func fullTextSearchResults(
 }
 
 // executeCypherParams converts a JSON-object params map into the wire params
-// field. The wire type is google.protobuf.Value today; the SPEC error-table
-// row "ExecuteCypher params not a JSON object" names google.protobuf.Struct,
-// so a sibling switch of the field to Struct will touch only this helper. A
-// nil or empty map yields no params field (the optional parameter is absent).
-func executeCypherParams(params map[string]any) (*structpb.Value, error) {
+// field. The wire field is google.protobuf.Struct (SPEC error-table row
+// "ExecuteCypher params not a JSON object"), and the helper returns the
+// Struct directly. A nil or empty map yields no params field (the optional
+// parameter is absent).
+func executeCypherParams(params map[string]any) (*structpb.Struct, error) {
 	if len(params) == 0 {
 		return nil, nil
 	}
@@ -512,7 +512,7 @@ func executeCypherParams(params map[string]any) (*structpb.Value, error) {
 	if err != nil {
 		return nil, fmt.Errorf("flow sdk: ExecuteCypher params must be a JSON object: %w", err)
 	}
-	return structpb.NewStructValue(s), nil
+	return s, nil
 }
 
 // ---------------------------------------------------------------------------

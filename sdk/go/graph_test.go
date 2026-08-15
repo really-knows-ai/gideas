@@ -574,7 +574,7 @@ func TestIDTypeMap_EmptyTypeNotStored(t *testing.T) {
 // surfaced as flat string tuples in wire order (SPEC R2).
 func TestGraph_ExecuteCypher(t *testing.T) {
 	var capturedCypher string
-	var capturedParams *structpb.Value
+	var capturedParams *structpb.Struct
 	mock := &mockCartographerClient{
 		executeCypher: func(ctx context.Context, req *flowv1.ExecuteCypherRequest) (*flowv1.ExecuteCypherResponse, error) {
 			capturedCypher = req.GetCypher()
@@ -609,7 +609,7 @@ func TestGraph_ExecuteCypher(t *testing.T) {
 // error-table row "ExecuteCypher params not a JSON object" names
 // google.protobuf.Struct, so the SDK must never send a scalar or list.
 func TestGraph_ExecuteCypher_JSONObjectParams(t *testing.T) {
-	var capturedParams *structpb.Value
+	var capturedParams *structpb.Struct
 	mock := &mockCartographerClient{
 		executeCypher: func(ctx context.Context, req *flowv1.ExecuteCypherRequest) (*flowv1.ExecuteCypherResponse, error) {
 			capturedParams = req.GetParams()
@@ -625,11 +625,7 @@ func TestGraph_ExecuteCypher_JSONObjectParams(t *testing.T) {
 	if capturedParams == nil {
 		t.Fatal("expected params field to be set for a non-nil params map")
 	}
-	s := capturedParams.GetStructValue()
-	if s == nil {
-		t.Fatal("expected params to arrive as a struct (JSON object), not a scalar or list")
-	}
-	if got := s.Fields["name"].GetStringValue(); got != "auth" {
+	if got := capturedParams.Fields["name"].GetStringValue(); got != "auth" {
 		t.Errorf("expected params.name=auth, got %q", got)
 	}
 }
