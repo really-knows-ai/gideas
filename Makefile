@@ -121,15 +121,15 @@ fmt: ## Run go fmt across the workspace.
 
 .PHONY: vet
 vet: ## Run go vet across the workspace.
-	GOWORK="$(CURDIR)/.cache/ladybug/go.work" go vet ./sdk/go/... ./platform/sidecar/... ./platform/archivist/... ./platform/cartographer/... ./platform/monitor/... ./platform/eventbus/... ./platform/federation/... ./platform/frictionledger/... ./platform/librarian/... ./platform/queue/... ./nodes/...
+	GOWORK="$(CURDIR)/.cache/ladybug/go.work" go vet ./sdk/go/... ./platform/sidecar/... ./platform/archivist/... ./platform/cartographer/... ./platform/monitor/... ./platform/eventbus/... ./platform/federation/... ./platform/frictionledger/... ./platform/librarian/... ./nodes/...
 
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint across the workspace (excludes operator).
-	GOWORK="$(CURDIR)/.cache/ladybug/go.work" "$(GOLANGCI_LINT)" run ./sdk/go/... ./platform/sidecar/... ./platform/archivist/... ./platform/cartographer/... ./platform/monitor/... ./platform/eventbus/... ./platform/federation/... ./platform/frictionledger/... ./platform/librarian/... ./platform/queue/... ./nodes/...
+	GOWORK="$(CURDIR)/.cache/ladybug/go.work" "$(GOLANGCI_LINT)" run ./sdk/go/... ./platform/sidecar/... ./platform/archivist/... ./platform/cartographer/... ./platform/monitor/... ./platform/eventbus/... ./platform/federation/... ./platform/frictionledger/... ./platform/librarian/... ./nodes/...
 
 .PHONY: lint-fix
 lint-fix: golangci-lint ## Run golangci-lint with auto-fix (excludes operator).
-	GOWORK="$(CURDIR)/.cache/ladybug/go.work" "$(GOLANGCI_LINT)" run --fix ./sdk/go/... ./platform/sidecar/... ./platform/archivist/... ./platform/cartographer/... ./platform/monitor/... ./platform/eventbus/... ./platform/federation/... ./platform/frictionledger/... ./platform/librarian/... ./platform/queue/... ./nodes/...
+	GOWORK="$(CURDIR)/.cache/ladybug/go.work" "$(GOLANGCI_LINT)" run --fix ./sdk/go/... ./platform/sidecar/... ./platform/archivist/... ./platform/cartographer/... ./platform/monitor/... ./platform/eventbus/... ./platform/federation/... ./platform/frictionledger/... ./platform/librarian/... ./nodes/...
 
 .PHONY: lint-operator
 lint-operator: ## Run golangci-lint for the operator (delegates to operator/Makefile).
@@ -198,7 +198,7 @@ clean: ## Remove build artefacts.
 
 .PHONY: tidy
 tidy: ## Run go mod tidy in every workspace module.
-	@for mod in gen sdk/go platform/sidecar platform/archivist platform/cartographer platform/monitor platform/eventbus platform/federation platform/frictionledger platform/librarian platform/pkg/eventbus platform/pkg/metadata platform/queue nodes platform/operator tools/flowctl; do \
+	@for mod in gen sdk/go platform/sidecar platform/archivist platform/cartographer platform/monitor platform/eventbus platform/federation platform/frictionledger platform/librarian platform/pkg/eventbus platform/pkg/metadata nodes platform/operator tools/flowctl; do \
 		echo "==> tidy $$mod"; \
 		(cd $$mod && go mod tidy); \
 	done
