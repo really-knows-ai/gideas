@@ -19,7 +19,6 @@ import (
 	"github.com/foundry/flow/pkg/randid"
 	flow "github.com/foundry/flow/sdk/go"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -108,44 +107,6 @@ func (s *LibrarianServer) publishAudit(eventType string, attrs map[string]string
 }
 
 // ---------------------------------------------------------------------------
-// Capability enforcement
-// ---------------------------------------------------------------------------
-
-const (
-	metadataKeyCapabilities = "x-flow-capabilities"
-	metadataKeyNodeID       = "x-flow-node-id"
-)
-
-// checkCapability enforces deny-by-default capability gating for
-// node-originated requests. System-to-system calls (no x-flow-node-id)
-// pass through unconditionally.
-//
-// "Capability enforcement is performed by the owning service."
-func checkCapability(ctx context.Context, required string) error {
-	md, ok := metadata.FromIncomingContext(ctx)
-	if !ok {
-		return nil // No metadata — system call.
-	}
-	nodeIDs := md.Get(metadataKeyNodeID)
-	if len(nodeIDs) == 0 {
-		return nil // No node identity — system call.
-	}
-
-	// Node-originated call: capability must be present.
-	caps := md.Get(metadataKeyCapabilities)
-	for _, c := range caps {
-		for cap := range strings.SplitSeq(c, ",") {
-			if flow.MatchCapability(strings.TrimSpace(cap), required) {
-				return nil
-			}
-		}
-	}
-
-	return status.Errorf(codes.PermissionDenied,
-		"CAPABILITY_DENIED: missing required capability %q", required)
-}
-
-// ---------------------------------------------------------------------------
 // Node-Facing RPCs (via Sidecar)
 // ---------------------------------------------------------------------------
 
@@ -154,7 +115,7 @@ func (s *LibrarianServer) QueryLaws(
 	ctx context.Context, req *flowv1.QueryLawsRequest,
 ) (*flowv1.QueryLawsResponse, error) {
 	// Capability check.
-	if err := checkCapability(ctx, "READ:law"); err != nil {
+	if err := flow.CheckCapability(ctx, "READ:law"); err != nil {
 		return nil, err
 	}
 
@@ -199,7 +160,7 @@ func (s *LibrarianServer) QueryLaws(
 func (s *LibrarianServer) GetLawGroup(
 	ctx context.Context, req *flowv1.GetLawGroupRequest,
 ) (*flowv1.GetLawGroupResponse, error) {
-	if err := checkCapability(ctx, "READ:law"); err != nil {
+	if err := flow.CheckCapability(ctx, "READ:law"); err != nil {
 		return nil, err
 	}
 
@@ -226,7 +187,7 @@ func (s *LibrarianServer) GetLawGroup(
 func (s *LibrarianServer) ListLawGroups(
 	ctx context.Context, req *flowv1.ListLawGroupsRequest,
 ) (*flowv1.ListLawGroupsResponse, error) {
-	if err := checkCapability(ctx, "READ:law"); err != nil {
+	if err := flow.CheckCapability(ctx, "READ:law"); err != nil {
 		return nil, err
 	}
 
@@ -245,7 +206,7 @@ func (s *LibrarianServer) ListLawGroups(
 func (s *LibrarianServer) SyncLawGroup(
 	ctx context.Context, req *flowv1.SyncLawGroupRequest,
 ) (*flowv1.SyncLawGroupResponse, error) {
-	if err := checkCapability(ctx, "WRITE:law"); err != nil {
+	if err := flow.CheckCapability(ctx, "WRITE:law"); err != nil {
 		return nil, err
 	}
 
@@ -273,7 +234,7 @@ func (s *LibrarianServer) SyncLawGroup(
 func (s *LibrarianServer) DeleteLawGroup(
 	ctx context.Context, req *flowv1.DeleteLawGroupRequest,
 ) (*flowv1.DeleteLawGroupResponse, error) {
-	if err := checkCapability(ctx, "WRITE:law"); err != nil {
+	if err := flow.CheckCapability(ctx, "WRITE:law"); err != nil {
 		return nil, err
 	}
 
@@ -320,7 +281,7 @@ func (s *LibrarianServer) RecordFinding(
 	ctx context.Context, req *flowv1.RecordFindingRequest,
 ) (*flowv1.RecordFindingResponse, error) {
 	// Capability check.
-	if err := checkCapability(ctx, "WRITE:law/tier1"); err != nil {
+	if err := flow.CheckCapability(ctx, "WRITE:law/tier1"); err != nil {
 		return nil, err
 	}
 
