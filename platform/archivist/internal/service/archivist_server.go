@@ -15,6 +15,7 @@ import (
 
 	"github.com/foundry/flow/archivist/internal/store/sqlite"
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
+	flowmeta "github.com/foundry/flow/pkg/metadata"
 	"github.com/foundry/flow/pkg/randid"
 	flow "github.com/foundry/flow/sdk/go"
 	"google.golang.org/grpc/codes"
@@ -166,87 +167,50 @@ func extractMetadataValue(ctx context.Context, key string) string {
 // Capability enforcement
 // ---------------------------------------------------------------------------
 
-const (
-	metadataKeyCapabilities = "x-flow-capabilities"
-	metadataKeyNodeID       = "x-flow-node-id"
-)
-
-// isNodeOriginatedCall returns true when the request carries a Sidecar-injected
-// node identity, meaning it is a node-originated call through the Sidecar
-// proxy layer. System-to-system calls (Operator, Librarian, etc.) do not
-// carry this header and are not subject to capability enforcement.
-func isNodeOriginatedCall(ctx context.Context) bool {
-	md, ok := metadata.FromIncomingContext(ctx)
-	if !ok {
-		return false
-	}
-	return len(md.Get(metadataKeyNodeID)) > 0
-}
-
-// capabilitiesFromContext reads the comma-separated capability grants from
-// gRPC metadata injected by the Sidecar.
-func capabilitiesFromContext(ctx context.Context) []string {
-	md, ok := metadata.FromIncomingContext(ctx)
-	if !ok {
-		return nil
-	}
-	var caps []string
-	for _, c := range md.Get(metadataKeyCapabilities) {
-		for cap := range strings.SplitSeq(c, ",") {
-			if s := strings.TrimSpace(cap); s != "" {
-				caps = append(caps, s)
-			}
-		}
-	}
-	return caps
-}
-
-// hasCapability checks whether the capability list contains the given
-// capability string. Supports * wildcard matching per MatchCapability rules.
-// A scoped READ grant also satisfies a broad READ requirement:
-// READ:artefact/haiku satisfies READ:artefact.
-func hasCapability(caps []string, required string) bool {
-	for _, c := range caps {
-		if flow.MatchCapability(c, required) {
-			return true
-		}
-		// Scoped-grant-satisfies-broad: only for READ actions where
-		// a scoped grant like READ:artefact/haiku implies broad READ:artefact.
-		if strings.HasPrefix(c, "READ:") && strings.HasPrefix(required, "READ:") &&
-			strings.HasPrefix(c, required+"/") {
-			return true
-		}
-	}
-	return false
-}
-
 // checkCapability enforces deny-by-default capability gating for
 // node-originated requests. System-to-system calls (no x-flow-node-id)
 // pass through unconditionally.
 //
+// The gate reuses the shared flow.CheckCapability (normalize + exact/wildcard
+// match) and adds the archivist's scoped-grant-satisfies-broad rule: a scoped
+// READ grant (READ:artefact/haiku) also satisfies a broad READ requirement
+// (READ:artefact), because nodes declare scoped artefact reads.
+//
 // "Capability enforcement is performed by the owning service."
 func checkCapability(ctx context.Context, required string) error {
-	if !isNodeOriginatedCall(ctx) {
-		return nil // System call — no capability check.
-	}
-	caps := capabilitiesFromContext(ctx)
-	if hasCapability(caps, required) {
+	if err := flow.CheckCapability(ctx, required); err == nil {
 		return nil
+	} else if hasScopedGrant(ctx, required) && strings.HasPrefix(required, "READ:") {
+		return nil
+	} else {
+		return err
 	}
-	return status.Errorf(codes.PermissionDenied,
-		"CAPABILITY_DENIED: missing required capability %q", required)
+}
+
+// hasScopedGrant reports whether the node's capability metadata contains a
+// grant that is a scoped prefix of the requirement, e.g. READ:artefact/haiku
+// for the requirement READ:artefact.
+func hasScopedGrant(ctx context.Context, required string) bool {
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return false
+	}
+	for _, raw := range md.Get(flowmeta.MetadataKeyCapabilities) {
+		for _, cap := range flowmeta.NormalizeCapabilities(raw) {
+			if strings.HasPrefix(cap, required+"/") {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // checkCapabilityAny checks that at least one of the required capabilities is
 // present. Used for operations like StoreArtefact where either a broad
 // WRITE:artefact or a scoped WRITE:artefact/<name> grant suffices.
 func checkCapabilityAny(ctx context.Context, required ...string) error {
-	if !isNodeOriginatedCall(ctx) {
-		return nil
-	}
-	caps := capabilitiesFromContext(ctx)
 	for _, r := range required {
-		if hasCapability(caps, r) {
+		if err := flow.CheckCapability(ctx, r); err == nil {
 			return nil
 		}
 	}
@@ -1137,7 +1101,7 @@ func extractNodeID(ctx context.Context) string {
 	if !ok {
 		return ""
 	}
-	vals := md.Get("x-flow-node-id")
+	vals := md.Get(flowmeta.MetadataKeyNodeID)
 	if len(vals) == 0 {
 		return ""
 	}

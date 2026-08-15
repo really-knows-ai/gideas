@@ -8,6 +8,7 @@ import (
 
 	"github.com/foundry/flow/archivist/internal/store/sqlite"
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
+	flowmeta "github.com/foundry/flow/pkg/metadata"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -623,8 +624,8 @@ func TestLinkRuling_VisibleInGetFeedback(t *testing.T) {
 // this is a node call subject to capability enforcement.
 func nodeCtx(caps string) context.Context {
 	md := metadata.Pairs(
-		metadataKeyNodeID, "node-1",
-		metadataKeyCapabilities, caps,
+		flowmeta.MetadataKeyNodeID, "node-1",
+		flowmeta.MetadataKeyCapabilities, caps,
 	)
 	return metadata.NewIncomingContext(context.Background(), md)
 }
@@ -753,7 +754,7 @@ func TestCapability_SystemCall_BypassesEnforcement(t *testing.T) {
 func TestCapability_NodeCallNoCapabilities_Denied(t *testing.T) {
 	s := newTestServer(t)
 	// Node-originated call with no capabilities at all.
-	md := metadata.Pairs(metadataKeyNodeID, "node-1")
+	md := metadata.Pairs(flowmeta.MetadataKeyNodeID, "node-1")
 	ctx := metadata.NewIncomingContext(context.Background(), md)
 
 	_, err := s.StoreArtefact(ctx, &flowv1.StoreArtefactRequest{
@@ -837,7 +838,7 @@ func TestCapability_AddFeedback_Denied(t *testing.T) {
 func TestCapability_ListArtefacts_NoGateRequired(t *testing.T) {
 	s := newTestServer(t)
 	// Node call with no capabilities — ListArtefacts is implicit (no gate).
-	md := metadata.Pairs(metadataKeyNodeID, "node-1")
+	md := metadata.Pairs(flowmeta.MetadataKeyNodeID, "node-1")
 	ctx := metadata.NewIncomingContext(context.Background(), md)
 
 	_, err := s.ListArtefacts(ctx, &flowv1.ListArtefactsRequest{
@@ -856,9 +857,9 @@ func TestCapability_ListArtefacts_NoGateRequired(t *testing.T) {
 // identity, workitem identity, and READ:artefact capability.
 func crossWorkitemCtx(workitemID string) context.Context {
 	md := metadata.Pairs(
-		metadataKeyNodeID, "node-1",
+		flowmeta.MetadataKeyNodeID, "node-1",
 		"x-flow-workitem-id", workitemID,
-		metadataKeyCapabilities, "READ:artefact",
+		flowmeta.MetadataKeyCapabilities, "READ:artefact",
 	)
 	return metadata.NewIncomingContext(context.Background(), md)
 }
