@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -115,30 +116,6 @@ func (m HitlPromptModel) View() string {
 	return b.String()
 }
 
-// Update handles messages for the HITL prompt.
-func (m HitlPromptModel) Update(msg tea.Msg) (HitlPromptModel, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.KeyMsg:
-		if !m.Visible {
-			return m, nil
-		}
-
-		switch msg.String() {
-		case "y":
-			if m.ConfirmingCancel {
-				// Confirm cancel — handled by root update
-				m.ConfirmingCancel = false
-			}
-		case "n":
-			if m.ConfirmingCancel {
-				m.ConfirmingCancel = false
-				m.PendingChoice = ""
-			}
-		}
-	}
-	return m, nil
-}
-
 // ─── HITL Probe Message Types ───────────────────────────────────────────────
 
 // HitlProbeResultMsg is sent when a HITL queue probe succeeds with a match.
@@ -171,7 +148,13 @@ type HitlChoicesBlockedMsg struct {
 
 // HitlState tracks the HITL interaction lifecycle.
 // It manages probe retries, port-forwards, and the HITL client session.
+//
+// mu guards the fields below: the Probe cmd goroutine writes state (probe
+// attempts, exhausted, active session) while the bubbletea Update goroutine
+// reads it through the accessors and writes via Close/ResetForNewWorkitem.
 type HitlState struct {
+	mu sync.Mutex
+
 	active        bool // true when a queue item has been found
 	queueItem     *api.QueueItem
 	choices       []api.Choice
@@ -212,18 +195,24 @@ func NewHitlState(hitlPort int) *HitlState {
 func (h *HitlState) Probe(ctx context.Context, clientset kubernetes.Interface,
 	namespace, nodeName, workitemID string, pm api.PortForwarder) tea.Cmd {
 
-	// Close previous HITL forward from any prior attempt
-	if h.forwardID != "" {
-		pm.Close(h.forwardID)
-		h.forwardID = ""
-	}
+	// Close previous HITL forward from any prior attempt.
+	h.mu.Lock()
+	prevForward := h.forwardID
+	h.forwardID = ""
 	h.hitlClient = nil
 	h.active = false
 	h.nodeName = nodeName
 	h.workitemID = workitemID
+	h.mu.Unlock()
+	if prevForward != "" {
+		pm.Close(prevForward)
+	}
 
 	return func() tea.Msg {
+		h.mu.Lock()
 		h.probeAttempts++
+		attempts := h.probeAttempts
+		h.mu.Unlock()
 
 		// Per-attempt timeout prevents a stuck probe on a dying pod
 		// from blocking subsequent attempts.
@@ -235,8 +224,13 @@ func (h *HitlState) Probe(ctx context.Context, clientset kubernetes.Interface,
 			LabelSelector: "flow.foundry.io/node-name=" + nodeName,
 		})
 		if err != nil {
-			if h.probeAttempts >= h.probeMax {
+			h.mu.Lock()
+			exhausted := attempts >= h.probeMax
+			if exhausted {
 				h.exhausted = true
+			}
+			h.mu.Unlock()
+			if exhausted {
 				return HitlProbeExhaustedMsg{
 					WorkitemID: workitemID,
 					NodeName:   nodeName,
@@ -267,11 +261,13 @@ func (h *HitlState) Probe(ctx context.Context, clientset kubernetes.Interface,
 			}
 
 			// Found a matching queue item. Keep this forward open.
+			h.mu.Lock()
 			h.forwardID = forwardID
 			h.queueItem = qi
 			h.hitlClient = client
 			h.active = true
 			h.probeAttempts = 0
+			h.mu.Unlock()
 
 			// Probe /choices on the same forward
 			choices, err := client.GetChoices(attemptCtx)
@@ -280,30 +276,43 @@ func (h *HitlState) Probe(ctx context.Context, clientset kubernetes.Interface,
 				return HitlChoicesBlockedMsg{Err: err}
 			}
 			defaultChoiceSet := false
+			var selected []api.Choice
 			if choices != nil && len(choices.Choices) > 0 {
-				h.choices = choices.Choices
+				selected = choices.Choices
 			} else {
 				// 404 or empty choices array — use defaults
-				h.choices = DefaultAPIChoices()
+				selected = DefaultAPIChoices()
 				defaultChoiceSet = true
 			}
+			h.mu.Lock()
+			h.choices = selected
+			h.mu.Unlock()
 
 			return HitlProbeResultMsg{
 				WorkitemID:     workitemID,
 				NodeName:       nodeName,
 				QueueItem:      qi,
-				Choices:        h.choices,
+				Choices:        selected,
 				ChoicesLoaded:  choices != nil,
 				DefaultChoices: defaultChoiceSet,
 			}
 		}
 
 		// No pod returned 200.
-		if h.probeAttempts >= h.probeMax {
+		h.mu.Lock()
+		exhausted := attempts >= h.probeMax
+		if exhausted {
 			h.exhausted = true
+		}
+		appendDebugHint := exhausted && h.hitlPort != 8080 && !h.debugHintShown
+		if appendDebugHint {
+			h.debugHintShown = true
+		}
+		h.mu.Unlock()
+
+		if exhausted {
 			diagnostic := "HITL probe timed out — node may not have enqueued the item"
-			if h.hitlPort != 8080 && !h.debugHintShown {
-				h.debugHintShown = true
+			if appendDebugHint {
 				diagnostic += "\nHITL probe failed — verify `--hitl-port` matches the node's `FLOW_HITL_PORT`"
 			}
 			return HitlProbeExhaustedMsg{
@@ -319,25 +328,35 @@ func (h *HitlState) Probe(ctx context.Context, clientset kubernetes.Interface,
 
 // ClaimAndDecide claims the queue item then decides with the given choice.
 func (h *HitlState) ClaimAndDecide(ctx context.Context, choice string) error {
+	h.mu.Lock()
 	if !h.active || h.hitlClient == nil {
+		h.mu.Unlock()
 		return fmt.Errorf("no active HITL session")
 	}
 	h.pendingChoice = choice
+	client := h.hitlClient
+	workitemID := h.workitemID
+	h.mu.Unlock()
 	// Claim
-	_, err := h.hitlClient.Claim(ctx, h.workitemID)
+	_, err := client.Claim(ctx, workitemID)
 	if err != nil {
 		return err
 	}
 	// Decide
-	return h.hitlClient.Decide(ctx, h.workitemID, choice)
+	return client.Decide(ctx, workitemID, choice)
 }
 
 // ReleaseClaim abandons the claim without deciding.
 func (h *HitlState) ReleaseClaim(ctx context.Context) error {
+	h.mu.Lock()
 	if !h.active || h.hitlClient == nil {
+		h.mu.Unlock()
 		return fmt.Errorf("no active HITL session")
 	}
-	_, err := h.hitlClient.Release(ctx, h.workitemID)
+	client := h.hitlClient
+	workitemID := h.workitemID
+	h.mu.Unlock()
+	_, err := client.Release(ctx, workitemID)
 	if err != nil {
 		return err
 	}
@@ -347,13 +366,16 @@ func (h *HitlState) ReleaseClaim(ctx context.Context) error {
 // Close cleans up the HITL port-forward. Does not stop tea.Tick timers
 // (those are gated by h.exhausted in the Update loop).
 func (h *HitlState) Close(pm api.PortForwarder) {
-	if h.forwardID != "" {
-		pm.Close(h.forwardID)
-		h.forwardID = ""
-	}
+	h.mu.Lock()
+	forwardID := h.forwardID
+	h.forwardID = ""
 	h.active = false
 	h.exhausted = false
 	h.hitlClient = nil
+	h.mu.Unlock()
+	if forwardID != "" {
+		pm.Close(forwardID)
+	}
 }
 
 // RetryQueueUnavailable performs up to 3 retries with 2s backoff
@@ -382,27 +404,49 @@ func (h *HitlState) RetryQueueUnavailable(ctx context.Context, fn func(context.C
 
 // ResetForNewWorkitem resets probe state for a new workitem cycle.
 func (h *HitlState) ResetForNewWorkitem() {
+	h.mu.Lock()
 	h.probeAttempts = 0
 	h.exhausted = false
 	h.debugHintShown = false
+	h.mu.Unlock()
 }
 
 // ─── Accessor methods (for tui package use) ─────────────────────────────────
 
 // Exhausted returns true when all probe retries have been exhausted.
-func (h *HitlState) Exhausted() bool { return h.exhausted }
+func (h *HitlState) Exhausted() bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.exhausted
+}
 
 // Active returns true when a queue item has been found and HITL is active.
-func (h *HitlState) Active() bool { return h.active }
+func (h *HitlState) Active() bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.active
+}
 
 // GetNodeName returns the current node name being probed.
-func (h *HitlState) GetNodeName() string { return h.nodeName }
+func (h *HitlState) GetNodeName() string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.nodeName
+}
 
 // GetWorkitemID returns the current workitem ID being probed.
-func (h *HitlState) GetWorkitemID() string { return h.workitemID }
+func (h *HitlState) GetWorkitemID() string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.workitemID
+}
 
 // GetPendingChoice returns the stored pending choice for retry.
-func (h *HitlState) GetPendingChoice() string { return h.pendingChoice }
+func (h *HitlState) GetPendingChoice() string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.pendingChoice
+}
 
 // DefaultAPIChoices returns the default HITL choices as api.Choice values.
 func DefaultAPIChoices() []api.Choice {

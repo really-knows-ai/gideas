@@ -1,9 +1,15 @@
 package components
 
 import (
+	"context"
 	"strings"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	k8sfake "k8s.io/client-go/kubernetes/fake"
+
+	"github.com/foundry/flow/tools/flowctl/internal/api"
 	"github.com/foundry/flow/tools/flowctl/internal/tui/types"
 )
 
@@ -153,4 +159,73 @@ func TestHitlLoadingAfterProbe(t *testing.T) {
 	if !strings.Contains(v, "Checking HITL queue") {
 		t.Error("expected loading indicator in view, got:", v)
 	}
+}
+
+// blockingForwarder blocks in ForwardPod until released, forcing the Probe cmd
+// goroutine to overlap with the caller goroutine's reads/writes.
+type blockingForwarder struct {
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (b *blockingForwarder) FindReadyPod(context.Context, string, string) (string, bool, error) {
+	return "", false, nil
+}
+
+func (b *blockingForwarder) ForwardPod(context.Context, string, string, int) (string, int, error) {
+	close(b.entered)
+	<-b.release
+	return "fwd-1", 0, nil
+}
+
+func (b *blockingForwarder) Close(string) error { return nil }
+
+func (b *blockingForwarder) CloseAll() error { return nil }
+
+var _ api.PortForwarder = (*blockingForwarder)(nil)
+
+// TestHitlStateConcurrentProbeAccess runs the Probe cmd goroutine concurrently
+// with accessor/reset/close calls from the caller goroutine (the bubbletea
+// Update goroutine in production). Under -race this fails if the shared
+// HitlState fields are not mutex-guarded.
+func TestHitlStateConcurrentProbeAccess(t *testing.T) {
+	h := NewHitlState(8080)
+	bf := &blockingForwarder{entered: make(chan struct{}), release: make(chan struct{})}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "hitl-pod",
+			Namespace: "test-ns",
+			Labels:    map[string]string{"flow.foundry.io/node-name": "human-approval"},
+		},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodRunning,
+			PodIP: "10.0.0.1",
+			Conditions: []corev1.PodCondition{
+				{Type: corev1.PodReady, Status: corev1.ConditionTrue},
+			},
+		},
+	}
+	clientset := k8sfake.NewSimpleClientset(pod)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		cmd := h.Probe(context.Background(), clientset, "test-ns", "human-approval", "wi-001", bf)
+		cmd() // returns HitlProbeRetryMsg once the forward is released
+	}()
+
+	<-bf.entered // the probe goroutine is now blocked inside ForwardPod
+
+	for i := 0; i < 100; i++ {
+		h.Active()
+		h.Exhausted()
+		h.GetNodeName()
+		h.GetWorkitemID()
+		h.GetPendingChoice()
+		h.ResetForNewWorkitem()
+	}
+	h.Close(bf)
+
+	close(bf.release)
+	<-done
 }

@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/foundry/flow/tools/flowctl/internal/tui/styles"
@@ -61,9 +60,4 @@ func (m StatusBarModel) View() string {
 	}
 
 	return b.String()
-}
-
-// Update handles messages for the status bar.
-func (m StatusBarModel) Update(msg tea.Msg) (StatusBarModel, tea.Cmd) {
-	return m, nil
 }
