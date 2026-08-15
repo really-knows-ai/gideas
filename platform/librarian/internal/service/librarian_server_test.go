@@ -9,6 +9,7 @@ import (
 	"github.com/foundry/flow/librarian/internal/store/sqlite"
 
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
+	flowmeta "github.com/foundry/flow/pkg/metadata"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
@@ -158,7 +159,7 @@ func TestQueryLaws_CapabilityDenied(t *testing.T) {
 	srv := newTestServer(t)
 
 	// Set metadata with capabilities that DON'T include READ:law.
-	md := metadata.Pairs(metadataKeyCapabilities, "WRITE:law/tier1", metadataKeyNodeID, "node-1")
+	md := metadata.Pairs(flowmeta.MetadataKeyCapabilities, "WRITE:law/tier1", flowmeta.MetadataKeyNodeID, "node-1")
 	ctx := metadata.NewIncomingContext(context.Background(), md)
 
 	_, err := srv.QueryLaws(ctx, &flowv1.QueryLawsRequest{})
@@ -280,7 +281,7 @@ func TestRecordFinding_NoRepresentations(t *testing.T) {
 func TestRecordFinding_CapabilityDenied(t *testing.T) {
 	srv := newTestServer(t)
 
-	md := metadata.Pairs(metadataKeyCapabilities, "READ:law", metadataKeyNodeID, "node-1")
+	md := metadata.Pairs(flowmeta.MetadataKeyCapabilities, "READ:law", flowmeta.MetadataKeyNodeID, "node-1")
 	ctx := metadata.NewIncomingContext(context.Background(), md)
 
 	_, err := srv.RecordFinding(ctx, &flowv1.RecordFindingRequest{
@@ -301,7 +302,7 @@ func TestRecordFinding_NodeCallNoCapabilities_Denied(t *testing.T) {
 	srv := newTestServer(t)
 
 	// Node identity present but no capabilities.
-	md := metadata.Pairs(metadataKeyNodeID, "node-1")
+	md := metadata.Pairs(flowmeta.MetadataKeyNodeID, "node-1")
 	ctx := metadata.NewIncomingContext(context.Background(), md)
 
 	_, err := srv.RecordFinding(ctx, &flowv1.RecordFindingRequest{
@@ -321,7 +322,7 @@ func TestRecordFinding_NodeCallNoCapabilities_Denied(t *testing.T) {
 func TestQueryLaws_NodeCallNoCapabilities_Denied(t *testing.T) {
 	srv := newTestServer(t)
 
-	md := metadata.Pairs(metadataKeyNodeID, "node-1")
+	md := metadata.Pairs(flowmeta.MetadataKeyNodeID, "node-1")
 	ctx := metadata.NewIncomingContext(context.Background(), md)
 
 	_, err := srv.QueryLaws(ctx, &flowv1.QueryLawsRequest{})
@@ -1615,7 +1616,7 @@ func TestGetLawGroup_EmptyName(t *testing.T) {
 
 func TestGetLawGroup_CapabilityDenied(t *testing.T) {
 	srv := newTestServer(t)
-	md := metadata.Pairs(metadataKeyCapabilities, "WRITE:law", metadataKeyNodeID, "node-1")
+	md := metadata.Pairs(flowmeta.MetadataKeyCapabilities, "WRITE:law", flowmeta.MetadataKeyNodeID, "node-1")
 	ctx := metadata.NewIncomingContext(context.Background(), md)
 
 	_, err := srv.GetLawGroup(ctx, &flowv1.GetLawGroupRequest{GroupName: "security"})
@@ -1669,7 +1670,7 @@ func TestListLawGroups_Empty(t *testing.T) {
 
 func TestListLawGroups_CapabilityDenied(t *testing.T) {
 	srv := newTestServer(t)
-	md := metadata.Pairs(metadataKeyCapabilities, "WRITE:law", metadataKeyNodeID, "node-1")
+	md := metadata.Pairs(flowmeta.MetadataKeyCapabilities, "WRITE:law", flowmeta.MetadataKeyNodeID, "node-1")
 	ctx := metadata.NewIncomingContext(context.Background(), md)
 
 	_, err := srv.ListLawGroups(ctx, &flowv1.ListLawGroupsRequest{})
@@ -1775,7 +1776,7 @@ func TestSyncLawGroup_PassesLessThanOne(t *testing.T) {
 
 func TestSyncLawGroup_CapabilityDenied(t *testing.T) {
 	srv := newTestServer(t)
-	md := metadata.Pairs(metadataKeyCapabilities, "READ:law", metadataKeyNodeID, "node-1")
+	md := metadata.Pairs(flowmeta.MetadataKeyCapabilities, "READ:law", flowmeta.MetadataKeyNodeID, "node-1")
 	ctx := metadata.NewIncomingContext(context.Background(), md)
 
 	_, err := srv.SyncLawGroup(ctx, &flowv1.SyncLawGroupRequest{
@@ -1843,7 +1844,7 @@ func TestDeleteLawGroup_EmptyName(t *testing.T) {
 
 func TestDeleteLawGroup_CapabilityDenied(t *testing.T) {
 	srv := newTestServer(t)
-	md := metadata.Pairs(metadataKeyCapabilities, "READ:law", metadataKeyNodeID, "node-1")
+	md := metadata.Pairs(flowmeta.MetadataKeyCapabilities, "READ:law", flowmeta.MetadataKeyNodeID, "node-1")
 	ctx := metadata.NewIncomingContext(context.Background(), md)
 
 	_, err := srv.DeleteLawGroup(ctx, &flowv1.DeleteLawGroupRequest{GroupName: "test"})
