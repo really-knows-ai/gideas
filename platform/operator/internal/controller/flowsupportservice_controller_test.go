@@ -53,7 +53,7 @@ var _ = Describe("FlowSupportService Controller", func() {
 						Namespace: "default",
 					},
 					Spec: flowv1.FlowSupportServiceSpec{
-						Image:                "test-image:latest",
+						ServiceSpecBase:      flowv1.ServiceSpecBase{Image: "test-image:latest"},
 						ProvidesCapabilities: []string{"encode"},
 					},
 				}

@@ -25,10 +25,7 @@ import (
 // FlowSupportServiceSpec defines the desired state of FlowSupportService.
 // The FlowSupportService CRD declares an optional, Flow-Engineering-Team-deployed service container.
 type FlowSupportServiceSpec struct {
-	// image is the container image for the Support Service.
-	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:MinLength=1
-	Image string `json:"image"`
+	ServiceSpecBase `json:",inline"`
 
 	// providesCapabilities are the capability names this service exposes
 	// (e.g. ["encode"]). Nodes consume these via USE:support/<service>/<capability>
@@ -36,45 +33,11 @@ type FlowSupportServiceSpec struct {
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinItems=1
 	ProvidesCapabilities []string `json:"providesCapabilities"`
-
-	// deploymentStrategy is the deployment strategy: ReplicaSet (default) or StatefulSet.
-	// +optional
-	// +kubebuilder:validation:Enum=ReplicaSet;StatefulSet
-	// +kubebuilder:default="ReplicaSet"
-	DeploymentStrategy string `json:"deploymentStrategy,omitempty"`
-
-	// minReplicas is the minimum replica count. Default 0, allowing scale-to-zero.
-	// +optional
-	// +kubebuilder:default=0
-	// +kubebuilder:validation:Minimum=0
-	MinReplicas *int32 `json:"minReplicas,omitempty"`
-
-	// storage defines volume mounts and PVC declarations.
-	// +optional
-	Storage *StorageConfig `json:"storage,omitempty"`
-
-	// resources defines CPU and memory resource limits and requests.
-	// +optional
-	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
 }
 
 // FlowSupportServiceStatus defines the observed state of FlowSupportService.
 type FlowSupportServiceStatus struct {
-	// phase is the service state: Initialising, Ready, Degraded, Stopped.
-	// +optional
-	// +kubebuilder:validation:Enum=Initialising;Ready;Degraded;Stopped
-	Phase string `json:"phase,omitempty"`
-
-	// availableReplicas is the current number of ready replicas.
-	// +optional
-	AvailableReplicas int32 `json:"availableReplicas,omitempty"`
-
-	// conditions represent the current state of the FlowSupportService resource.
-	// Standard Kubernetes conditions.
-	// +listType=map
-	// +listMapKey=type
-	// +optional
-	Conditions []metav1.Condition `json:"conditions,omitempty"`
+	ServiceStatusBase `json:",inline"`
 }
 
 // +kubebuilder:object:root=true
@@ -110,18 +73,29 @@ type FlowSupportServiceList struct {
 	Items           []FlowSupportService `json:"items"`
 }
 
-func (c *FlowSupportService) GetSpecImage() string                           { return c.Spec.Image }
-func (c *FlowSupportService) GetSpecMinReplicas() *int32                     { return c.Spec.MinReplicas }
-func (c *FlowSupportService) GetSpecDeploymentStrategy() string              { return c.Spec.DeploymentStrategy }
-func (c *FlowSupportService) GetSpecResources() *corev1.ResourceRequirements { return c.Spec.Resources }
-func (c *FlowSupportService) GetSpecStorage() *StorageConfig                 { return c.Spec.Storage }
+// The accessor methods below are thin delegators to the shared
+// ServiceSpecBase/ServiceStatusBase accessors; they exist only to satisfy the
+// ServiceObject/statusUpdater interfaces on the CRD type.
+func (c *FlowSupportService) GetSpecImage() string       { return c.Spec.GetSpecImage() }
+func (c *FlowSupportService) GetSpecMinReplicas() *int32 { return c.Spec.GetSpecMinReplicas() }
+func (c *FlowSupportService) GetSpecDeploymentStrategy() string {
+	return c.Spec.GetSpecDeploymentStrategy()
+}
+func (c *FlowSupportService) GetSpecResources() *corev1.ResourceRequirements {
+	return c.Spec.GetSpecResources()
+}
+func (c *FlowSupportService) GetSpecStorage() *StorageConfig { return c.Spec.GetSpecStorage() }
 
-func (c *FlowSupportService) GetPhase() string                    { return c.Status.Phase }
-func (c *FlowSupportService) SetPhase(p string)                   { c.Status.Phase = p }
-func (c *FlowSupportService) GetAvailableReplicas() int32         { return c.Status.AvailableReplicas }
-func (c *FlowSupportService) SetAvailableReplicas(r int32)        { c.Status.AvailableReplicas = r }
-func (c *FlowSupportService) GetConditions() []metav1.Condition   { return c.Status.Conditions }
-func (c *FlowSupportService) SetConditions(cs []metav1.Condition) { c.Status.Conditions = cs }
+func (c *FlowSupportService) GetPhase() string            { return c.Status.GetPhase() }
+func (c *FlowSupportService) SetPhase(p string)           { c.Status.SetPhase(p) }
+func (c *FlowSupportService) GetAvailableReplicas() int32 { return c.Status.GetAvailableReplicas() }
+func (c *FlowSupportService) SetAvailableReplicas(r int32) {
+	c.Status.SetAvailableReplicas(r)
+}
+func (c *FlowSupportService) GetConditions() []metav1.Condition { return c.Status.GetConditions() }
+func (c *FlowSupportService) SetConditions(cs []metav1.Condition) {
+	c.Status.SetConditions(cs)
+}
 
 func init() {
 	SchemeBuilder.Register(func(scheme *runtime.Scheme) error {
