@@ -101,7 +101,7 @@ func (g *gitStore) Commit(ctx context.Context, message string) error {
 // branch for a commit whose first message line has the prefix
 // "transaction:<txID>". Prefix matching (per SPEC Commit retry, which
 // inspects git log for the transaction:<tx-id> prefix) is consistent with
-// GitLogOneline.
+// GitLogOneline, and both walk the log through forEachLogCommit.
 //
 // PRECONDITION: the caller MUST have checked the relevant branch out before
 // calling this method. The scan walks HEAD's log (git log without a ref), so
@@ -112,27 +112,17 @@ func (g *gitStore) Commit(ctx context.Context, message string) error {
 // first — see cartographer_server.go).
 func (g *gitStore) CommitExistsOnBranch(ctx context.Context, txID string) (bool, error) {
 	message := "transaction:" + txID
-	log, err := g.repo.Log(&git.LogOptions{})
-	if err != nil {
-		return false, fmt.Errorf("log: %w", err)
-	}
-	defer log.Close()
-
-	if err := log.ForEach(func(commit *object.Commit) error {
-		firstLine, _, _ := strings.Cut(commit.Message, "\n")
-		firstLine = strings.TrimRight(firstLine, "\r")
+	found := false
+	if err := g.forEachLogCommit(func(_ string, firstLine string) error {
 		if strings.HasPrefix(firstLine, message) {
+			found = true
 			return errCommitFound
 		}
 		return nil
-	}); err != nil {
-		if errors.Is(err, errCommitFound) {
-			return true, nil
-		}
-		return false, fmt.Errorf("iterate log: %w", err)
+	}); err != nil && !errors.Is(err, errCommitFound) {
+		return false, err
 	}
-
-	return false, nil
+	return found, nil
 }
 
 // FastForwardMerge performs a fast-forward merge of branch into into.
@@ -206,23 +196,36 @@ func (g *gitStore) FastForwardMerge(ctx context.Context, branch, into string) er
 // --oneline for the transaction:<tx-id> prefix). Results are most recent
 // first.
 func (g *gitStore) GitLogOneline(ctx context.Context, prefix string) ([]string, error) {
-	log, err := g.repo.Log(&git.LogOptions{})
-	if err != nil {
-		return nil, fmt.Errorf("log: %w", err)
-	}
-	defer log.Close()
-
 	var results []string
-	if err := log.ForEach(func(commit *object.Commit) error {
-		firstLine, _, _ := strings.Cut(commit.Message, "\n")
-		firstLine = strings.TrimRight(firstLine, "\r")
+	if err := g.forEachLogCommit(func(hash, firstLine string) error {
 		if strings.HasPrefix(firstLine, prefix) {
-			results = append(results, commit.Hash.String()+" "+firstLine)
+			results = append(results, hash+" "+firstLine)
 		}
 		return nil
 	}); err != nil {
-		return nil, fmt.Errorf("iterate log: %w", err)
+		return nil, err
 	}
-
 	return results, nil
+}
+
+// forEachLogCommit walks HEAD's commit log (newest first), invoking fn with
+// each commit's hash and first message line. It is the single shared log walk
+// behind CommitExistsOnBranch and GitLogOneline, so the two prefix scans map
+// log setup and iteration failures identically. A non-nil error from fn stops
+// iteration and is propagated (wrapped) to the caller.
+func (g *gitStore) forEachLogCommit(fn func(hash, firstLine string) error) error {
+	log, err := g.repo.Log(&git.LogOptions{})
+	if err != nil {
+		return fmt.Errorf("log: %w", err)
+	}
+	defer log.Close()
+
+	if err := log.ForEach(func(commit *object.Commit) error {
+		firstLine, _, _ := strings.Cut(commit.Message, "\n")
+		firstLine = strings.TrimRight(firstLine, "\r")
+		return fn(commit.Hash.String(), firstLine)
+	}); err != nil {
+		return fmt.Errorf("iterate log: %w", err)
+	}
+	return nil
 }
