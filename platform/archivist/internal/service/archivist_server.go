@@ -49,7 +49,7 @@ func NewArchivistServer(s *sqlite.Store, opts ...ArchivistOption) *ArchivistServ
 		store:   s,
 		newIDFn: randid.NewRandomID,
 		namespaceFn: func(ctx context.Context) string {
-			return extractMetadataValue(ctx, "x-flow-namespace")
+			return flowmeta.MetadataValue(ctx, flowmeta.MetadataKeyNamespace)
 		},
 	}
 	for _, o := range opts {
@@ -88,7 +88,7 @@ func (s *ArchivistServer) validateChildAccess(ctx context.Context, parentWorkite
 	}
 
 	// Propagate namespace metadata to outgoing Operator call.
-	ns := extractMetadataValue(ctx, "x-flow-namespace")
+	ns := flowmeta.MetadataValue(ctx, flowmeta.MetadataKeyNamespace)
 	if ns != "" {
 		ctx = metadata.NewOutgoingContext(ctx, metadata.Pairs("x-flow-namespace", ns))
 	}
@@ -143,24 +143,11 @@ func (s *ArchivistServer) publishAudit(ctx context.Context, eventType string, at
 			EventType:     eventType,
 			FlowNamespace: s.namespaceFn(ctx),
 			NodeId:        extractNodeID(ctx),
-			WorkitemId:    extractMetadataValue(ctx, "x-flow-workitem-id"),
+			WorkitemId:    flowmeta.MetadataValue(ctx, flowmeta.MetadataKeyWorkitemID),
 			Timestamp:     timestamppb.Now(),
 			Attributes:    attrs,
 		},
 	})
-}
-
-// extractMetadataValue reads a single value from incoming gRPC metadata.
-func extractMetadataValue(ctx context.Context, key string) string {
-	md, ok := metadata.FromIncomingContext(ctx)
-	if !ok {
-		return ""
-	}
-	vals := md.Get(key)
-	if len(vals) == 0 {
-		return ""
-	}
-	return vals[0]
 }
 
 // ---------------------------------------------------------------------------
@@ -329,7 +316,7 @@ func (s *ArchivistServer) GetArtefact(
 
 	// Cross-Workitem read: validate parent-child and use target as lookup key.
 	if targetID := req.GetTargetWorkitemId(); targetID != "" {
-		callerWorkitemID := extractMetadataValue(ctx, "x-flow-workitem-id")
+		callerWorkitemID := flowmeta.MetadataValue(ctx, flowmeta.MetadataKeyWorkitemID)
 		if callerWorkitemID == "" {
 			callerWorkitemID = workitemID
 		}
@@ -467,7 +454,7 @@ func (s *ArchivistServer) ListArtefacts(
 
 	// Cross-Workitem read: validate parent-child and use target as lookup key.
 	if targetID := req.GetTargetWorkitemId(); targetID != "" {
-		callerWorkitemID := extractMetadataValue(ctx, "x-flow-workitem-id")
+		callerWorkitemID := flowmeta.MetadataValue(ctx, flowmeta.MetadataKeyWorkitemID)
 		if callerWorkitemID == "" {
 			callerWorkitemID = workitemID
 		}
