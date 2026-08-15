@@ -41,34 +41,15 @@ const (
 	choiceCancel     = "cancel"
 )
 
-// choicesResponse is the JSON body returned by GET /choices.
-type choiceEntry struct {
-	Value string `json:"value"`
-	Label string `json:"label"`
-	Type  string `json:"type"`
-}
-
-type choicesResponse struct {
-	Choices     []choiceEntry `json:"choices"`
-	HasFeedback bool          `json:"hasFeedback"`
-	HasCancel   bool          `json:"hasCancel"`
-}
-
 func main() {
 	slog.Info("human-arbiter: starting")
 
-	qm, err := flow.NewQueueManager(
+	if err := nodeutil.RunHITLNode("human-arbiter", handler,
 		flow.WithQueueName("human-arbiter"),
 		flow.WithCustomRoutes(func(mux *http.ServeMux) {
 			mux.HandleFunc("GET /choices", handleChoices)
 		}),
-	)
-	if err != nil {
-		slog.Error("human-arbiter: create queue manager failed", "error", err)
-		os.Exit(1)
-	}
-
-	if err := flow.Start(handler(qm), flow.WithQueueManager(qm)); err != nil {
+	); err != nil {
 		slog.Error("human-arbiter: server failed", "error", err)
 		os.Exit(1)
 	}
@@ -76,15 +57,15 @@ func main() {
 
 // handler returns a flow.Handler that delegates to handleArbiter.
 func handler(qm flow.QueueManager) flow.Handler {
-	return func(ctx context.Context, wctx *flowv1.WorkitemContext) error {
-		client, workitem, err := nodeutil.SetupHandler(ctx, wctx, "human-arbiter")
-		if err != nil {
-			return err
-		}
-		defer func() { _ = client.Close() }()
-
+	return nodeutil.NewHITLHandler(qm, "human-arbiter", func(
+		ctx context.Context,
+		_ *flow.Client,
+		workitem *flow.Workitem,
+		qm flow.QueueManager,
+		wctx *flowv1.WorkitemContext,
+	) error {
 		return handleArbiter(ctx, workitem, qm, wctx)
-	}
+	})
 }
 
 // handleArbiter contains the core arbiter logic, extracted for testability.
@@ -136,41 +117,20 @@ func handleArbiter(
 		return nil
 	}
 
-	// ── Step 4: Enqueue and pause ──────────────────────────────────────
+	// ── Step 4: Enqueue, pause, wait, validate, resume ────────────────
 	slog.Info("human-arbiter: deadlocked feedback found",
 		"workitem_id", workitemID,
 		"count", len(deadlocked))
-	if err := qm.Enqueue(ctx, workitemID); err != nil {
-		return fmt.Errorf("human-arbiter: enqueue: %w", err)
-	}
-	if err := workitem.PauseTimer(); err != nil {
-		return fmt.Errorf("human-arbiter: pause timer: %w", err)
-	}
-
-	// ── Step 5: Wait for human decision ────────────────────────────────
-	slog.Info("human-arbiter: awaiting human decision", "workitem_id", workitemID)
-	choice, err := qm.WaitForDecision(ctx, workitemID)
+	choice, err := nodeutil.AwaitHumanDecision(ctx, qm, workitem, workitemID, "human-arbiter", map[string]bool{
+		choiceAccept: true,
+		choiceReject: true,
+		choiceCancel: true,
+	})
 	if err != nil {
-		return fmt.Errorf("human-arbiter: wait for decision: %w", err)
+		return err
 	}
 
-	// Empty choice indicates QueueManager shutdown (not a human decision).
-	if choice == "" {
-		return fmt.Errorf("human-arbiter: received empty choice (queue manager shut down before decision)")
-	}
-
-	// Validate choice before resuming timer — invalid choices leave
-	// the timer paused so the operator can retry.
-	if choice != choiceAccept && choice != choiceReject && choice != choiceCancel {
-		return fmt.Errorf("human-arbiter: invalid choice %q", choice)
-	}
-
-	// ── Step 6: Resume timer ─────────────────────────────────────────────
-	if err := workitem.ResumeTimer(); err != nil {
-		return fmt.Errorf("human-arbiter: resume timer: %w", err)
-	}
-
-	// ── Step 7: Dispatch based on choice ───────────────────────────────
+	// ── Step 5: Dispatch based on choice ──────────────────────────────
 	switch choice {
 	case choiceAccept:
 		return linkRulingsAndRoute(workitem, haikuArt, deadlocked, flow.FeedbackStateWontFix, choice)
@@ -215,8 +175,8 @@ func linkRulingsAndRoute(
 
 // handleChoices serves the hardcoded GET /choices response.
 func handleChoices(w http.ResponseWriter, r *http.Request) {
-	resp := choicesResponse{
-		Choices: []choiceEntry{
+	resp := nodeutil.ChoicesResponse{
+		Choices: []nodeutil.ChoiceEntry{
 			{Value: choiceAccept, Label: "Accept — Mark as WONT_FIX", Type: "route"},
 			{Value: choiceReject, Label: "Demand Fix — Mark as REJECTED", Type: "route"},
 			{Value: choiceCancel, Label: "Reject Workitem", Type: "cancel"},

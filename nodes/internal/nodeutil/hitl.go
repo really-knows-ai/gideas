@@ -9,6 +9,49 @@ import (
 	flow "github.com/foundry/flow/sdk/go"
 )
 
+// NewHITLHandler returns a flow.Handler that runs the shared HITL handler
+// preamble — assignment log, SDK client, workitem fetch (SetupHandler) and
+// client close — then delegates to process. name is the log/error prefix
+// (e.g. "hitl", "human-approval"); it must not include a trailing colon.
+// process receives the client, workitem, queue manager, and workitem context.
+func NewHITLHandler(
+	qm flow.QueueManager,
+	name string,
+	process func(
+		ctx context.Context,
+		client *flow.Client,
+		workitem *flow.Workitem,
+		qm flow.QueueManager,
+		wctx *flowv1.WorkitemContext,
+	) error,
+) flow.Handler {
+	return func(ctx context.Context, wctx *flowv1.WorkitemContext) error {
+		client, workitem, err := SetupHandler(ctx, wctx, name)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = client.Close() }()
+		return process(ctx, client, workitem, qm, wctx)
+	}
+}
+
+// RunHITLNode wires the standard HITL node startup sequence: create the
+// QueueManager from opts, build the handler from it via newHandler, and
+// start the SDK server. name is the log/error prefix used for the
+// queue-manager-creation error. Node-specific config loading is the
+// caller's responsibility (either before this call or inside the handler).
+func RunHITLNode(
+	name string,
+	newHandler func(qm flow.QueueManager) flow.Handler,
+	opts ...flow.QueueManagerOption,
+) error {
+	qm, err := flow.NewQueueManager(opts...)
+	if err != nil {
+		return fmt.Errorf("%s: create queue manager failed: %w", name, err)
+	}
+	return flow.Start(newHandler(qm), flow.WithQueueManager(qm))
+}
+
 // AwaitHumanDecision parks the workitem in the HITL queue, pauses the sidecar
 // inactivity timer, waits for a human decision, validates it, and resumes the
 // timer. It returns the validated choice.
