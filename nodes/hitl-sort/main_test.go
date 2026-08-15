@@ -2,10 +2,14 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
+	"github.com/foundry/flow/nodes/internal/nodeutil"
 )
 
 // ---------------------------------------------------------------------------
@@ -183,6 +187,56 @@ func TestHITLSort_MultipleChoices_AllRoute(t *testing.T) {
 				t.Errorf("expected route to %q, got %v", tc.output, spy.RoutedOutputs)
 			}
 		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// GET /choices endpoint
+// ---------------------------------------------------------------------------
+
+// TestHITLSort_ChoicesEndpoint pins the wire shape of GET /choices: the
+// handler must serve the shared nodeutil.ChoicesResponse contract (the shape
+// flowctl's HitlClient.GetChoices decodes), not a bespoke JSON array.
+func TestHITLSort_ChoicesEndpoint(t *testing.T) {
+	cfg := &hitlSortConfig{
+		HumanChoices: []choiceMapping{
+			{Output: "approve", Label: "Approve"},
+			{Output: "reject", Label: "Send Back for Revision"},
+		},
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/choices", nil)
+	rec := httptest.NewRecorder()
+
+	handleChoices(cfg).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d", rec.Code)
+	}
+
+	var resp nodeutil.ChoicesResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse response body as nodeutil.ChoicesResponse: %v", err)
+	}
+
+	if resp.HasFeedback {
+		t.Error("expected HasFeedback=false")
+	}
+	if resp.HasCancel {
+		t.Error("expected HasCancel=false")
+	}
+
+	if len(resp.Choices) != 2 {
+		t.Fatalf("expected 2 choices, got %d", len(resp.Choices))
+	}
+
+	c0 := resp.Choices[0]
+	if c0.Value != "approve" || c0.Label != "Approve" || c0.Type != "route" {
+		t.Errorf("choice[0] = %+v, want {approve Approve route}", c0)
+	}
+	c1 := resp.Choices[1]
+	if c1.Value != "reject" || c1.Label != "Send Back for Revision" || c1.Type != "route" {
+		t.Errorf("choice[1] = %+v, want {reject 'Send Back for Revision' route}", c1)
 	}
 }
 

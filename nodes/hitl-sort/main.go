@@ -163,18 +163,20 @@ func handleSort(
 
 // handleChoices returns the configured humanChoices as JSON so the Dashboard
 // can build the choice UI. Registered via WithCustomRoutes on the QueueManager.
+// The body serves the shared nodeutil.ChoicesResponse wire shape (the same
+// shape sibling HITL nodes and flowctl's HitlClient.GetChoices use).
 func handleChoices(cfg *hitlSortConfig) http.HandlerFunc {
-	type choiceResponse struct {
-		Output string `json:"output"`
-		Label  string `json:"label"`
-	}
 	return func(w http.ResponseWriter, r *http.Request) {
-		choices := make([]choiceResponse, 0, len(cfg.HumanChoices))
+		resp := nodeutil.ChoicesResponse{Choices: make([]nodeutil.ChoiceEntry, 0, len(cfg.HumanChoices))}
 		for _, cm := range cfg.HumanChoices {
-			choices = append(choices, choiceResponse(cm))
+			resp.Choices = append(resp.Choices, nodeutil.ChoiceEntry{
+				Value: cm.Output,
+				Label: cm.Label,
+				Type:  "route",
+			})
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		_ = json.NewEncoder(w).Encode(choices)
+		_ = json.NewEncoder(w).Encode(resp)
 	}
 }
