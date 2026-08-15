@@ -960,6 +960,11 @@ func TestGraph_BeginTransaction(t *testing.T) {
 	if tx.idTypeMap != g.idTypeMap {
 		t.Error("expected the tx handle to share the graph's ID-to-type cache")
 	}
+	// The response's applied_timeout ("the value actually granted", SPEC R2)
+	// must be surfaced on the handle rather than dropped.
+	if got := tx.AppliedTimeout(); got != 48*time.Hour {
+		t.Errorf("expected the granted 48h applied timeout on the handle, got %v", got)
+	}
 }
 
 // TestGraph_BeginTransaction_NoTimeoutOmitted pins the omitted-timeout
@@ -1003,5 +1008,39 @@ func TestGraph_BeginTransaction_TimeoutPassedVerbatim(t *testing.T) {
 	}
 	if status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("expected InvalidArgument surfaced for an oversized timeout, got %v (%v)", status.Code(err), err)
+	}
+}
+
+// TestGraph_BeginTransaction_NonPositiveTimeoutPassed pins the sibling half of
+// the R2/R9 WithTimeout contract on the Begin path: a zero or negative
+// WithTimeout is passed to the wire verbatim (no silent default-substitution),
+// so the SPEC error-table row "Invalid transaction timeout duration" →
+// INVALID_ARGUMENT is reachable on BeginTransaction exactly as on
+// ExtendTimeout (TestTx_ExtendTimeout / TestTx_ExtendTimeout_RejectsOversized
+// pin the sibling path).
+func TestGraph_BeginTransaction_NonPositiveTimeoutPassed(t *testing.T) {
+	for _, d := range []time.Duration{0, -time.Hour} {
+		t.Run(d.String(), func(t *testing.T) {
+			var captured time.Duration
+			var hadTimeout bool
+			mock := &mockCartographerClient{
+				beginTx: func(ctx context.Context, req *flowv1.BeginTransactionRequest) (*flowv1.BeginTransactionResponse, error) {
+					hadTimeout = req.GetTimeout() != nil
+					if hadTimeout {
+						captured = req.GetTimeout().AsDuration()
+					}
+					return nil, status.Error(codes.InvalidArgument, "duration must be positive")
+				},
+			}
+			g := newMockGraph(mock)
+
+			_, err := g.BeginTransaction(WithTimeout(d))
+			if !hadTimeout || captured != d {
+				t.Fatalf("expected the requested %v timeout on the wire verbatim, got %v (present=%v)", d, captured, hadTimeout)
+			}
+			if status.Code(err) != codes.InvalidArgument {
+				t.Fatalf("expected InvalidArgument surfaced for a non-positive timeout, got %v (%v)", status.Code(err), err)
+			}
+		})
 	}
 }
