@@ -667,14 +667,20 @@ func (s *CartographerServer) RefreshTransaction(
 		return nil, err
 	}
 	defer unlockTx()
-	// A transaction whose commit has started is closed for refresh (its branch
-	// files are being serialised): from the refresh surface the handle no
-	// longer references a usable active transaction, matching the SPEC
-	// error-table row "Transaction not found" ("was already committed/rolled
-	// back" → NOT_FOUND). FAILED_PRECONDITION is not used here — no SPEC
-	// error-table row justifies it for a refresh against a mid-commit
-	// transaction.
-	if state.CommitStarted {
+	// A transaction whose commit has already landed on main (MergeCompleted)
+	// is closed for refresh: from the refresh surface the handle no longer
+	// references a usable active transaction, matching the SPEC error-table
+	// row "Transaction not found" ("was already committed/rolled back" →
+	// NOT_FOUND). A transaction whose commit has started but never merged is
+	// NOT closed for refresh: the SPEC error-table row "Commit not up-to-date
+	// with main" prescribes "Call Refresh() before Commit()" for a commit
+	// blocked on a stale baseline, and the SPEC Refresh flow step 1 resets the
+	// branch and discards "orphaned commits from failed Commit attempts" — so
+	// a mid-commit transaction whose step-10 merge failed must be refreshable,
+	// or that prescribed retry path is unimplementable and the transaction is
+	// permanently wedged once main advances (its changes recoverable only by
+	// Rollback, i.e. loss).
+	if state.MergeCompleted {
 		return nil, errTransactionNotFound(req.TransactionId)
 	}
 
@@ -691,6 +697,9 @@ func (s *CartographerServer) RefreshTransaction(
 	// divergent.
 	var mainHash string
 	if err := s.withGitLock(func() error {
+		// Snapshot the commit-in-flight milestones before this refresh mutates
+		// them, so a persist failure below can revert to the pre-refresh record.
+		prev := durableTransactionState(state)
 		if err := s.gitstore.HardResetToBranch(ctx, req.TransactionId); err != nil {
 			return err
 		}
@@ -707,6 +716,53 @@ func (s *CartographerServer) RefreshTransaction(
 		current, err := s.snapshotWorkingTree(ctx)
 		if err != nil {
 			return err
+		}
+		// A failed Commit attempt may have left main.lbug hydrated with the
+		// transaction's unmerged branch data (MainRehydrated / CommitHydrated
+		// — the SPEC "Commit merge failed (post-re-hydration)" state). The
+		// refresh discards the orphaned commit and re-baselines the
+		// transaction, so main.lbug is restored to git-main consistency now
+		// that the working tree holds main's files. Mirrors the GC's
+		// main-store restore; runs under the git lock with the main write
+		// lock as the inner lock, matching CommitTransaction's lock order. On
+		// failure nothing has been cleared, so the durable record stays
+		// consistent with the still-hydrated main store.
+		if state.MainRehydrated || state.CommitHydrated {
+			s.lockMainStore()
+			entitiesDir, edgesDir := s.gitstore.HydrationDirs()
+			err = s.store.RehydrateMainFromFiles(ctx, entitiesDir, edgesDir)
+			s.writeLock.Unlock()
+			if err != nil {
+				return fmt.Errorf("restore main store after failed commit: %w", err)
+			}
+			state.MainRehydrated = false
+			state.CommitHydrated = false
+		}
+		// The refresh resets the transaction branch to latest main —
+		// discarding any orphaned commit from a failed Commit attempt — and
+		// re-applies the transaction's changes onto the rebuilt branch DB,
+		// voiding every commit-in-flight milestone from the earlier attempt.
+		// Clear them durably before the branch reset (and before
+		// validateRefresh, which may return ABORTED) so a subsequent Commit
+		// retry re-enters the serialisation flow from the fresh branch: a
+		// stale CommitCreated would mis-detect the reset branch (tx HEAD ==
+		// main HEAD) as an already-merged commit and silently drop the
+		// re-applied changes, and a stale CommitHydrated/MainRehydrated would
+		// skip the main re-hydration (and violate the store's branch-state
+		// validation). Commit re-derives CommitCreated from git reality
+		// (CommitExistsOnBranch), so clearing early is safe even if this
+		// refresh later fails.
+		if state.CommitStarted || state.CommitCreated || state.CommitHydrated {
+			state.CommitStarted = false
+			state.CommitCreated = false
+			state.CommitHydrated = false
+			if err := s.persistTransactionState(ctx, state); err != nil {
+				state.CommitStarted = prev.CommitStarted
+				state.CommitCreated = prev.CommitCreated
+				state.CommitHydrated = prev.CommitHydrated
+				state.MainRehydrated = prev.MainRehydrated
+				return err
+			}
 		}
 		mainHash, err = s.gitstore.BranchHEAD(ctx, "main")
 		if err != nil {
