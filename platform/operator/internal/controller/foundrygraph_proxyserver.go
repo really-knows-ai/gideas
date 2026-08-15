@@ -22,7 +22,6 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
-	"io"
 	"strconv"
 	"strings"
 	"sync"
@@ -37,6 +36,7 @@ import (
 
 	flowv1gen "github.com/foundry/flow/gen/flow/v1"
 	flowmeta "github.com/foundry/flow/pkg/metadata"
+	"github.com/foundry/flow/pkg/relay"
 )
 
 // ProxyServer implements CartographerServiceServer for the Operator's gRPC proxy.
@@ -307,42 +307,16 @@ func (s *ProxyServer) ExportGraph(req *flowv1gen.ExportGraphRequest, stream flow
 		return status.Errorf(codes.Unavailable, "cannot start export stream: %v", err)
 	}
 
-	// A pre-stream rejection or transport failure — the Cartographer returns
-	// INVALID_ARGUMENT (unsupported format), RESOURCE_EXHAUSTED (buffer allocation), or
-	// UNAVAILABLE (upstream unreachable — the lazy grpc.NewClient dial delivers the
-	// connect failure on the first Recv) BEFORE sending any chunk (SPEC error table rows
-	// "Unsupported export format", "ExportGraph buffer allocation failure", and
-	// "ExportGraph stream-establishment failure", all "no data sent"); those statuses
-	// arrive at the proxy's first Recv with no chunk forwarded, so pass them through
-	// verbatim and let the documented CLI error codes surface (matching the sidecar
-	// relay's passthrough set exactly).
-	// Once at least one chunk has been forwarded, any failure — a transport-level break
-	// (Unavailable), a non-conforming upstream status (e.g. DataLoss), or a raw error —
-	// is a genuine mid-stream failure (partial data may already have been sent) and
-	// maps to INTERNAL per the SPEC error table row "ExportGraph mid-stream failure".
-	var sentAny bool
-	for {
-		chunk, err := clientStream.Recv()
-		if err == io.EOF {
-			return nil
-		}
-		if err != nil {
-			if !sentAny {
-				if st, ok := status.FromError(err); ok {
-					if c := st.Code(); c == codes.InvalidArgument || c == codes.ResourceExhausted || c == codes.Unavailable {
-						return err
-					}
-				}
-			}
-			return status.Errorf(codes.Internal, "export stream failed: %v", err)
-		}
-		sentAny = true
-		if err := stream.Send(chunk); err != nil {
-			// SPEC error table: a downstream stream break during export is the same
-			// mid-stream failure (partial data may already have been sent) → INTERNAL.
-			return status.Errorf(codes.Internal, "export stream failed: %v", err)
-		}
-	}
+	// The pre-stream vs mid-stream failure classification is the shared
+	// ExportGraph relay (pkg/relay), which applies the SPEC error-table mapping
+	// identically to the sidecar relay (cartographer.go): pre-stream "no data
+	// sent" statuses — INVALID_ARGUMENT (unsupported format), RESOURCE_EXHAUSTED
+	// (buffer allocation), UNAVAILABLE (stream-establishment failure), and
+	// PERMISSION_DENIED (invalid or stale capability signature) — pass through
+	// verbatim, while any failure after at least one chunk is a genuine
+	// mid-stream failure (partial data may already have been sent) and maps to
+	// INTERNAL per the SPEC error-table row "ExportGraph mid-stream failure".
+	return relay.ExportGraph(clientStream, stream)
 }
 
 // --- Service-facing RPCs (excluded from proxy) ---

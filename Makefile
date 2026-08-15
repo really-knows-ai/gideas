@@ -41,7 +41,11 @@ test-flowctl: ## Run flowctl unit tests.
 	go test -v ./tools/flowctl/...
 
 $(foreach srv,$(CGO_TEST_SERVICES),$(eval .PHONY: test-$(srv)))
-$(foreach srv,$(CGO_TEST_SERVICES),$(eval test-$(srv): ; $(if $(filter cartographer,$(srv)),GOWORK="$(CURDIR)/.cache/ladybug/go.work" )CGO_ENABLED=1 go test -v ./platform/$(srv)/...))
+# The CGO service suites (especially cartographer) exceed Go's default 10m
+# package test timeout on slower machines: each file-backed test performs git
+# checkouts and LadybugDB DDL, so the ceiling is raised. -timeout is an upper
+# bound, never a delay.
+$(foreach srv,$(CGO_TEST_SERVICES),$(eval test-$(srv): ; $(if $(filter cartographer,$(srv)),GOWORK="$(CURDIR)/.cache/ladybug/go.work" )CGO_ENABLED=1 go test -timeout 30m -v ./platform/$(srv)/...))
 
 test-cartographer: ladybug-lib
 
@@ -198,7 +202,7 @@ clean: ## Remove build artefacts.
 
 .PHONY: tidy
 tidy: ## Run go mod tidy in every workspace module.
-	@for mod in gen sdk/go platform/sidecar platform/archivist platform/cartographer platform/monitor platform/eventbus platform/federation platform/frictionledger platform/librarian platform/pkg/eventbus platform/pkg/metadata nodes platform/operator tools/flowctl; do \
+	@for mod in gen sdk/go platform/sidecar platform/archivist platform/cartographer platform/monitor platform/eventbus platform/federation platform/frictionledger platform/librarian platform/pkg/eventbus platform/pkg/metadata platform/pkg/relay nodes platform/operator tools/flowctl; do \
 		echo "==> tidy $$mod"; \
 		(cd $$mod && go mod tidy); \
 	done

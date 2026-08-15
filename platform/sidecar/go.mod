@@ -7,6 +7,7 @@ require (
 	github.com/foundry/flow/pkg/eventbus v0.0.0
 	github.com/foundry/flow/pkg/metadata v0.0.0
 	github.com/foundry/flow/pkg/randid v0.0.0
+	github.com/foundry/flow/pkg/relay v0.0.0
 	github.com/foundry/flow/sdk/go v0.0.0-00010101000000-000000000000
 	google.golang.org/grpc v1.80.0
 	google.golang.org/protobuf v1.36.12-0.20260120151049-f2248ac996af
@@ -28,5 +29,7 @@ replace github.com/foundry/flow/pkg/eventbus => ../pkg/eventbus
 replace github.com/foundry/flow/pkg/metadata => ../pkg/metadata
 
 replace github.com/foundry/flow/pkg/randid => ../pkg/randid
+
+replace github.com/foundry/flow/pkg/relay => ../pkg/relay
 
 replace github.com/foundry/flow/sdk/go => ../../sdk/go
