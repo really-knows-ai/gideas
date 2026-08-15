@@ -173,7 +173,7 @@ type RemoteAuth struct {
 }
 
 // FoundryGraphStatus defines the observed state.
-// ponytail: The Conditions field is not shown in SPEC R1's status YAML block (which
+// The Conditions field is not shown in SPEC R1's status YAML block (which
 // shows only endpoint and storageSize for brevity), but the SPEC prose states "The
 // Operator also sets conditions on the status to reflect intermediate states" (§R1).
 // The Conditions field is added here to make the Go struct complete — controller-runtime

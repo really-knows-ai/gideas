@@ -4,7 +4,7 @@ import "time"
 
 // Entity represents a single knowledge-graph entity with its identifier,
 // type, properties, optional vector embedding, and creation/update timestamps.
-// ponytail: CreatedAt and UpdatedAt are store-domain fields not present in the
+// CreatedAt and UpdatedAt are store-domain fields not present in the
 // proto Entity message (proto/flow/v1/cartographer.proto). The proto Entity
 // carries only entity_id, entity_type, properties, and embedding. The service
 // layer must populate the proto response without timestamp fields; timestamps
@@ -33,8 +33,8 @@ type Edge struct {
 // by SearchNeighbors.
 type NeighborResult struct {
 	Entity   Entity
-	Distance float64 // ponytail: named Distance (store domain) vs SearchNeighborResult.score
-	// (proto wire). The service layer maps Distance to the proto's double score field
+	Distance float64 // ponytail: named Distance (store domain) vs SearchNeighborResult.distance
+	// (proto wire). The service layer maps Distance to the proto's double distance field
 	// when constructing SearchNeighborResult responses.
 }
 

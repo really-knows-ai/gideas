@@ -40,7 +40,7 @@ func (c *Client) RawLibrarian() flowv1.LibrarianServiceClient {
 	return c.session.Librarian
 }
 
-// ponytail: PublishAuditEvent stays on Client because it is a cross-cutting
+// PublishAuditEvent stays on Client because it is a cross-cutting
 // audit emission that is not scoped to a single workitem.
 func (c *Client) PublishAuditEvent(
 	eventType string, payload any, workitemID, flowNamespace string,
@@ -69,7 +69,7 @@ func (c *Client) PublishAuditEvent(
 	return nil
 }
 
-// ponytail: RecordTelemetry stays on Client because telemetry emission is
+// RecordTelemetry stays on Client because telemetry emission is
 // a cross-cutting concern managed by the Agent heartbeat loop, not scoped
 // to a single workitem.
 func (c *Client) RecordTelemetry(eventType string, payload []byte) error {
