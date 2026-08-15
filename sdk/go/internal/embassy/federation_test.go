@@ -1,4 +1,4 @@
-package flow
+package embassy
 
 import (
 	"context"
@@ -224,10 +224,10 @@ func TestFederationClient_SubmitPublication_Accepted(t *testing.T) {
 	spy := &federationSpyServer{}
 	client := setupFederationTestClient(t, spy)
 
-	law := &Law{pb: &flowv1.Law{
+	law := &flowv1.Law{
 		Id:   "law-1",
 		Goal: "Test law",
-	}}
+	}
 	err := client.SubmitPublication(law, "flow-publisher")
 	if err != nil {
 		t.Fatalf("SubmitPublication() returned error: %v", err)
@@ -255,7 +255,7 @@ func TestFederationClient_SubmitPublication_Rejected(t *testing.T) {
 	}
 	client := setupFederationTestClient(t, spy)
 
-	err := client.SubmitPublication(&Law{pb: &flowv1.Law{Id: "law-2"}}, "flow-x")
+	err := client.SubmitPublication(&flowv1.Law{Id: "law-2"}, "flow-x")
 	if err == nil {
 		t.Fatal("expected error from SubmitPublication for rejected publication, got nil")
 	}
@@ -263,7 +263,7 @@ func TestFederationClient_SubmitPublication_Rejected(t *testing.T) {
 
 func TestFederationClient_SubmitPublication_NoConnection(t *testing.T) {
 	client := &FederationClient{}
-	err := client.SubmitPublication(&Law{pb: &flowv1.Law{}}, "")
+	err := client.SubmitPublication(&flowv1.Law{}, "")
 	if err == nil {
 		t.Fatal("expected error when federation connection is missing")
 	}
@@ -536,5 +536,6 @@ func TestFederationClient_PetitionOutcomeWatcher_EOFThenStop(t *testing.T) {
 		t.Fatalf("expected io.EOF for empty stream, got %v", err)
 	}
 
+	// Stop after EOF must not panic.
 	watcher.Stop()
 }

@@ -1,4 +1,4 @@
-package flow
+package embassy
 
 import (
 	"context"
@@ -141,7 +141,7 @@ func (c *FederationClient) DiscoverEndpoints(stateFilter string) ([]*FlowEndpoin
 
 // SubmitPublication submits a local Tier 3 law for publication admission.
 // Reports an error if the publication is rejected or the RPC fails.
-func (c *FederationClient) SubmitPublication(law *Law, sourceFlowIdentity string) error {
+func (c *FederationClient) SubmitPublication(law *flowv1.Law, sourceFlowIdentity string) error {
 	if c.federation == nil {
 		return fmt.Errorf("flow sdk: federation client: no federation connection (set FEDERATION_ADDRESS)")
 	}
@@ -150,7 +150,7 @@ func (c *FederationClient) SubmitPublication(law *Law, sourceFlowIdentity string
 	// configuration is needed later, FederationClient can store a base context.
 	ctx := context.Background()
 	resp, err := c.federation.SubmitPublication(ctx, &flowv1.SubmitPublicationRequest{
-		Law:                law.PB(),
+		Law:                law,
 		SourceFlowIdentity: sourceFlowIdentity,
 	})
 	if err != nil {

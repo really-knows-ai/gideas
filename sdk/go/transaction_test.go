@@ -14,6 +14,11 @@ import (
 	"google.golang.org/protobuf/types/known/durationpb"
 )
 
+// embassyTestTxID is the fake transaction ID bound to the mock transactions
+// below. Historically defined alongside the embassy server tests; kept here
+// because the transaction tests are its only remaining consumers.
+const embassyTestTxID = "tx-1"
+
 func newMockTx(mock *mockCartographerClient) *Transaction {
 	return newMockTxWithID(mock, embassyTestTxID)
 }

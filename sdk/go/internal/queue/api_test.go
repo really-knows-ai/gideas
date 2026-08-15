@@ -1,4 +1,4 @@
-package flow
+package queue
 
 import (
 	"bytes"
@@ -16,14 +16,14 @@ import (
 const testWorkitemID = "wi-1"
 
 // newTestQueueManager creates an in-memory QueueManager for API tests.
-func newTestQueueManager(t *testing.T) *queueManagerImpl {
+func newTestQueueManager(t *testing.T) *Manager {
 	t.Helper()
 	store, err := newQueueStore(":memory:", "api-test-shard", "")
 	if err != nil {
 		t.Fatalf("newQueueStore failed: %v", err)
 	}
 	mesh := newQueueMesh(store, "api-test-shard", &staticResolver{}, "50053", nil)
-	qm := &queueManagerImpl{
+	qm := &Manager{
 		store:   store,
 		mesh:    mesh,
 		shardID: "api-test-shard",
@@ -38,7 +38,7 @@ func TestHITLAPI_ListQueue(t *testing.T) {
 	_ = qm.Enqueue(ctx, testWorkitemID)
 	_ = qm.Enqueue(ctx, "wi-2")
 
-	router := newHITLRouter(qm)
+	router := newRouter(qm)
 	req := httptest.NewRequest(http.MethodGet, "/queue", nil)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
@@ -63,7 +63,7 @@ func TestHITLAPI_ListQueue_StatusFilter(t *testing.T) {
 	_ = qm.Enqueue(ctx, "wi-2")
 	_, _ = qm.Claim(ctx, testWorkitemID)
 
-	router := newHITLRouter(qm)
+	router := newRouter(qm)
 	req := httptest.NewRequest(http.MethodGet, "/queue?status=waiting", nil)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
@@ -91,7 +91,7 @@ func TestHITLAPI_ListQueue_Pagination(t *testing.T) {
 	_ = qm.Enqueue(ctx, "wi-2")
 	_ = qm.Enqueue(ctx, "wi-3")
 
-	router := newHITLRouter(qm)
+	router := newRouter(qm)
 	req := httptest.NewRequest(http.MethodGet, "/queue?limit=2&offset=1", nil)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
@@ -114,7 +114,7 @@ func TestHITLAPI_GetItem(t *testing.T) {
 	ctx := context.Background()
 	_ = qm.Enqueue(ctx, testWorkitemID)
 
-	router := newHITLRouter(qm)
+	router := newRouter(qm)
 	req := httptest.NewRequest(http.MethodGet, "/queue/"+testWorkitemID, nil)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
@@ -134,7 +134,7 @@ func TestHITLAPI_GetItem(t *testing.T) {
 
 func TestHITLAPI_GetItem_NotFound(t *testing.T) {
 	qm := newTestQueueManager(t)
-	router := newHITLRouter(qm)
+	router := newRouter(qm)
 	req := httptest.NewRequest(http.MethodGet, "/queue/nonexistent", nil)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
@@ -157,7 +157,7 @@ func TestHITLAPI_Claim(t *testing.T) {
 	ctx := context.Background()
 	_ = qm.Enqueue(ctx, testWorkitemID)
 
-	router := newHITLRouter(qm)
+	router := newRouter(qm)
 	req := httptest.NewRequest(http.MethodPost, "/queue/"+testWorkitemID+"/claim", nil)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
@@ -181,7 +181,7 @@ func TestHITLAPI_Claim_AlreadyClaimed(t *testing.T) {
 	_ = qm.Enqueue(ctx, testWorkitemID)
 	_, _ = qm.Claim(ctx, testWorkitemID)
 
-	router := newHITLRouter(qm)
+	router := newRouter(qm)
 	req := httptest.NewRequest(http.MethodPost, "/queue/"+testWorkitemID+"/claim", nil)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
@@ -205,7 +205,7 @@ func TestHITLAPI_Decide(t *testing.T) {
 	_ = qm.Enqueue(ctx, testWorkitemID)
 	_, _ = qm.Claim(ctx, testWorkitemID)
 
-	router := newHITLRouter(qm)
+	router := newRouter(qm)
 	req := httptest.NewRequest(http.MethodPost, "/queue/"+testWorkitemID+"/decide", nil)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
@@ -234,7 +234,7 @@ func TestHITLAPI_Decide_NotClaimed(t *testing.T) {
 	ctx := context.Background()
 	_ = qm.Enqueue(ctx, testWorkitemID)
 
-	router := newHITLRouter(qm)
+	router := newRouter(qm)
 	req := httptest.NewRequest(http.MethodPost, "/queue/"+testWorkitemID+"/decide", nil)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
@@ -250,7 +250,7 @@ func TestHITLAPI_Release(t *testing.T) {
 	_ = qm.Enqueue(ctx, testWorkitemID)
 	_, _ = qm.Claim(ctx, testWorkitemID)
 
-	router := newHITLRouter(qm)
+	router := newRouter(qm)
 	req := httptest.NewRequest(http.MethodPost, "/queue/"+testWorkitemID+"/release", nil)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
@@ -273,7 +273,7 @@ func TestHITLAPI_Release_NotClaimed(t *testing.T) {
 	ctx := context.Background()
 	_ = qm.Enqueue(ctx, testWorkitemID)
 
-	router := newHITLRouter(qm)
+	router := newRouter(qm)
 	req := httptest.NewRequest(http.MethodPost, "/queue/"+testWorkitemID+"/release", nil)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
@@ -302,7 +302,7 @@ func TestHITLAPI_Decide_WithChoice(t *testing.T) {
 	}()
 
 	body, _ := json.Marshal(map[string]string{"choice": "approve"})
-	router := newHITLRouter(qm)
+	router := newRouter(qm)
 	req := httptest.NewRequest(http.MethodPost, "/queue/"+choiceID+"/decide",
 		bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")

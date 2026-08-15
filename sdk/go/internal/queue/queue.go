@@ -1,4 +1,7 @@
-package flow
+// Package queue implements the HITL federated queue mesh: the SQLite store,
+// peer discovery, scatter-gather reads, the QueuePeerService gRPC server, and
+// the REST API server used by human-in-the-loop nodes.
+package queue
 
 import (
 	"context"

@@ -1,4 +1,4 @@
-package flow
+package queue
 
 import (
 	"context"
@@ -21,16 +21,22 @@ const (
 	defaultPeerPort = "50053"
 )
 
-// QueueManagerOption configures NewQueueManager.
-type QueueManagerOption func(*queueManagerConfig)
+// TelemetryClient is the subset of the SDK Client the queue manager needs for
+// telemetry emission. The flow package's Client satisfies it.
+type TelemetryClient interface {
+	RecordTelemetry(eventType string, payload []byte) error
+}
 
-type queueManagerConfig struct {
+// Option configures NewManager.
+type Option func(*config)
+
+type config struct {
 	storagePath  string
 	shardID      string
 	queueName    string
 	serviceName  string
 	namespace    string
-	client       *Client
+	client       TelemetryClient
 	peerResolver PeerResolver
 	apiPort      string
 	peerPort     string
@@ -39,28 +45,28 @@ type queueManagerConfig struct {
 
 // WithQueueName sets the queue name for scoping queue items.
 // Defaults to FLOW_NODE_ID environment variable, then "default".
-func WithQueueName(name string) QueueManagerOption {
-	return func(c *queueManagerConfig) { c.queueName = name }
+func WithQueueName(name string) Option {
+	return func(c *config) { c.queueName = name }
 }
 
 // WithClient sets the SDK Client for telemetry emission.
-func WithClient(c *Client) QueueManagerOption {
-	return func(cfg *queueManagerConfig) { cfg.client = c }
+func WithClient(c TelemetryClient) Option {
+	return func(cfg *config) { cfg.client = c }
 }
 
 // WithCustomRoutes registers additional HTTP routes on the QueueManager's
 // REST API mux. The provided function is called after the standard HITL
 // routes are registered, so it can add node-specific endpoints (e.g. GET
 // /choices for hitl-sort) on the same server without forking the SDK.
-func WithCustomRoutes(fn func(mux *http.ServeMux)) QueueManagerOption {
-	return func(c *queueManagerConfig) { c.customRoutes = fn }
+func WithCustomRoutes(fn func(mux *http.ServeMux)) Option {
+	return func(c *config) { c.customRoutes = fn }
 }
 
-// queueManagerImpl is the concrete QueueManager wiring store + mesh + REST API.
-type queueManagerImpl struct {
+// Manager is the concrete QueueManager wiring store + mesh + REST API.
+type Manager struct {
 	store     *queueStore
 	mesh      *queueMesh
-	client    *Client
+	client    TelemetryClient
 	shardID   string
 	queueName string
 	apiPort   string
@@ -69,10 +75,10 @@ type queueManagerImpl struct {
 	decisions sync.Map // workitemID → chan string
 }
 
-// NewQueueManager creates a new QueueManager. Call Start() to initialise
+// NewManager creates a new QueueManager. Call Start() to initialise
 // the SQLite store, mesh discovery, and HTTP server.
-func NewQueueManager(opts ...QueueManagerOption) (*queueManagerImpl, error) {
-	cfg := &queueManagerConfig{
+func NewManager(opts ...Option) (*Manager, error) {
+	cfg := &config{
 		apiPort:  defaultAPIPort,
 		peerPort: defaultPeerPort,
 	}
@@ -107,7 +113,7 @@ func NewQueueManager(opts ...QueueManagerOption) (*queueManagerImpl, error) {
 		cfg.queueName = "default"
 	}
 
-	return &queueManagerImpl{
+	return &Manager{
 		client:    cfg.client,
 		shardID:   cfg.shardID,
 		queueName: cfg.queueName,
@@ -116,9 +122,9 @@ func NewQueueManager(opts ...QueueManagerOption) (*queueManagerImpl, error) {
 }
 
 // Start initialises the SQLite store, mesh discovery, and HTTP server.
-func (qm *queueManagerImpl) Start(ctx context.Context, opts ...QueueManagerOption) error {
+func (qm *Manager) Start(ctx context.Context, opts ...Option) error {
 	// Re-apply options to pick up any late configuration.
-	cfg := &queueManagerConfig{
+	cfg := &config{
 		apiPort:  qm.apiPort,
 		peerPort: defaultPeerPort,
 	}
@@ -127,7 +133,7 @@ func (qm *queueManagerImpl) Start(ctx context.Context, opts ...QueueManagerOptio
 	}
 	// Apply the effective API port so a Start-time override (e.g. "0" for
 	// an ephemeral test port) actually takes effect instead of silently
-	// falling back to the NewQueueManager-time default.
+	// falling back to the NewManager-time default.
 	qm.apiPort = cfg.apiPort
 
 	// Determine storage path.
@@ -203,7 +209,7 @@ func (qm *queueManagerImpl) Start(ctx context.Context, opts ...QueueManagerOptio
 	qm.mesh.start(ctx)
 
 	// Start HTTP server.
-	mux := newHITLRouter(qm)
+	mux := newRouter(qm)
 	if cfg.customRoutes != nil {
 		cfg.customRoutes(mux)
 	}
@@ -223,7 +229,7 @@ func (qm *queueManagerImpl) Start(ctx context.Context, opts ...QueueManagerOptio
 
 // Stop gracefully shuts down the HTTP server, mesh, and store.
 // Any goroutines blocked on WaitForDecision are unblocked (returning nil).
-func (qm *queueManagerImpl) Stop() error {
+func (qm *Manager) Stop() error {
 	if qm.httpSrv != nil {
 		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -249,7 +255,7 @@ func (qm *queueManagerImpl) Stop() error {
 }
 
 // RegisterGRPC registers the QueuePeerService on the given gRPC server.
-func (qm *queueManagerImpl) RegisterGRPC(srv *grpc.Server) {
+func (qm *Manager) RegisterGRPC(srv *grpc.Server) {
 	if qm.peer != nil {
 		flowv1.RegisterQueuePeerServiceServer(srv, qm.peer)
 	}
@@ -257,7 +263,7 @@ func (qm *queueManagerImpl) RegisterGRPC(srv *grpc.Server) {
 
 // --- QueueManager interface implementation ---
 
-func (qm *queueManagerImpl) Enqueue(ctx context.Context, workitemID string) error {
+func (qm *Manager) Enqueue(ctx context.Context, workitemID string) error {
 	if err := qm.store.enqueue(ctx, workitemID); err != nil {
 		return err
 	}
@@ -272,20 +278,20 @@ func (qm *queueManagerImpl) Enqueue(ctx context.Context, workitemID string) erro
 	return nil
 }
 
-func (qm *queueManagerImpl) GetGlobalQueue(ctx context.Context, filter QueueFilter) ([]QueueItem, error) {
+func (qm *Manager) GetGlobalQueue(ctx context.Context, filter QueueFilter) ([]QueueItem, error) {
 	return qm.mesh.getGlobalQueue(ctx, filter)
 }
 
-func (qm *queueManagerImpl) GetLocalQueue(ctx context.Context, filter QueueFilter) ([]QueueItem, error) {
+func (qm *Manager) GetLocalQueue(ctx context.Context, filter QueueFilter) ([]QueueItem, error) {
 	items, _, err := qm.store.getLocal(ctx, filter)
 	return items, err
 }
 
-func (qm *queueManagerImpl) GetItem(ctx context.Context, workitemID string) (*QueueItem, error) {
+func (qm *Manager) GetItem(ctx context.Context, workitemID string) (*QueueItem, error) {
 	return qm.mesh.routeGetItem(ctx, workitemID)
 }
 
-func (qm *queueManagerImpl) Claim(ctx context.Context, workitemID string) (*QueueItem, error) {
+func (qm *Manager) Claim(ctx context.Context, workitemID string) (*QueueItem, error) {
 	item, err := qm.mesh.routeClaim(ctx, workitemID)
 	if err != nil {
 		return nil, err
@@ -301,7 +307,7 @@ func (qm *queueManagerImpl) Claim(ctx context.Context, workitemID string) (*Queu
 	return item, nil
 }
 
-func (qm *queueManagerImpl) Release(ctx context.Context, workitemID string) (*QueueItem, error) {
+func (qm *Manager) Release(ctx context.Context, workitemID string) (*QueueItem, error) {
 	// Capture claimed_at before release for telemetry.
 	existing, _ := qm.mesh.routeGetItem(ctx, workitemID)
 	item, err := qm.mesh.routeRelease(ctx, workitemID)
@@ -319,7 +325,7 @@ func (qm *queueManagerImpl) Release(ctx context.Context, workitemID string) (*Qu
 	return item, nil
 }
 
-func (qm *queueManagerImpl) Decide(ctx context.Context, workitemID, choice string) error {
+func (qm *Manager) Decide(ctx context.Context, workitemID, choice string) error {
 	// Capture enqueued_at before decide for telemetry.
 	existing, _ := qm.mesh.routeGetItem(ctx, workitemID)
 	if err := qm.mesh.routeDecide(ctx, workitemID, choice); err != nil {
@@ -343,11 +349,11 @@ func (qm *queueManagerImpl) Decide(ctx context.Context, workitemID, choice strin
 	return nil
 }
 
-func (qm *queueManagerImpl) GetPeers(_ context.Context) ([]string, error) {
+func (qm *Manager) GetPeers(_ context.Context) ([]string, error) {
 	return qm.mesh.getPeers(), nil
 }
 
-func (qm *queueManagerImpl) WaitForDecision(ctx context.Context, workitemID string) (string, error) {
+func (qm *Manager) WaitForDecision(ctx context.Context, workitemID string) (string, error) {
 	v, ok := qm.decisions.Load(workitemID)
 	if !ok {
 		return "", ErrQueueItemNotFound
@@ -364,9 +370,9 @@ func (qm *queueManagerImpl) WaitForDecision(ctx context.Context, workitemID stri
 	}
 }
 
-// emitTelemetry sends a telemetry event via the Client. Non-blocking — failures
+// emitTelemetry sends a telemetry event via the client. Non-blocking — failures
 // are logged but not propagated.
-func (qm *queueManagerImpl) emitTelemetry(ctx context.Context, event string, payload map[string]any) {
+func (qm *Manager) emitTelemetry(ctx context.Context, event string, payload map[string]any) {
 	if qm.client == nil {
 		return
 	}

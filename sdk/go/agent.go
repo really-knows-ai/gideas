@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
+
+	"github.com/foundry/flow/sdk/go/internal/provider"
 )
 
 const (
@@ -150,7 +152,7 @@ func NewAgent(client *Client, opts ...AgentOption) (*Agent, error) {
 
 	// Default to Ollama-backed infer function if none set.
 	if cfg.inferFn == nil {
-		cfg.inferFn = NewOllamaInferFunc()
+		cfg.inferFn = provider.NewOllamaInferFunc()
 	}
 
 	// Compile the JSON Schema at construction time.
