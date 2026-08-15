@@ -11,6 +11,5 @@ use (
 	./monitor
 	./operator
 	./pkg/eventbus
-	./queue
 	./sidecar
 )
