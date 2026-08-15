@@ -129,6 +129,67 @@ func (db *ladybugDB) rebuildEdgePairsLocked() error {
 // Internal helpers — file loading
 // --------------------------------------------------------------------------
 
+// jsonFileRow is the union of the entity and edge file-per-element JSON shapes
+// parsed on the re-hydration load paths. The shared loaders parse one shape;
+// each variant reads only the keys it needs.
+type jsonFileRow struct {
+	ID         string            `json:"id"`
+	Type       string            `json:"type"`
+	From       string            `json:"from"`
+	To         string            `json:"to"`
+	Properties map[string]string `json:"properties"`
+	Embedding  []float32         `json:"embedding"`
+	CreatedAt  time.Time         `json:"created_at"`
+	UpdatedAt  time.Time         `json:"updated_at"`
+}
+
+// inferPropertyNamesFromDir scans typeDir's *.json files and collects the
+// union of property names, so a schema-absent type's created table has a real
+// column for every property a file may set (SPEC R8).
+// ponytail: this inference scan deliberately discards readDir / os.ReadFile /
+// json.Unmarshal errors. Propagating them would defeat SPEC R8 inference from
+// a partially-corrupt tree — one unparseable file in a type directory would
+// abort that type's schema inference and take down re-hydration. The tolerance
+// is self-correcting: the strict load path (loadEntitiesFromDirOnConn /
+// loadEdgesFromDirOnConn) re-reads the same files and fails loudly on any
+// corrupt row, so a skipped file never results in a silently dropped element.
+// Ceiling: a skipped file's properties are absent from the inferred table, so
+// a later row that references them fails loudly at insert time (or its CREATE
+// is dropped) — never silently.
+// perFile, when non-nil, runs after each successful parse so callers can also
+// collect non-property structure (the edge variant resolves FROM/TO endpoint
+// pairs here); a perFile error propagates, since the edge variant's endpoint
+// resolution failure is a hard error.
+func (db *ladybugDB) inferPropertyNamesFromDir(
+	typeDir string, perFile func(je jsonFileRow) error,
+) (map[string]bool, error) {
+	names := make(map[string]bool)
+	if files, err := db.readDir(typeDir); err == nil {
+		for _, f := range files {
+			if f.IsDir() || !strings.HasSuffix(f.Name(), ".json") {
+				continue
+			}
+			data, err := os.ReadFile(filepath.Join(typeDir, f.Name()))
+			if err != nil {
+				continue
+			}
+			var je jsonFileRow
+			if err := json.Unmarshal(data, &je); err != nil {
+				continue
+			}
+			for k := range je.Properties {
+				names[k] = true
+			}
+			if perFile != nil {
+				if err := perFile(je); err != nil {
+					return nil, err
+				}
+			}
+		}
+	}
+	return names, nil
+}
+
 // ensureEntityLoadSchema makes the entity table exist before entities are
 // loaded from files. When the type is absent from the applied schema (including
 // an empty applied schema), the table is inferred on demand from the directory
@@ -152,36 +213,9 @@ func (db *ladybugDB) ensureEntityLoadSchema(
 		// file-per-element representation stores property values as strings.
 		// If a future representation carries non-string values, the column
 		// type inference here would need corresponding handling.
-		names := make(map[string]bool)
-		// ponytail: this inference scan deliberately discards readDir /
-		// os.ReadFile / json.Unmarshal errors. Propagating them would defeat
-		// SPEC R8 inference from a partially-corrupt tree — one unparseable
-		// file in a type directory would abort that type's schema inference
-		// and take down re-hydration. The tolerance is self-correcting: the
-		// strict load path (loadEntitiesFromDirOnConn) re-reads the same files
-		// and fails loudly on any corrupt row, so a skipped file never results
-		// in a silently dropped entity. Ceiling: a skipped file's properties
-		// are absent from the inferred table, so a later row that references
-		// them fails loudly at insert time — never silently.
-		if files, err := db.readDir(typeDir); err == nil {
-			for _, f := range files {
-				if f.IsDir() || !strings.HasSuffix(f.Name(), ".json") {
-					continue
-				}
-				data, err := os.ReadFile(filepath.Join(typeDir, f.Name()))
-				if err != nil {
-					continue
-				}
-				var je struct {
-					Properties map[string]string `json:"properties"`
-				}
-				if err := json.Unmarshal(data, &je); err != nil {
-					continue
-				}
-				for k := range je.Properties {
-					names[k] = true
-				}
-			}
+		names, err := db.inferPropertyNamesFromDir(typeDir, nil)
+		if err != nil {
+			return err
 		}
 		for name := range names {
 			// Store the proto type ("string"), not the catalog type (colTypeString):
@@ -211,9 +245,10 @@ func (db *ladybugDB) ensureEntityLoadSchema(
 // ensureEdgeLoadSchema makes the rel table exist before edges are loaded from
 // files. When the type is absent from the applied schema (including an empty
 // applied schema), the table is inferred on demand from the directory structure
-// (SPEC R8), mirroring
-// ensureEntityLoadSchema: the union of property names across the type's JSON
-// files becomes real columns so a property-bearing file's
+// (SPEC R8), sharing the property-union inference scan with
+// ensureEntityLoadSchema via inferPropertyNamesFromDir: the union of property
+// names across the type's JSON files becomes real columns so a
+// property-bearing file's
 // `CREATE (a)-[:T {col: $v}]->(b)` does not target a non-existent column. The
 // FROM/TO endpoint pairs are inferred by resolving each edge file's from/to
 // entity IDs to their node labels — entities are loaded before edges on both
@@ -233,49 +268,24 @@ func (db *ladybugDB) ensureEdgeLoadSchema(
 		// inference.
 		return nil
 	}
-	names := make(map[string]bool)
 	pairs := make(map[string]fromToPair) // "from|to" -> pair
-	// ponytail: same deliberate error-tolerance as ensureEntityLoadSchema's
-	// inference scan — readDir / os.ReadFile / json.Unmarshal errors are
-	// skipped so SPEC R8 inference survives a partially-corrupt tree, while
-	// the strict load path (loadEdgesFromDirOnConn) re-reads the same files
-	// and fails loudly, so no row is silently dropped. Ceiling: a skipped
-	// file's properties/pairs are absent from the inferred rel table, so a
-	// later row that targets them fails loudly (or drops the CREATE) at
-	// strict-load time rather than being silently inferred.
-	if files, err := db.readDir(typeDir); err == nil {
-		for _, f := range files {
-			if f.IsDir() || !strings.HasSuffix(f.Name(), ".json") {
-				continue
-			}
-			data, err := os.ReadFile(filepath.Join(typeDir, f.Name()))
-			if err != nil {
-				continue
-			}
-			var je struct {
-				From       string            `json:"from"`
-				To         string            `json:"to"`
-				Properties map[string]string `json:"properties"`
-			}
-			if err := json.Unmarshal(data, &je); err != nil {
-				continue
-			}
-			for k := range je.Properties {
-				names[k] = true
-			}
-			if je.From == "" || je.To == "" {
-				continue
-			}
-			fromType, err := nodeLabelOnConn(conn, je.From)
-			if err != nil {
-				return fmt.Errorf("resolve edge %q from endpoint %q: %w", typeName, je.From, err)
-			}
-			toType, err := nodeLabelOnConn(conn, je.To)
-			if err != nil {
-				return fmt.Errorf("resolve edge %q to endpoint %q: %w", typeName, je.To, err)
-			}
-			pairs[fromType+"|"+toType] = fromToPair{From: fromType, To: toType}
+	names, err := db.inferPropertyNamesFromDir(typeDir, func(je jsonFileRow) error {
+		if je.From == "" || je.To == "" {
+			return nil
 		}
+		fromType, err := nodeLabelOnConn(conn, je.From)
+		if err != nil {
+			return fmt.Errorf("resolve edge %q from endpoint %q: %w", typeName, je.From, err)
+		}
+		toType, err := nodeLabelOnConn(conn, je.To)
+		if err != nil {
+			return fmt.Errorf("resolve edge %q to endpoint %q: %w", typeName, je.To, err)
+		}
+		pairs[fromType+"|"+toType] = fromToPair{From: fromType, To: toType}
+		return nil
+	})
+	if err != nil {
+		return err
 	}
 	var props []store.PropertyDef
 	for name := range names {
@@ -351,13 +361,31 @@ func (db *ladybugDB) ensureEmbeddingLoadSchema(
 	return nil
 }
 
-// loadEntitiesFromDirOnConn loads entities from JSON files onto an arbitrary
-// connection. It is the shared loader for both main re-hydration
+// fileLoader is the entity-vs-edge difference for loadDirFilesOnConn: the
+// error sentinel and message noun, the ensure-schema and endpoint-pair hooks,
+// the required-key guard, and the per-file insert (which for entities also
+// bootstraps the embedding column).
+type fileLoader struct {
+	noun     string
+	dirNoun  string
+	errDir   error
+	ensure   func(conn *lbug.Connection, typeName, typeDir string) error
+	pairs    func(conn *lbug.Connection, typeName string) ([]fromToPair, error)
+	required func(je *jsonFileRow, path string) error
+	insert   func(conn *lbug.Connection, typeName string, pairs []fromToPair, je *jsonFileRow) error
+}
+
+// loadDirFilesOnConn loads JSON files from a directory tree onto an arbitrary
+// connection, one type subdirectory at a time. It is the shared skeleton of
+// the entity and edge loaders (loadEntitiesFromDirOnConn /
+// loadEdgesFromDirOnConn), which differ only in the ensure-schema step, the
+// required-key guard, and the per-file insert; every shared guard runs here so
+// the two paths cannot diverge. Both loaders serve main re-hydration
 // (RehydrateMainFromFiles passes db.conn) and branch hydration
-// (HydrateBranchFromFiles passes br.conn); the former per-connection
-// duplicates of this function were deleted.
-func (db *ladybugDB) loadEntitiesFromDirOnConn(conn *lbug.Connection, dir string,
-	entDefs map[string]*store.EntityTypeDef) error {
+// (HydrateBranchFromFiles passes br.conn).
+func (db *ladybugDB) loadDirFilesOnConn(
+	conn *lbug.Connection, dir string, l fileLoader,
+) error {
 	info, err := os.Stat(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -366,7 +394,7 @@ func (db *ladybugDB) loadEntitiesFromDirOnConn(conn *lbug.Connection, dir string
 		return err
 	}
 	if !info.IsDir() {
-		return fmt.Errorf("%w: %q is not a directory", store.ErrInvalidEntityDir, dir)
+		return fmt.Errorf("%w: %q is not a directory", l.errDir, dir)
 	}
 	entries, err := db.readDir(dir)
 	if err != nil {
@@ -379,16 +407,26 @@ func (db *ladybugDB) loadEntitiesFromDirOnConn(conn *lbug.Connection, dir string
 		typeName := entry.Name()
 		// No schema-absent skip: a type directory present in the git
 		// file-per-element representation but absent from the applied schema is
-		// inferred from the directory structure by ensureEntityLoadSchema so
+		// inferred from the directory structure by the ensure-schema step so
 		// re-hydration recovers the full graph state (SPEC R8). Silently
 		// skipping committed files would drop rows on the read path.
 		typeDir := filepath.Join(dir, typeName)
-		if err := db.ensureEntityLoadSchema(conn, typeName, typeDir, entDefs); err != nil {
+		if err := l.ensure(conn, typeName, typeDir); err != nil {
 			return err
+		}
+		// The rel table's endpoint clauses (fixed at CREATE time, SPEC R2) are
+		// the labels insertEdgeOnConn's endpoint probe must accept. Entities
+		// carry no endpoint set.
+		var pairs []fromToPair
+		if l.pairs != nil {
+			pairs, err = l.pairs(conn, typeName)
+			if err != nil {
+				return err
+			}
 		}
 		files, err := db.readDir(typeDir)
 		if err != nil {
-			return fmt.Errorf("read entities dir %q: %w", typeDir, err)
+			return fmt.Errorf("read %s dir %q: %w", l.dirNoun, typeDir, err)
 		}
 		for _, f := range files {
 			if f.IsDir() || !strings.HasSuffix(f.Name(), ".json") {
@@ -396,27 +434,15 @@ func (db *ladybugDB) loadEntitiesFromDirOnConn(conn *lbug.Connection, dir string
 			}
 			data, err := os.ReadFile(filepath.Join(typeDir, f.Name()))
 			if err != nil {
-				return fmt.Errorf("read entity file %q: %w", filepath.Join(typeDir, f.Name()), err)
+				return fmt.Errorf("read %s file %q: %w", l.noun, filepath.Join(typeDir, f.Name()), err)
 			}
-			var je struct {
-				ID         string            `json:"id"`
-				Type       string            `json:"type"`
-				Properties map[string]string `json:"properties"`
-				Embedding  []float32         `json:"embedding"`
-				CreatedAt  time.Time         `json:"created_at"`
-				UpdatedAt  time.Time         `json:"updated_at"`
-			}
+			var je jsonFileRow
 			if err := json.Unmarshal(data, &je); err != nil {
-				return fmt.Errorf("%w: unparseable entity file %q: %v",
-					store.ErrInvalidEntityDir, filepath.Join(typeDir, f.Name()), err)
+				return fmt.Errorf("%w: unparseable %s file %q: %v",
+					l.errDir, l.noun, filepath.Join(typeDir, f.Name()), err)
 			}
-			if je.Type == "" {
-				return fmt.Errorf("%w: entity file %q is missing required key 'type'",
-					store.ErrInvalidEntityDir, filepath.Join(typeDir, f.Name()))
-			}
-			if je.ID == "" {
-				return fmt.Errorf("%w: entity file %q is missing required key 'id'",
-					store.ErrInvalidEntityDir, filepath.Join(typeDir, f.Name()))
+			if err := l.required(&je, filepath.Join(typeDir, f.Name())); err != nil {
+				return err
 			}
 			// The raw filename base must equal the embedded id — the sibling
 			// gitstore read path's invariant (ReadAllEntityFiles rejects a file
@@ -427,8 +453,8 @@ func (db *ladybugDB) loadEntitiesFromDirOnConn(conn *lbug.Connection, dir string
 			// silently under an id never written to that path — resurrecting a
 			// previously deleted element on re-hydration. Fail loudly instead.
 			if base := strings.TrimSuffix(f.Name(), ".json"); base != je.ID {
-				return fmt.Errorf("%w: entity file %s embedded id %s conflicts with filename",
-					store.ErrInvalidEntityDir, f.Name(), je.ID)
+				return fmt.Errorf("%w: %s file %s embedded id %s conflicts with filename",
+					l.errDir, l.noun, f.Name(), je.ID)
 			}
 			// The embedded id must be a canonical RFC4122 §3 UUID v4 string —
 			// the same gate the write path applies (validateUUID →
@@ -440,19 +466,54 @@ func (db *ladybugDB) loadEntitiesFromDirOnConn(conn *lbug.Connection, dir string
 			// spelling during re-hydration (SPEC R8) — a second row for one
 			// UUID the write path would never produce. Fail loudly instead.
 			if err := validateUUID(je.ID); err != nil {
-				return fmt.Errorf("%w: entity file %s embedded id %s is not a valid UUID v4",
-					err, filepath.Join(typeDir, f.Name()), je.ID)
+				return fmt.Errorf("%w: %s file %s embedded id %s is not a valid UUID v4",
+					err, l.noun, filepath.Join(typeDir, f.Name()), je.ID)
 			}
-			// The directory-mismatch guard runs BEFORE the embedding-bootstrap
-			// DDL: a corrupt/hand-edited file declaring a type that differs from
-			// its directory must be rejected before ensureEmbeddingLoadSchema
-			// locks a vector dimension on the directory-named table (SPEC R8
+			// The directory-mismatch guard runs BEFORE the per-file insert, so
+			// for entities it fires before the embedding-bootstrap DDL: a
+			// corrupt/hand-edited file declaring a type that differs from its
+			// directory must be rejected before ensureEmbeddingLoadSchema locks
+			// a vector dimension on the directory-named table (SPEC R8
 			// fail-loudly — never mutate schema state for a file that is about
 			// to be rejected).
 			if je.Type != typeName {
-				return fmt.Errorf("%w: entity file %q declares type %q but is stored under directory %q",
-					store.ErrInvalidEntityDir, filepath.Join(typeDir, f.Name()), je.Type, typeName)
+				return fmt.Errorf("%w: %s file %q declares type %q but is stored under directory %q",
+					l.errDir, l.noun, filepath.Join(typeDir, f.Name()), je.Type, typeName)
 			}
+			if err := l.insert(conn, typeName, pairs, &je); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// loadEntitiesFromDirOnConn loads entities from JSON files onto an arbitrary
+// connection. It is the shared loader for both main re-hydration
+// (RehydrateMainFromFiles passes db.conn) and branch hydration
+// (HydrateBranchFromFiles passes br.conn); the former per-connection
+// duplicates of this function were deleted.
+func (db *ladybugDB) loadEntitiesFromDirOnConn(conn *lbug.Connection, dir string,
+	entDefs map[string]*store.EntityTypeDef) error {
+	return db.loadDirFilesOnConn(conn, dir, fileLoader{
+		noun:    "entity",
+		dirNoun: "entities",
+		errDir:  store.ErrInvalidEntityDir,
+		ensure: func(conn *lbug.Connection, typeName, typeDir string) error {
+			return db.ensureEntityLoadSchema(conn, typeName, typeDir, entDefs)
+		},
+		required: func(je *jsonFileRow, path string) error {
+			if je.Type == "" {
+				return fmt.Errorf("%w: entity file %q is missing required key 'type'",
+					store.ErrInvalidEntityDir, path)
+			}
+			if je.ID == "" {
+				return fmt.Errorf("%w: entity file %q is missing required key 'id'",
+					store.ErrInvalidEntityDir, path)
+			}
+			return nil
+		},
+		insert: func(conn *lbug.Connection, typeName string, _ []fromToPair, je *jsonFileRow) error {
 			if len(je.Embedding) > 0 {
 				if err := db.ensureEmbeddingLoadSchema(conn, typeName, je.Embedding, entDefs); err != nil {
 					return err
@@ -470,9 +531,9 @@ func (db *ladybugDB) loadEntitiesFromDirOnConn(conn *lbug.Connection, dir string
 			if err := insertEntityOnConn(conn, typeName, entity, entDefs); err != nil {
 				return fmt.Errorf("insert entity %q: %w", je.ID, err)
 			}
-		}
-	}
-	return nil
+			return nil
+		},
+	})
 }
 
 // loadEdgesFromDirOnConn loads edges from JSON files onto an arbitrary
@@ -482,102 +543,32 @@ func (db *ladybugDB) loadEntitiesFromDirOnConn(conn *lbug.Connection, dir string
 // duplicates of this function were deleted.
 func (db *ladybugDB) loadEdgesFromDirOnConn(conn *lbug.Connection, dir string,
 	edgeDefs map[string]*store.EdgeTypeDef) error {
-	info, err := os.Stat(dir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
-	}
-	if !info.IsDir() {
-		return fmt.Errorf("%w: %q is not a directory", store.ErrInvalidEdgeDir, dir)
-	}
-	entries, err := db.readDir(dir)
-	if err != nil {
-		return err
-	}
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		typeName := entry.Name()
-		// No schema-absent skip: a type directory present in the git
-		// file-per-element representation but absent from the applied schema is
-		// inferred from the directory structure by ensureEdgeLoadSchema so
-		// re-hydration recovers the full graph state (SPEC R8). Silently
-		// skipping committed files would drop rows on the read path.
-		typeDir := filepath.Join(dir, typeName)
-		if err := db.ensureEdgeLoadSchema(conn, typeName, typeDir, edgeDefs); err != nil {
-			return err
-		}
-		// The rel table's endpoint clauses (fixed at CREATE time, SPEC R2) are
-		// the labels insertEdgeOnConn's endpoint probe must accept.
-		pairs, err := connectionPairsOnConn(conn, typeName)
-		if err != nil {
-			return fmt.Errorf("read relationship endpoints for %q: %w", typeName, err)
-		}
-		files, err := db.readDir(typeDir)
-		if err != nil {
-			return fmt.Errorf("read edges dir %q: %w", typeDir, err)
-		}
-		for _, f := range files {
-			if f.IsDir() || !strings.HasSuffix(f.Name(), ".json") {
-				continue
-			}
-			data, err := os.ReadFile(filepath.Join(typeDir, f.Name()))
+	return db.loadDirFilesOnConn(conn, dir, fileLoader{
+		noun:    "edge",
+		dirNoun: "edges",
+		errDir:  store.ErrInvalidEdgeDir,
+		ensure: func(conn *lbug.Connection, typeName, typeDir string) error {
+			return db.ensureEdgeLoadSchema(conn, typeName, typeDir, edgeDefs)
+		},
+		pairs: func(conn *lbug.Connection, typeName string) ([]fromToPair, error) {
+			pairs, err := connectionPairsOnConn(conn, typeName)
 			if err != nil {
-				return fmt.Errorf("read edge file %q: %w", filepath.Join(typeDir, f.Name()), err)
+				return nil, fmt.Errorf("read relationship endpoints for %q: %w", typeName, err)
 			}
-			var je struct {
-				ID         string            `json:"id"`
-				Type       string            `json:"type"`
-				From       string            `json:"from"`
-				To         string            `json:"to"`
-				Properties map[string]string `json:"properties"`
-				CreatedAt  time.Time         `json:"created_at"`
-				UpdatedAt  time.Time         `json:"updated_at"`
-			}
-			if err := json.Unmarshal(data, &je); err != nil {
-				return fmt.Errorf("%w: unparseable edge file %q: %v",
-					store.ErrInvalidEdgeDir, filepath.Join(typeDir, f.Name()), err)
-			}
+			return pairs, nil
+		},
+		required: func(je *jsonFileRow, path string) error {
 			if je.Type == "" || je.From == "" || je.To == "" {
 				return fmt.Errorf("%w: edge file %q is missing required keys (type, from, to)",
-					store.ErrInvalidEdgeDir, filepath.Join(typeDir, f.Name()))
+					store.ErrInvalidEdgeDir, path)
 			}
 			if je.ID == "" {
 				return fmt.Errorf("%w: edge file %q is missing required key 'id'",
-					store.ErrInvalidEdgeDir, filepath.Join(typeDir, f.Name()))
+					store.ErrInvalidEdgeDir, path)
 			}
-			// The raw filename base must equal the embedded id — the sibling
-			// gitstore read path's invariant (ReadAllEdgeFiles rejects a file
-			// whose embedded id conflicts with its filename). A well-formed
-			// file is <id>.json whose embedded id equals the filename base
-			// (writeEdgeFile); a corrupt/hand-edited file such as wrongname.json
-			// containing a canonical id would otherwise load silently under an
-			// id never written to that path — resurrecting a previously deleted
-			// element on re-hydration. Fail loudly instead.
-			if base := strings.TrimSuffix(f.Name(), ".json"); base != je.ID {
-				return fmt.Errorf("%w: edge file %s embedded id %s conflicts with filename",
-					store.ErrInvalidEdgeDir, f.Name(), je.ID)
-			}
-			// The embedded id must be a canonical RFC4122 §3 UUID v4 string —
-			// the same gate the write path applies (validateUUID →
-			// store.ErrInvalidIDFormat, crud.go) and the sibling gitstore read
-			// path enforces (ReadAllEdgeFiles rejects a non-canonical embedded
-			// id with ErrInvalidUUID). A corrupt/hand-edited file whose id is a
-			// non-canonical spelling of a valid UUID (uppercase hex, no-hyphen,
-			// braced, urn:uuid:) would otherwise load silently under that
-			// spelling during re-hydration (SPEC R8) — a second row for one
-			// UUID the write path would never produce. Fail loudly instead.
-			if err := validateUUID(je.ID); err != nil {
-				return fmt.Errorf("%w: edge file %s embedded id %s is not a valid UUID v4",
-					err, filepath.Join(typeDir, f.Name()), je.ID)
-			}
-			if je.Type != typeName {
-				return fmt.Errorf("%w: edge file %q declares type %q but is stored under directory %q",
-					store.ErrInvalidEdgeDir, filepath.Join(typeDir, f.Name()), je.Type, typeName)
-			}
+			return nil
+		},
+		insert: func(conn *lbug.Connection, typeName string, pairs []fromToPair, je *jsonFileRow) error {
 			props := je.Properties
 			if props == nil {
 				props = make(map[string]string)
@@ -591,7 +582,7 @@ func (db *ladybugDB) loadEdgesFromDirOnConn(conn *lbug.Connection, dir string,
 			if err := insertEdgeOnConn(conn, typeName, pairs, edge); err != nil {
 				return fmt.Errorf("insert edge %q: %w", je.ID, err)
 			}
-		}
-	}
-	return nil
+			return nil
+		},
+	})
 }
