@@ -72,15 +72,6 @@ func (m CreateWizardModel) SelectedEntryNode() string {
 	return ""
 }
 
-// SelectedGovernedArtefact returns the governed artefact at the current cursor position.
-// Returns empty string if the selection is out of range.
-func (m CreateWizardModel) SelectedGovernedArtefact() string {
-	if m.cursor >= 0 && m.cursor < len(m.Artefacts) {
-		return m.Artefacts[m.cursor]
-	}
-	return ""
-}
-
 // View renders the create wizard.
 func (m CreateWizardModel) View() string {
 	var b strings.Builder

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -60,6 +61,52 @@ func (m *mockSPDYForwarder) activeCount() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return len(m.forwards)
+}
+
+// blockingSPDYForwarder blocks the first ForwardPod call until released, so
+// tests can force a concurrent same-key creation overlap. A second call while
+// the first is still blocked closes secondCall — the duplicate-creation signal
+// the race test asserts must never fire.
+type blockingSPDYForwarder struct {
+	mu         sync.Mutex
+	callCount  int
+	firstEnter chan struct{} // closed when the first ForwardPod call enters
+	secondCall chan struct{} // closed if a second call arrives while the first is blocked
+	release    chan struct{} // close to unblock the first call
+	secondSeen bool          // guarded by mu: whether secondCall has been closed
+}
+
+func newBlockingSPDYForwarder() *blockingSPDYForwarder {
+	return &blockingSPDYForwarder{
+		firstEnter: make(chan struct{}),
+		secondCall: make(chan struct{}),
+		release:    make(chan struct{}),
+	}
+}
+
+func (f *blockingSPDYForwarder) ForwardPod(ctx context.Context, namespace, podName string, remotePort int) (localPort int, stop func(), err error) {
+	f.mu.Lock()
+	f.callCount++
+	count := f.callCount
+	f.mu.Unlock()
+
+	if count == 1 {
+		close(f.firstEnter)
+		<-f.release
+		return 10001, func() {}, nil
+	}
+
+	// Any later call while the first is blocked is the duplicate creation the
+	// race test asserts must not happen. Exactly one later call exists in the
+	// test, so the close is single-shot; the mutex guards against reuse.
+	f.mu.Lock()
+	if !f.secondSeen {
+		f.secondSeen = true
+		close(f.secondCall)
+	}
+	f.mu.Unlock()
+
+	return 10000 + count, func() {}, nil
 }
 
 // ─── Test Helpers ──────────────────────────────────────────────────────────
@@ -352,6 +399,78 @@ func TestCloseAll_ClearsAll(t *testing.T) {
 
 	if len(mgr.forwards) != 0 {
 		t.Errorf("expected 0 forwards after CloseAll, got %d", len(mgr.forwards))
+	}
+}
+
+// ─── T13: Concurrent same-key ForwardPod calls create a single forward ─────
+
+// TestForwardPod_ConcurrentSameKey pins the documented idempotency contract
+// (portforward.go ForwardPod: "if a forward to the same target already exists,
+// returns existing") under concurrent same-key calls. The old check-then-act
+// implementation let two goroutines both pass the empty-map check, create two
+// SPDY forwards, and orphan the first one's stop func; this test fails that
+// implementation by blocking the first creation and asserting the second call
+// never reaches the SPDY forwarder.
+func TestForwardPod_ConcurrentSameKey(t *testing.T) {
+	spdy := newBlockingSPDYForwarder()
+	mgr := NewPortForwardManager(nil, nil, spdy)
+
+	ctx := context.Background()
+	type result struct {
+		fid  string
+		port int
+		err  error
+	}
+	results := make([]result, 2)
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			fid, port, err := mgr.ForwardPod(ctx, "ns", "pod", 8080)
+			results[i] = result{fid: fid, port: port, err: err}
+		}(i)
+	}
+
+	close(start)
+	<-spdy.firstEnter // the first call is blocked inside the SPDY forwarder
+
+	// While the first creation is in flight, the second same-key call must wait
+	// on the in-flight guard instead of creating a duplicate. The second call is
+	// launched well within this window, so a genuine duplicate would signal
+	// secondCall here.
+	select {
+	case <-spdy.secondCall:
+		close(spdy.release)
+		wg.Wait()
+		t.Fatal("concurrent same-key ForwardPod calls created a duplicate SPDY forward")
+	case <-time.After(500 * time.Millisecond):
+	}
+	close(spdy.release)
+	wg.Wait()
+
+	if spdy.callCount != 1 {
+		t.Errorf("expected exactly 1 SPDY forward creation, got %d", spdy.callCount)
+	}
+	if results[0].err != nil || results[1].err != nil {
+		t.Fatalf("unexpected errors: %v, %v", results[0].err, results[1].err)
+	}
+	if results[0].fid != results[1].fid {
+		t.Errorf("concurrent same-key calls returned different forwardIDs: %q vs %q", results[0].fid, results[1].fid)
+	}
+	if results[0].port != results[1].port {
+		t.Errorf("concurrent same-key calls returned different local ports: %d vs %d", results[0].port, results[1].port)
+	}
+
+	// Close closes the single forward.
+	if err := mgr.Close(results[0].fid); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	if len(mgr.forwards) != 0 {
+		t.Errorf("expected 0 forwards after Close, got %d", len(mgr.forwards))
 	}
 }
 
