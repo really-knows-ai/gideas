@@ -19,7 +19,6 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
 )
 
 // Package GVR constants for flow.foundry.io CRDs.
@@ -584,9 +583,6 @@ func CheckConnectivity(ctx context.Context, k8s *K8sClient) error {
 	}
 	return nil
 }
-
-// Ensure apiutil is imported for scheme registration (used implicitly).
-var _ = apiutil.GVKForObject
 
 // PodReady returns true when the pod is Running, Ready=True, and has a non-empty PodIP.
 func PodReady(pod *corev1.Pod) bool {
