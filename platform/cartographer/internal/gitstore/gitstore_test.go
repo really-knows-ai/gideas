@@ -3918,11 +3918,12 @@ func TestCloneSingleAuthFnFailureCollapsesToAuthConfigMissing(t *testing.T) {
 }
 
 // TestPushRejectedSentinel guards the exported ErrPushRejected sentinel that
-// PushRemote maps from git.ErrNonFastForwardUpdate (remote.go:379). It cannot
-// be reached deterministically through a genuine push (go-git's receive-pack
-// does not wrap rejections in ErrNonFastForwardUpdate — see the ponytail at
-// remote.go:366), so this locks the sentinel's identity and its distinctness
-// from the sibling remote sentinels the service mapGitError must tell apart.
+// PushRemote maps from git.ErrNonFastForwardUpdate (mapPushError, remote.go).
+// It cannot be reached deterministically through a genuine push (go-git's
+// receive-pack does not wrap rejections in ErrNonFastForwardUpdate — see the
+// ponytail on mapPushError), so this locks the sentinel's identity and its
+// distinctness from the sibling remote sentinels the service mapGitError must
+// tell apart; the classification branch itself is pinned by TestMapPushError.
 func TestPushRejectedSentinel(t *testing.T) {
 	if ErrPushRejected == nil {
 		t.Fatal("ErrPushRejected must be a non-nil exported sentinel")
