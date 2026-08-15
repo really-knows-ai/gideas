@@ -632,31 +632,6 @@ func (s *Store) TransitionFeedback(
 	return &f, nil
 }
 
-// GetFeedbackByID returns a single feedback item by its ID.
-func (s *Store) GetFeedbackByID(ctx context.Context, feedbackID string) (*FeedbackRecord, error) {
-	var f FeedbackRecord
-	var createdStr string
-	var canWontFixInt int
-	err := s.db.QueryRowContext(ctx,
-		`SELECT id, workitem_id, artefact_id, source, can_wont_fix, state,
-		        message, version_hash, linked_ruling, created_at
-		 FROM feedback_items WHERE id = ?`, feedbackID,
-	).Scan(
-		&f.ID, &f.WorkitemID, &f.ArtefactID, &f.Source,
-		&canWontFixInt, &f.State, &f.Message, &f.VersionHash,
-		&f.LinkedRuling, &createdStr,
-	)
-	f.CanWontFix = canWontFixInt != 0
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("get feedback by id: %w", err)
-	}
-	f.CreatedAt = parseTime(createdStr)
-	return &f, nil
-}
-
 // GetFeedbackDepth returns the number of events in a feedback item's history.
 func (s *Store) GetFeedbackDepth(ctx context.Context, feedbackID string) (int32, error) {
 	var count int32
