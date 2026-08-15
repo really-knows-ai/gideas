@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"sort"
 	"strings"
 
 	lbug "github.com/LadybugDB/go-ladybug"
@@ -556,24 +555,12 @@ func (db *ladybugDB) alterNodeTable(et *flowv1.EntityType, existing *store.Entit
 	if err != nil {
 		return fmt.Errorf("read catalog columns for %q: %w", et.Name, err)
 	}
-	existingProps := make(map[string]bool, len(props))
-	for _, p := range props {
-		existingProps[p.Name] = true
-	}
-	var newStringProps []string
-	for _, p := range et.Properties {
-		if existingProps[p.Name] {
-			continue
-		}
-		ddl := fmt.Sprintf("ALTER TABLE %s ADD %s %s;", quoteID(et.Name), quoteID(p.Name), ladybugType(p.Type))
-		r, err := db.conn.Query(ddl)
-		if err != nil {
-			return fmt.Errorf("add column %q: %w", p.Name, err)
-		}
-		r.Close()
-		if ladybugType(p.Type) == colTypeString {
-			newStringProps = append(newStringProps, p.Name)
-		}
+	// The ADD-column diff runs against the live catalog columns (passed as the
+	// existing set), sharing addMissingColumnsLocked with the metadata repair
+	// path.
+	newStringProps, err := db.addMissingColumnsLocked(et.Name, props, propsFrom(et.Properties))
+	if err != nil {
+		return err
 	}
 	// Rebuild the FTS index over the full string-property set whenever the
 	// catalog's string columns grew beyond the in-memory def's record — either
@@ -625,20 +612,8 @@ func (db *ladybugDB) alterRelTable(et *flowv1.EdgeType) error {
 	if err != nil {
 		return fmt.Errorf("read catalog columns for %q: %w", et.Name, err)
 	}
-	existingProps := make(map[string]bool, len(props))
-	for _, p := range props {
-		existingProps[p.Name] = true
-	}
-	for _, p := range et.Properties {
-		if existingProps[p.Name] {
-			continue
-		}
-		ddl := fmt.Sprintf("ALTER TABLE %s ADD %s %s;", quoteID(et.Name), quoteID(p.Name), ladybugType(p.Type))
-		r, err := db.conn.Query(ddl)
-		if err != nil {
-			return fmt.Errorf("add column %q: %w", p.Name, err)
-		}
-		r.Close()
+	if _, err := db.addMissingColumnsLocked(et.Name, props, propsFrom(et.Properties)); err != nil {
+		return err
 	}
 	return nil
 }
@@ -716,31 +691,23 @@ func (db *ladybugDB) rebuildSchemaCacheLocked() error {
 // creates store NULL. An FTS index is created on all string properties for
 // full-text search.
 func (db *ladybugDB) createNodeTable(et *flowv1.EntityType) error {
-	return createNodeTableOnConn(db.conn, et.Name, propsFromEntity(et))
+	return createNodeTableOnConn(db.conn, et.Name, propsFrom(et.Properties))
 }
 
 // createRelTable translates an edge flow into a PropertyDef list and runs the
 // shared rel-table DDL (see createRelTableOnConn).
 func (db *ladybugDB) createRelTable(et *flowv1.EdgeType, pairs []fromToPair) error {
-	return createRelTableOnConn(db.conn, et.Name, propsFromEdge(et), pairs)
+	return createRelTableOnConn(db.conn, et.Name, propsFrom(et.Properties), pairs)
 }
 
-// propsFromEntity converts proto EntityType properties into store PropertyDefs.
-func propsFromEntity(et *flowv1.EntityType) []store.PropertyDef {
-	props := make([]store.PropertyDef, 0, len(et.Properties))
-	for _, p := range et.Properties {
-		props = append(props, store.PropertyDef{Name: p.Name, Type: p.Type, Required: p.Required})
+// propsFrom converts proto property definitions (an entity or edge type's
+// Properties list) into store PropertyDefs.
+func propsFrom(props []*flowv1.Property) []store.PropertyDef {
+	defs := make([]store.PropertyDef, 0, len(props))
+	for _, p := range props {
+		defs = append(defs, store.PropertyDef{Name: p.Name, Type: p.Type, Required: p.Required})
 	}
-	return props
-}
-
-// propsFromEdge converts proto EdgeType properties into store PropertyDefs.
-func propsFromEdge(et *flowv1.EdgeType) []store.PropertyDef {
-	props := make([]store.PropertyDef, 0, len(et.Properties))
-	for _, p := range et.Properties {
-		props = append(props, store.PropertyDef{Name: p.Name, Type: p.Type, Required: p.Required})
-	}
-	return props
+	return defs
 }
 
 // --------------------------------------------------------------------------
@@ -920,51 +887,44 @@ func ladybugType(protoType string) string {
 func (db *ladybugDB) EntityTypeNames() []string {
 	db.mu.Lock()
 	defer db.mu.Unlock()
-	if db.failed {
-		return nil
-	}
-
-	names := make([]string, 0, len(db.entityTypeDefs))
-	for name := range db.entityTypeDefs {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return names
+	return typeNamesLocked(db.entityTypeDefs, db.failed)
 }
 
 func (db *ladybugDB) EdgeTypeNames() []string {
 	db.mu.Lock()
 	defer db.mu.Unlock()
-	if db.failed {
+	return typeNamesLocked(db.edgeTypeDefs, db.failed)
+}
+
+// typeNamesLocked returns the sorted names of a type-def map, or nil when the
+// store is failed. Callers must hold db.mu.
+func typeNamesLocked[V any](m map[string]V, failed bool) []string {
+	if failed {
 		return nil
 	}
-
-	names := make([]string, 0, len(db.edgeTypeDefs))
-	for name := range db.edgeTypeDefs {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return names
+	return sortedKeys(m)
 }
 
 func (db *ladybugDB) EntityType(name string) (*store.EntityTypeDef, bool) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
-
-	def, ok := db.entityTypeDefs[name]
-	if db.failed || !ok {
-		return nil, false
-	}
-	return def, true
+	return lookupTypeDef(db.entityTypeDefs, name, db.failed)
 }
 
 func (db *ladybugDB) EdgeType(name string) (*store.EdgeTypeDef, bool) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
+	return lookupTypeDef(db.edgeTypeDefs, name, db.failed)
+}
 
-	def, ok := db.edgeTypeDefs[name]
-	if db.failed || !ok {
-		return nil, false
+// lookupTypeDef returns the type definition for name from the given type-def
+// map, reporting (zero, false) when the store is failed or the type is absent.
+// Callers must hold db.mu.
+func lookupTypeDef[V any](m map[string]V, name string, failed bool) (V, bool) {
+	def, ok := m[name]
+	if failed || !ok {
+		var zero V
+		return zero, false
 	}
 	return def, true
 }
