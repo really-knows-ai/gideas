@@ -154,8 +154,10 @@ func main() {
 	// empty graph while committed data exists.
 	// ponytail: re-hydration runs unconditionally (any non-empty repo), not
 	// gated on actual corruption recovery, because ladybug.Open gives no signal
-	// that recovery occurred (the delete+reopen runs internally and both the
-	// failure and recovery paths return nil error, main.go:122-134). Cost: every
+	// that recovery occurred (the delete+reopen runs internally in ladybug.Open —
+	// the section 2 Open call, via corruptionCandidates/removeCorruptedMain in
+	// ladybug.go — and both the failure and recovery paths return nil error to
+	// the caller). Cost: every
 	// pod restart DETACH-DELETEs a healthy main.lbug and rebuilds it from the
 	// git working tree — a full graph re-load on each restart, paid even when
 	// main.lbug was never corrupted. The ordering is deliberately
