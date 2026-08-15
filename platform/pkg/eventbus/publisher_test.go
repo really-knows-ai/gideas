@@ -284,6 +284,39 @@ func TestAsyncPublisher_StopIdempotent(t *testing.T) {
 	pub.Stop() // Second stop should not panic.
 }
 
+// TestAsyncPublisher_StopConcurrentCalls pins that Stop is safe under
+// concurrent callers: the stop signal must be closed exactly once (sync.Once),
+// so racing Stop() calls cannot double-close stopCh and panic with "close of
+// closed channel" (the select/default close-once idiom is a data race). All
+// callers must still block until the drain goroutine has actually exited.
+func TestAsyncPublisher_StopConcurrentCalls(t *testing.T) {
+	spy := &spyPublisher{}
+	pub := NewAsyncPublisher(spy, WithBufferSize(10))
+	// Cleanup is a second Stop() after the test's own — exercising the
+	// already-stopped path and guarding against a leaked drain goroutine if
+	// the test fails early.
+	t.Cleanup(pub.Stop)
+
+	const callers = 16
+	var wg sync.WaitGroup
+	wg.Add(callers)
+	for range callers {
+		go func() {
+			defer wg.Done()
+			pub.Stop()
+		}()
+	}
+	wg.Wait()
+
+	// The stop signal is closed exactly once — a double close would have
+	// panicked during the race above — and the drain goroutine exited.
+	select {
+	case <-pub.stopCh:
+	default:
+		t.Fatal("stopCh not closed after Stop()")
+	}
+}
+
 func TestAsyncPublisher_ZeroBufferSize_UsesDefault(t *testing.T) {
 	spy := &spyPublisher{}
 	pub := NewAsyncPublisher(spy, WithBufferSize(0))

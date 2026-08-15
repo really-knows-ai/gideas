@@ -62,6 +62,12 @@ type AsyncPublisher struct {
 	ch     chan *flowv1.PublishRequest
 	stopCh chan struct{}
 	wg     sync.WaitGroup
+	// stopOnce guards the stopCh close: Stop may be called from multiple
+	// goroutines (shutdown path plus deferred teardown racing it), so the
+	// signal must be closed exactly once — the select/default close-once
+	// idiom is a data race (two concurrent Stop calls can both close and
+	// panic with "close of closed channel").
+	stopOnce sync.Once
 
 	dropped atomic.Int64
 }
@@ -104,16 +110,13 @@ func (p *AsyncPublisher) Submit(req *flowv1.PublishRequest) {
 
 // Stop signals the drain goroutine to exit and waits for it to finish.
 // Remaining buffered events are flushed on a best-effort basis (no retry).
-// Stop is safe to call multiple times but only the first call has effect.
+// Stop is safe to call multiple times and from multiple goroutines: the stop
+// signal is closed exactly once (sync.Once), so concurrent Stop() calls cannot
+// double-close stopCh and panic with "close of closed channel" (the
+// select/default close-once idiom is a data race), and each caller still
+// blocks until the drain goroutine has exited.
 func (p *AsyncPublisher) Stop() {
-	// close is not idempotent — guard with sync.Once semantics via
-	// select on the already-closed channel.
-	select {
-	case <-p.stopCh:
-		// Already stopped.
-	default:
-		close(p.stopCh)
-	}
+	p.stopOnce.Do(func() { close(p.stopCh) })
 	p.wg.Wait()
 }
 
