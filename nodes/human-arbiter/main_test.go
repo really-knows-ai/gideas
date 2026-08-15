@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"net/http/httptest"
 	"strings"
 	"sync"
@@ -288,7 +289,7 @@ func (s *humanArbiterSpy) RecordTelemetry(
 func newSpyClient(t *testing.T, spy *humanArbiterSpy) *flow.Client {
 	t.Helper()
 
-	lis, err := nodeutil.NewLocalListener()
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("failed to create listener: %v", err)
 	}

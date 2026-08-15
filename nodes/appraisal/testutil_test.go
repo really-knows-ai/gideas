@@ -3,12 +3,12 @@ package main
 import (
 	"context"
 	"fmt"
+	"net"
 	"strings"
 	"sync"
 	"testing"
 
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
-	"github.com/foundry/flow/nodes/internal/nodeutil"
 	flow "github.com/foundry/flow/sdk/go"
 	"google.golang.org/grpc"
 )
@@ -367,7 +367,7 @@ func (s *appraisalSpy) Publish(
 func newSpyClient(t *testing.T, spy *appraisalSpy) *flow.Client {
 	t.Helper()
 
-	lis, err := nodeutil.NewLocalListener()
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("failed to create listener: %v", err)
 	}
@@ -392,7 +392,7 @@ func newSpyClient(t *testing.T, spy *appraisalSpy) *flow.Client {
 func newSpyClientWithEventBus(t *testing.T, spy *appraisalSpy) (*flow.Client, *flow.Workitem) {
 	t.Helper()
 
-	lis, err := nodeutil.NewLocalListener()
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("failed to create listener: %v", err)
 	}

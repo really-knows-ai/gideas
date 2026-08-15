@@ -3,12 +3,12 @@ package main
 import (
 	"context"
 	"fmt"
+	"net"
 	"sync"
 	"testing"
 	"time"
 
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
-	"github.com/foundry/flow/nodes/internal/nodeutil"
 	flow "github.com/foundry/flow/sdk/go"
 	"google.golang.org/grpc"
 )
@@ -271,7 +271,7 @@ func (s *hitlSpy) RecordTelemetry(
 func newSpyClient(t *testing.T, spy *hitlSpy) *flow.Client {
 	t.Helper()
 
-	lis, err := nodeutil.NewLocalListener()
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("failed to create listener: %v", err)
 	}

@@ -4,11 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"strings"
 	"testing"
 
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
-	"github.com/foundry/flow/nodes/internal/nodeutil"
 	flow "github.com/foundry/flow/sdk/go"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -32,7 +32,7 @@ func defaultConfig() *sortConfig {
 func setupSortTest(t *testing.T, spy *sortSpy) (*flow.Client, *flow.Workitem) {
 	t.Helper()
 
-	lis, err := nodeutil.NewLocalListener()
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("failed to create listener: %v", err)
 	}
