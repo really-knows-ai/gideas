@@ -14,6 +14,7 @@ use (
 	./platform/pkg/eventbus
 	./platform/pkg/metadata
 	./platform/pkg/randid
+	./platform/pkg/relay
 	./platform/sidecar
 	./sdk/go
 	./tools/flowctl

@@ -915,10 +915,15 @@ func TestCartographerProxy_ExportGraph_StreamEstablishmentUnavailable(t *testing
 // through the relay verbatim — preserving the upstream status code and message —
 // rather than being flattened to INTERNAL, so an SDK caller
 // (graph.ExportGraph("bogus"), which performs no local format validation)
-// receives the documented error code. Once at least one chunk has been
-// forwarded, the same upstream status is a genuine mid-stream failure (partial
-// data may already have been sent) and maps to INTERNAL per the SPEC error
-// table row "ExportGraph mid-stream failure".
+// receives the documented error code. The capability rejections the
+// Cartographer's ingress verifier returns before any chunk — "Invalid
+// capability metadata signature" and "Stale capability signature (anti-replay)"
+// → PERMISSION_DENIED (SPEC error-table rows applying to ExportGraph) — are
+// the same pre-stream "no data sent" case and must also surface verbatim as
+// PERMISSION_DENIED, not INTERNAL. Once at least one chunk has been forwarded,
+// the same upstream status is a genuine mid-stream failure (partial data may
+// already have been sent) and maps to INTERNAL per the SPEC error table row
+// "ExportGraph mid-stream failure".
 func TestCartographerProxy_ExportGraph_PreStreamRejectionPassesThrough(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -926,6 +931,7 @@ func TestCartographerProxy_ExportGraph_PreStreamRejectionPassesThrough(t *testin
 	}{
 		{"unsupported format", codes.InvalidArgument},
 		{"buffer allocation failure", codes.ResourceExhausted},
+		{"stale capability signature", codes.PermissionDenied},
 	} {
 		t.Run("prestream_"+tc.name, func(t *testing.T) {
 			p := &CartographerProxy{client: &mockCartographerClientExport{
@@ -956,6 +962,25 @@ func TestCartographerProxy_ExportGraph_PreStreamRejectionPassesThrough(t *testin
 		err := p.ExportGraph(&flowv1.ExportGraphRequest{Format: "json"}, stream)
 		if st := status.Code(err); st != codes.Internal {
 			t.Fatalf("expected INTERNAL for a mid-stream failure, got %v (%v)", st, err)
+		}
+		if stream.sent == 0 {
+			t.Fatal("expected at least one chunk forwarded before the mid-stream failure")
+		}
+	})
+
+	t.Run("midstream_permission_denied_is_internal", func(t *testing.T) {
+		// A PERMISSION_DENIED that arrives AFTER at least one chunk has been
+		// forwarded is a genuine mid-stream failure (partial data may already
+		// have been sent) → INTERNAL per the SPEC error-table row "ExportGraph
+		// mid-stream failure"; only the pre-stream (no-data-sent) capability
+		// rejection passes through verbatim.
+		p := &CartographerProxy{client: &mockCartographerClientExport{
+			chunkErr: status.Error(codes.PermissionDenied, "stale capability signature after one chunk"),
+		}}
+		stream := &mockExportServerStream{}
+		err := p.ExportGraph(&flowv1.ExportGraphRequest{Format: "json"}, stream)
+		if st := status.Code(err); st != codes.Internal {
+			t.Fatalf("expected INTERNAL for a mid-stream PERMISSION_DENIED, got %v (%v)", st, err)
 		}
 		if stream.sent == 0 {
 			t.Fatal("expected at least one chunk forwarded before the mid-stream failure")

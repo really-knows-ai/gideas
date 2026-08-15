@@ -4,13 +4,12 @@ package proxy
 
 import (
 	"context"
-	"errors"
-	"io"
 	"log/slog"
 	"strings"
 
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
 	flowmeta "github.com/foundry/flow/pkg/metadata"
+	"github.com/foundry/flow/pkg/relay"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -414,7 +413,9 @@ func (p *CartographerProxy) Sync(
 }
 
 // ExportGraph requires READ:graph/entity/* (SPEC R3). It relays the
-// server-streaming response chunk by chunk to the caller.
+// server-streaming response chunk by chunk to the caller via the shared
+// ExportGraph relay (pkg/relay), which applies the SPEC error-table mapping
+// identically to the operator proxy (foundrygraph_proxyserver.go).
 func (p *CartographerProxy) ExportGraph(
 	req *flowv1.ExportGraphRequest, stream grpc.ServerStreamingServer[flowv1.ExportGraphResponse],
 ) error {
@@ -425,45 +426,5 @@ func (p *CartographerProxy) ExportGraph(
 	if err != nil {
 		return err
 	}
-	var sentAny bool
-	for {
-		resp, err := upstream.Recv()
-		if errors.Is(err, io.EOF) {
-			return nil
-		}
-		if err != nil {
-			// SPEC error table: "Unsupported export format" → INVALID_ARGUMENT and
-			// "ExportGraph buffer allocation failure" → RESOURCE_EXHAUSTED are
-			// pre-stream rejections ("no data sent"): the Cartographer returns them
-			// BEFORE any chunk, so they arrive at the relay's first Recv with no
-			// chunk forwarded. An upstream transport Unavailable with no chunk
-			// forwarded is the same no-data-sent, stream-establishment condition —
-			// the Cartographer could not be reached — which the operator proxy
-			// surfaces as UNAVAILABLE ("cannot start export stream"); the lazy
-			// grpc.NewClient dial delivers it on the first Recv instead. Pass all
-			// three through verbatim — preserving the upstream status code and
-			// message — so an SDK caller (graph.ExportGraph("bogus"), which
-			// performs no local format validation) receives the documented error,
-			// matching the operator proxy. Once at least one chunk has been
-			// forwarded, any failure — a transport-level break (Unavailable), a
-			// non-conforming upstream status, or a raw error — is a genuine
-			// mid-stream failure (partial data may already have been sent), so
-			// surface it as INTERNAL rather than the raw upstream status.
-			if !sentAny {
-				if st, ok := status.FromError(err); ok {
-					if c := st.Code(); c == codes.InvalidArgument || c == codes.ResourceExhausted || c == codes.Unavailable {
-						return err
-					}
-				}
-			}
-			return status.Errorf(codes.Internal, "export stream failed: %v", err)
-		}
-		sentAny = true
-		if err := stream.Send(resp); err != nil {
-			// SPEC error table: a downstream stream break during export is the same
-			// mid-stream failure (partial data may already have been sent) → INTERNAL,
-			// matching the operator proxy and the Cartographer service handler.
-			return status.Errorf(codes.Internal, "export stream failed: %v", err)
-		}
-	}
+	return relay.ExportGraph(upstream, stream)
 }
