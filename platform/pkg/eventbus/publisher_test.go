@@ -125,36 +125,18 @@ func TestAsyncPublisher_DropOnFullBuffer(t *testing.T) {
 	pub := NewAsyncPublisher(spy, WithBufferSize(2))
 
 	// Fill the buffer: 2 in channel + 1 being drained = 3 accepted.
-	// Then more should be dropped.
+	// The remaining 7 submits hit a full buffer and are dropped.
 	for range 10 {
 		pub.Submit(makeReq("audit", "audit.fill"))
 	}
 
-	// Give the drain goroutine a moment to start consuming.
-	time.Sleep(100 * time.Millisecond)
-
-	dropped := pub.Dropped()
-	if dropped == 0 {
-		t.Fatal("expected some events to be dropped when buffer is full")
-	}
-
-	pub.Stop()
-}
-
-func TestAsyncPublisher_DropCounter(t *testing.T) {
-	spy := &spyPublisher{publishDelay: 100 * time.Millisecond}
-	pub := NewAsyncPublisher(spy, WithBufferSize(1))
-
-	// Submit enough to guarantee drops.
-	for range 20 {
-		pub.Submit(makeReq("audit", "audit.drop"))
-	}
-
-	time.Sleep(50 * time.Millisecond)
 	pub.Stop()
 
-	if pub.Dropped() == 0 {
-		t.Fatal("expected dropped events to be counted")
+	// A 50ms-per-publish drain and a 2-slot buffer admit at most 3 of the
+	// 10 submissions — the rest are dropped, so fewer than 10 events ever
+	// reach the publisher.
+	if spy.callCount() >= 10 {
+		t.Fatalf("expected events to be dropped when buffer is full, but all %d were published", spy.callCount())
 	}
 }
 
@@ -191,11 +173,6 @@ func TestAsyncPublisher_RetryOnFailure(t *testing.T) {
 	}
 
 	pub.Stop()
-
-	// Verify dropped count is 0 (retried, not dropped).
-	if pub.Dropped() != 0 {
-		t.Fatalf("expected 0 drops (retried instead), got %d", pub.Dropped())
-	}
 }
 
 func TestAsyncPublisher_StopDrainsRemaining(t *testing.T) {
@@ -210,11 +187,10 @@ func TestAsyncPublisher_StopDrainsRemaining(t *testing.T) {
 	// Stop should drain remaining events.
 	pub.Stop()
 
-	// All non-dropped events should have been published.
-	total := spy.callCount() + int(pub.Dropped())
-	if total != 10 {
-		t.Fatalf("expected published + dropped = 10, got published=%d dropped=%d",
-			spy.callCount(), pub.Dropped())
+	// The 100-slot buffer never fills for 10 submissions, so nothing is
+	// dropped: every submitted event must have been published.
+	if spy.callCount() != 10 {
+		t.Fatalf("expected all 10 events published after Stop, got %d", spy.callCount())
 	}
 }
 
@@ -262,16 +238,16 @@ func TestAsyncPublisher_ConcurrentSubmitSafety(t *testing.T) {
 	// Wait for drain.
 	deadline := time.Now().Add(5 * time.Second)
 	expected := goroutines * perGoroutine
-	for spy.callCount()+int(pub.Dropped()) < expected && time.Now().Before(deadline) {
+	for spy.callCount() < expected && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
 
 	pub.Stop()
 
-	total := spy.callCount() + int(pub.Dropped())
-	if total != expected {
-		t.Fatalf("expected total (published + dropped) = %d, got published=%d dropped=%d",
-			expected, spy.callCount(), pub.Dropped())
+	// The 1000-capacity buffer admits all 1000 submissions, so nothing is
+	// dropped: every concurrent submit must be published exactly once.
+	if spy.callCount() != expected {
+		t.Fatalf("expected %d publish calls (no drops), got %d", expected, spy.callCount())
 	}
 }
 
