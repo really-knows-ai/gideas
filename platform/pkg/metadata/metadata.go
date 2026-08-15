@@ -7,7 +7,12 @@
 // consuming module — never re-declared as bare literals in sibling modules.
 package metadata
 
-import "strings"
+import (
+	"context"
+	"strings"
+
+	"google.golang.org/grpc/metadata"
+)
 
 // gRPC metadata keys for the Sidecar-injected flow identity, capability
 // attestation, and operator proxy routing headers.
@@ -108,4 +113,23 @@ func NormalizeCapabilities(caps string) []string {
 		}
 	}
 	return entries
+}
+
+// MetadataValue reads a single value from the incoming gRPC metadata for the
+// given key, returning "" when the context carries no metadata or the key is
+// absent. It is the single shared lookup for the flow-identity metadata keys
+// above (SPEC R3 / flow identity boundary): every service reads the
+// Sidecar-injected x-flow-* values identically, so they import this helper
+// instead of re-implementing the FromIncomingContext/Get lookup per module —
+// duplicated copies of the same contract surface silently diverge.
+func MetadataValue(ctx context.Context, key string) string {
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return ""
+	}
+	vals := md.Get(key)
+	if len(vals) == 0 {
+		return ""
+	}
+	return vals[0]
 }

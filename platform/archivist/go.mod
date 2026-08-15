@@ -5,6 +5,7 @@ go 1.26.0
 require (
 	github.com/foundry/flow/gen v0.0.0
 	github.com/foundry/flow/pkg/eventbus v0.0.0-00010101000000-000000000000
+	github.com/foundry/flow/pkg/metadata v0.0.0
 	github.com/foundry/flow/pkg/randid v0.0.0
 	github.com/foundry/flow/pkg/sqldbutil v0.0.0-00010101000000-000000000000
 	github.com/foundry/flow/sdk/go v0.0.0-00010101000000-000000000000
@@ -15,7 +16,6 @@ require (
 )
 
 require (
-	github.com/foundry/flow/pkg/metadata v0.0.0 // indirect
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2 // indirect
 	golang.org/x/net v0.53.0 // indirect
 	golang.org/x/sys v0.43.0 // indirect

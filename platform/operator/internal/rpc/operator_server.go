@@ -20,7 +20,6 @@ import (
 	"github.com/foundry/flow/pkg/randid"
 	flow "github.com/foundry/flow/sdk/go"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -81,9 +80,9 @@ func (s *OperatorServer) publishAudit(ctx context.Context, eventType string, att
 		Event: &flowv1.FlowEvent{
 			EventId:       randid.NewRandomID(),
 			EventType:     eventType,
-			FlowNamespace: extractMetadataValue(ctx, flowmeta.MetadataKeyNamespace),
-			NodeId:        extractMetadataValue(ctx, flowmeta.MetadataKeyNodeID),
-			WorkitemId:    extractMetadataValue(ctx, flowmeta.MetadataKeyWorkitemID),
+			FlowNamespace: flowmeta.MetadataValue(ctx, flowmeta.MetadataKeyNamespace),
+			NodeId:        flowmeta.MetadataValue(ctx, flowmeta.MetadataKeyNodeID),
+			WorkitemId:    flowmeta.MetadataValue(ctx, flowmeta.MetadataKeyWorkitemID),
 			Timestamp:     timestamppb.Now(),
 			Attributes:    attrs,
 		},
@@ -135,13 +134,13 @@ func (s *OperatorServer) SubmitResult(ctx context.Context, req *flowv1.SubmitRes
 		return nil, status.Error(codes.InvalidArgument, "workitem_id is required (in request body or x-flow-workitem-id metadata)")
 	}
 
-	namespace := extractMetadataValue(ctx, flowmeta.MetadataKeyNamespace)
+	namespace := flowmeta.MetadataValue(ctx, flowmeta.MetadataKeyNamespace)
 
 	slog.Info("SubmitResult received",
 		"workitem_id", workitemID,
 		"namespace", namespace,
 		"action", submitActionString(req),
-		"node_id", extractMetadataValue(ctx, flowmeta.MetadataKeyNodeID),
+		"node_id", flowmeta.MetadataValue(ctx, flowmeta.MetadataKeyNodeID),
 	)
 
 	// 2. Fetch the Workitem CRD.
@@ -170,7 +169,7 @@ func (s *OperatorServer) SubmitResult(ctx context.Context, req *flowv1.SubmitRes
 	} else {
 		slog.Warn("SubmitResult with nil action, routing instruction not updated",
 			"workitem_id", workitemID,
-			"node_id", extractMetadataValue(ctx, flowmeta.MetadataKeyNodeID),
+			"node_id", flowmeta.MetadataValue(ctx, flowmeta.MetadataKeyNodeID),
 		)
 		return &flowv1.SubmitResultResponse{Accepted: true}, nil
 	}
@@ -185,7 +184,7 @@ func (s *OperatorServer) SubmitResult(ctx context.Context, req *flowv1.SubmitRes
 	// 3b. NodeGroup routing isolation: reject route_to targeting a non-entry-bound
 	// node inside a group from outside that group.
 	if workitem.Status.RoutingInstruction != nil && workitem.Status.RoutingInstruction.Type == routeToType {
-		sourceNodeID := extractMetadataValue(ctx, flowmeta.MetadataKeyNodeID)
+		sourceNodeID := flowmeta.MetadataValue(ctx, flowmeta.MetadataKeyNodeID)
 		if err := s.checkNodeGroupRouting(ctx, namespace, sourceNodeID, workitem.Status.RoutingInstruction.Target); err != nil {
 			return nil, err
 		}
@@ -236,8 +235,8 @@ func (s *OperatorServer) GetFlowTopology(ctx context.Context, _ *flowv1.GetFlowT
 	}
 
 	// 1. Extract identity from metadata.
-	namespace := extractMetadataValue(ctx, flowmeta.MetadataKeyNamespace)
-	nodeID := extractMetadataValue(ctx, flowmeta.MetadataKeyNodeID)
+	namespace := flowmeta.MetadataValue(ctx, flowmeta.MetadataKeyNamespace)
+	nodeID := flowmeta.MetadataValue(ctx, flowmeta.MetadataKeyNodeID)
 	if namespace == "" {
 		return nil, status.Error(codes.InvalidArgument, "x-flow-namespace metadata is required")
 	}
@@ -312,8 +311,8 @@ func (s *OperatorServer) GetFlowTopology(ctx context.Context, _ *flowv1.GetFlowT
 //  5. Return the workitem_id.
 func (s *OperatorServer) CreateWorkitem(ctx context.Context, req *flowv1.CreateWorkitemRequest) (*flowv1.CreateWorkitemResponse, error) {
 	// 1. Extract identity from metadata.
-	namespace := extractMetadataValue(ctx, flowmeta.MetadataKeyNamespace)
-	nodeID := extractMetadataValue(ctx, flowmeta.MetadataKeyNodeID)
+	namespace := flowmeta.MetadataValue(ctx, flowmeta.MetadataKeyNamespace)
+	nodeID := flowmeta.MetadataValue(ctx, flowmeta.MetadataKeyNodeID)
 	if namespace == "" {
 		return nil, status.Error(codes.InvalidArgument, "x-flow-namespace metadata is required")
 	}
@@ -405,8 +404,8 @@ func (s *OperatorServer) CreateChildWorkitem(ctx context.Context, _ *flowv1.Crea
 
 	// 2. Extract identity from metadata.
 	parentWorkitemID := extractWorkitemID(ctx)
-	namespace := extractMetadataValue(ctx, flowmeta.MetadataKeyNamespace)
-	nodeID := extractMetadataValue(ctx, flowmeta.MetadataKeyNodeID)
+	namespace := flowmeta.MetadataValue(ctx, flowmeta.MetadataKeyNamespace)
+	nodeID := flowmeta.MetadataValue(ctx, flowmeta.MetadataKeyNodeID)
 
 	if parentWorkitemID == "" {
 		return nil, status.Error(codes.InvalidArgument, "x-flow-workitem-id metadata is required")
@@ -491,7 +490,7 @@ func (s *OperatorServer) RouteChild(ctx context.Context, req *flowv1.RouteChildR
 		return nil, status.Error(codes.InvalidArgument, "x-flow-workitem-id metadata is required")
 	}
 
-	namespace := extractMetadataValue(ctx, flowmeta.MetadataKeyNamespace)
+	namespace := flowmeta.MetadataValue(ctx, flowmeta.MetadataKeyNamespace)
 
 	// 2. Validate child_workitem_id.
 	childID := req.GetChildWorkitemId()
@@ -548,7 +547,7 @@ func (s *OperatorServer) RouteChild(ctx context.Context, req *flowv1.RouteChildR
 			}
 
 			// NodeGroup routing isolation for child routing.
-			sourceNodeID := extractMetadataValue(ctx, flowmeta.MetadataKeyNodeID)
+			sourceNodeID := flowmeta.MetadataValue(ctx, flowmeta.MetadataKeyNodeID)
 			if err := s.checkNodeGroupRouting(ctx, namespace, sourceNodeID, target); err != nil {
 				return nil, err
 			}
@@ -592,7 +591,7 @@ func (s *OperatorServer) GetChildren(ctx context.Context, _ *flowv1.GetChildrenR
 		return nil, status.Error(codes.InvalidArgument, "x-flow-workitem-id metadata is required")
 	}
 
-	namespace := extractMetadataValue(ctx, flowmeta.MetadataKeyNamespace)
+	namespace := flowmeta.MetadataValue(ctx, flowmeta.MetadataKeyNamespace)
 
 	slog.Info("GetChildren received", "parent_workitem_id", parentWorkitemID)
 
@@ -652,7 +651,7 @@ func (s *OperatorServer) ValidateChildAccess(ctx context.Context, req *flowv1.Va
 		return nil, status.Error(codes.InvalidArgument, "child_workitem_id is required")
 	}
 
-	namespace := extractMetadataValue(ctx, flowmeta.MetadataKeyNamespace)
+	namespace := flowmeta.MetadataValue(ctx, flowmeta.MetadataKeyNamespace)
 
 	slog.Info("ValidateChildAccess received",
 		"parent_workitem_id", parentWorkitemID,
@@ -713,20 +712,7 @@ func (s *OperatorServer) ValidateChildAccess(ctx context.Context, req *flowv1.Va
 
 // extractWorkitemID reads the x-flow-workitem-id from incoming gRPC metadata.
 func extractWorkitemID(ctx context.Context) string {
-	return extractMetadataValue(ctx, flowmeta.MetadataKeyWorkitemID)
-}
-
-// extractMetadataValue reads a single value from incoming gRPC metadata.
-func extractMetadataValue(ctx context.Context, key string) string {
-	md, ok := metadata.FromIncomingContext(ctx)
-	if !ok {
-		return ""
-	}
-	vals := md.Get(key)
-	if len(vals) == 0 {
-		return ""
-	}
-	return vals[0]
+	return flowmeta.MetadataValue(ctx, flowmeta.MetadataKeyWorkitemID)
 }
 
 // crdNodeToProto converts a FoundryNode CRD to a proto FlowNode.
@@ -847,7 +833,7 @@ func (s *OperatorServer) ResumeWorkitem(ctx context.Context, req *flowv1.ResumeW
 		return nil, status.Error(codes.InvalidArgument, "workitem_id is required")
 	}
 
-	namespace := extractMetadataValue(ctx, flowmeta.MetadataKeyNamespace)
+	namespace := flowmeta.MetadataValue(ctx, flowmeta.MetadataKeyNamespace)
 
 	slog.Info("ResumeWorkitem received",
 		"workitem_id", workitemID,
@@ -901,7 +887,7 @@ func (s *OperatorServer) ListSuspendedWorkitems(ctx context.Context, req *flowv1
 		return nil, status.Error(codes.InvalidArgument, "condition_contains is required")
 	}
 
-	namespace := extractMetadataValue(ctx, flowmeta.MetadataKeyNamespace)
+	namespace := flowmeta.MetadataValue(ctx, flowmeta.MetadataKeyNamespace)
 
 	slog.Info("ListSuspendedWorkitems received",
 		"condition_contains", conditionFilter,
