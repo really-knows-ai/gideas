@@ -4,11 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"sync"
 	"testing"
 
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
-	"github.com/foundry/flow/nodes/internal/nodeutil"
 	"github.com/foundry/flow/nodes/internal/tally"
 	flow "github.com/foundry/flow/sdk/go"
 	"google.golang.org/grpc"
@@ -94,9 +94,9 @@ func newSpyGRPCServer(spy *tribunalSpy) *grpc.Server {
 func setupTribunalTest(t *testing.T, spy *tribunalSpy) (*flow.Client, *flow.Workitem) {
 	t.Helper()
 
-	lis, err := nodeutil.NewLocalListener()
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		t.Fatalf("NewLocalListener: %v", err)
+		t.Fatalf("failed to create listener: %v", err)
 	}
 
 	srv := newSpyGRPCServer(spy)

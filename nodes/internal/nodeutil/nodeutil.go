@@ -1,11 +1,9 @@
 // Package nodeutil provides shared utility functions used across node
-// implementations — context-aware sleep, exponential backoff, and ephemeral
-// TCP listeners for test infrastructure.
+// implementations — context-aware sleep and exponential backoff.
 package nodeutil
 
 import (
 	"context"
-	"net"
 	"time"
 )
 
@@ -33,10 +31,4 @@ func NextBackoff(current, max time.Duration) time.Duration {
 		return max
 	}
 	return next
-}
-
-// NewLocalListener creates a TCP listener on a random available port on
-// loopback. Used by test infrastructure to spin up ephemeral gRPC servers.
-func NewLocalListener() (net.Listener, error) {
-	return net.Listen("tcp", "127.0.0.1:0")
 }
