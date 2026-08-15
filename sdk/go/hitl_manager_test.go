@@ -268,6 +268,58 @@ func TestQueueManager_WaitForDecision_UnblocksOnDecide(t *testing.T) {
 	}
 }
 
+func TestQueueManager_DecisionSignal_NoConsumer_DoesNotHang(t *testing.T) {
+	t.Setenv("FLOW_STORAGE_PATH", ":memory:")
+	t.Setenv("FLOW_HITL_PORT", "0")
+
+	qm, err := NewQueueManager()
+	if err != nil {
+		t.Fatalf("NewQueueManager failed: %v", err)
+	}
+	if err := qm.Start(context.Background()); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	t.Cleanup(func() { _ = qm.Stop() })
+
+	ctx := context.Background()
+	if err := qm.Enqueue(ctx, "wi-noconsumer"); err != nil {
+		t.Fatalf("Enqueue failed: %v", err)
+	}
+	if _, err := qm.Claim(ctx, "wi-noconsumer"); err != nil {
+		t.Fatalf("Claim failed: %v", err)
+	}
+
+	// Fill the decision channel's capacity-1 buffer with a first signal while
+	// no WaitForDecision consumer is waiting (the slow/absent-consumer case).
+	qm.peer.onDecide("wi-noconsumer", "first")
+
+	// A second decision signal must not block even though the channel is full
+	// and no consumer is receiving. Run the signal path used by the HTTP
+	// /decide handler under a timeout.
+	signaled := make(chan error, 1)
+	go func() {
+		signaled <- qm.Decide(ctx, "wi-noconsumer", "second")
+	}()
+
+	select {
+	case err := <-signaled:
+		if err != nil {
+			t.Fatalf("Decide failed: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Decide hung — blocking send on full decision channel with no consumer")
+	}
+
+	// The buffered first signal must still be deliverable to a waiting caller.
+	choice, err := qm.WaitForDecision(ctx, "wi-noconsumer")
+	if err != nil {
+		t.Fatalf("WaitForDecision failed: %v", err)
+	}
+	if choice != "first" {
+		t.Fatalf("expected first signal to be delivered, got %q", choice)
+	}
+}
+
 func TestQueueManager_WaitForDecision_ContextCancelled(t *testing.T) {
 	qm := newTestManager(t)
 	ctx := context.Background()
