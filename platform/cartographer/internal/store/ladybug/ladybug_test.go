@@ -4484,6 +4484,91 @@ func TestBranch_CreateDrop(t *testing.T) {
 	}
 }
 
+// TestCloseBranchDB_CheckpointsDataWithoutRemovingFiles pins the store
+// primitive RefreshTransaction's branch-DB swap relies on (SPEC R9): closing
+// a file-backed branch must checkpoint its write-ahead log into the .lbug
+// file — so the file alone is complete and a crash between the swap's rename
+// and the old close cannot lose rows — must not remove the persisted branch
+// files (unlike DropBranchDB), must evict the in-memory handle so the next
+// read goes through the reopen path, and is idempotent (closing an
+// unregistered branch is a no-op). The recovery path is pinned directly:
+// after the close, moving the .lbug onto a new name without its WAL companion
+// and reading through the branch must still yield every row from the file
+// alone, via the same lazy branchLocked reopen a restarted process uses.
+func TestCloseBranchDB_CheckpointsDataWithoutRemovingFiles(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	st, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer closeStore(t, st)
+	applyTestSchema(t, st)
+
+	const txID = "11111111-1111-4111-8111-111111111111"
+	if err := st.CreateBranchDB(ctx, txID); err != nil {
+		t.Fatalf("CreateBranchDB: %v", err)
+	}
+	if err := st.ReplicateSchemaToBranch(ctx, txID); err != nil {
+		t.Fatalf("ReplicateSchemaToBranch: %v", err)
+	}
+	ent, err := st.CreateEntity(ctx, "Component", "", map[string]string{"name": "kept"}, nil, txID)
+	if err != nil {
+		t.Fatalf("CreateEntity on branch: %v", err)
+	}
+	db := st.(*ladybugDB)
+
+	if err := st.CloseBranchDB(ctx, txID); err != nil {
+		t.Fatalf("CloseBranchDB: %v", err)
+	}
+	// The close checkpoints the WAL into the .lbug but must not remove the
+	// persisted branch files, and must evict the in-memory handle so every
+	// subsequent read reopens from the file (the recovery path).
+	if _, err := os.Stat(filepath.Join(dir, "branches", txID+".lbug")); err != nil {
+		t.Fatalf("CloseBranchDB deleted the branch file: %v", err)
+	}
+	if _, ok := db.branches[txID]; ok {
+		t.Fatal("CloseBranchDB left the branch registered in memory")
+	}
+	// Idempotent: closing the now-unregistered branch is a no-op.
+	if err := st.CloseBranchDB(ctx, txID); err != nil {
+		t.Fatalf("second CloseBranchDB must be a no-op, got: %v", err)
+	}
+
+	// Simulate the refresh swap's crash window: rename the branch's files onto
+	// a new name WITHOUT the .lbug.wal WAL companion — the engine's path-based
+	// WAL recovery cannot find the orphaned <old>.wal, so only data checkpointed
+	// into the .lbug before the rename survives. The read below lazily reopens
+	// the branch from the file alone (branchLocked), the same reopen a
+	// restarted process performs.
+	const moved = "22222222-2222-4222-8222-222222222222"
+	for _, suffix := range []string{".lbug", ".schema.json", ".state.json"} {
+		src := filepath.Join(dir, "branches", txID+suffix)
+		if _, err := os.Stat(src); err != nil {
+			continue // no such file (e.g. no state record saved yet)
+		}
+		if err := os.Rename(src, filepath.Join(dir, "branches", moved+suffix)); err != nil {
+			t.Fatalf("rename branch file %s: %v", suffix, err)
+		}
+	}
+	got, err := st.GetEntity(ctx, ent.Id, moved)
+	if err != nil {
+		t.Fatalf("entity lost after close+rename (WAL not checkpointed): %v", err)
+	}
+	if got.Properties["name"] != "kept" {
+		t.Fatalf("entity content = %+v, want name=kept", got.Properties)
+	}
+
+	// Contrast with DropBranchDB, which DOES remove the persisted files: the
+	// closed branch stays recoverable from disk while a dropped branch is gone.
+	if err := st.DropBranchDB(ctx, moved); err != nil {
+		t.Fatalf("DropBranchDB: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "branches", moved+".lbug")); !os.IsNotExist(err) {
+		t.Fatalf("DropBranchDB did not remove the branch file: %v", err)
+	}
+}
+
 func TestBranchTransactionState_InMemoryLifecycle(t *testing.T) {
 	s, err := openInMemory()
 	if err != nil {
