@@ -1246,6 +1246,70 @@ func TestReconcileSingletonConflictSetsConditionAndDoesNotProvision(t *testing.T
 	}
 }
 
+// TestReconcileNoFoundryGraphDoesNotProvision pins SPEC R1's no-provisioning branch: "If
+// no FoundryGraph exists in the namespace, the Operator does not provision a Cartographer."
+// A Reconcile request naming a FoundryGraph that does not exist — the nil-found path,
+// matching how the controller's Reconcile is invoked for a nonexistent name — must return
+// without error (client.IgnoreNotFound) and never reach the create path: no Cartographer
+// PVC, Deployment, or Service is provisioned, the Cartographer is never dialed, and no
+// proxy route is registered.
+func TestReconcileNoFoundryGraphDoesNotProvision(t *testing.T) {
+	s := scheme.Scheme
+	_ = flowv1.AddToScheme(s)
+	_ = appsv1.AddToScheme(s)
+	_ = corev1.AddToScheme(s)
+	_ = rbacv1.AddToScheme(s)
+
+	// No FoundryGraph exists in the namespace.
+	fakeClient := fake.NewClientBuilder().WithScheme(s).Build()
+	dialCalled := false
+	r := &FoundryGraphReconciler{
+		Client:            fakeClient,
+		Scheme:            s,
+		OperatorNamespace: "operator-ns",
+		CartographerPort:  50051,
+		CartographerImage: "cartographer:latest",
+		ReadinessTimeout:  time.Second,
+		ProxyRoutingTable: NewProxyRoutingTable(),
+		CartographerDialer: func(ctx context.Context, endpoint string) (CartographerClient, error) {
+			dialCalled = true
+			return &mockCartographerClient{}, nil
+		},
+	}
+
+	ctx := context.Background()
+	nn := types.NamespacedName{Name: defaultGraphName, Namespace: testNS}
+	result, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: nn})
+	if err != nil {
+		t.Fatalf("expected a reconcile for a nonexistent FoundryGraph to return without error (client.IgnoreNotFound), got: %v", err)
+	}
+	if result != (ctrl.Result{}) {
+		t.Errorf("expected no requeue for a nonexistent FoundryGraph, got %+v", result)
+	}
+
+	// SPEC R1: no Cartographer is provisioned — no PVC, Deployment, or Service.
+	var pvc corev1.PersistentVolumeClaim
+	if err := fakeClient.Get(ctx, types.NamespacedName{Name: "data-" + defaultGraphName, Namespace: testNS}, &pvc); err == nil {
+		t.Error("expected no Cartographer PVC when no FoundryGraph exists")
+	}
+	var d appsv1.Deployment
+	if err := fakeClient.Get(ctx, types.NamespacedName{Name: cartographerSvcName, Namespace: testNS}, &d); err == nil {
+		t.Error("expected no Cartographer Deployment when no FoundryGraph exists")
+	}
+	var svc corev1.Service
+	if err := fakeClient.Get(ctx, types.NamespacedName{Name: cartographerSvcName, Namespace: testNS}, &svc); err == nil {
+		t.Error("expected no Cartographer Service when no FoundryGraph exists")
+	}
+	// The create path is never reached: the Cartographer is never dialed and no proxy
+	// route is registered.
+	if dialCalled {
+		t.Error("expected the Cartographer never to be dialed when no FoundryGraph exists")
+	}
+	if _, ok := r.ProxyRoutingTable.Lookup(testNS, defaultGraphName); ok {
+		t.Error("expected no proxy route registered when no FoundryGraph exists")
+	}
+}
+
 // TestReconcileSingletonOwnerPromotion pins the ownership transition (SPEC R1): after the
 // earliest-created FoundryGraph is deleted, the remaining resource becomes the namespace
 // owner and is provisioned to Ready, with the stale FoundryGraphConflict condition
