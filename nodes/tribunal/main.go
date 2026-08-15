@@ -44,66 +44,13 @@ const (
 	outcomeDemote  = "demote"
 )
 
-const (
-	defaultJurySize   int32 = 5
-	defaultJurorNode        = "juror"
-	defaultClerkNode        = "clerk-forge"
-	defaultHungOutput       = "hung"
-	defaultMaxRounds        = 3
-)
+// tribunalConfig holds the Tribunal's runtime configuration. It shares the
+// jury deliberation settings with the Arbiter via tally.JuryConfig.
+type tribunalConfig = tally.JuryConfig
 
-type tribunalConfig struct {
-	JurySize          int32  `yaml:"jurySize"`
-	JurorNode         string `yaml:"jurorNode"`
-	ConsensusStrategy string `yaml:"consensusStrategy"`
-	MaxRounds         int    `yaml:"maxRounds"`
-	ClerkNode         string `yaml:"clerkNode"`
-	HungOutput        string `yaml:"hungOutput"`
-}
-
-func (c *tribunalConfig) jurySize() int32 {
-	if c.JurySize < 1 {
-		return defaultJurySize
-	}
-	return c.JurySize
-}
-
-func (c *tribunalConfig) jurorNode() string {
-	if c.JurorNode == "" {
-		return defaultJurorNode
-	}
-	return c.JurorNode
-}
-
-func (c *tribunalConfig) maxRounds() int {
-	if c.MaxRounds < 1 {
-		return defaultMaxRounds
-	}
-	return c.MaxRounds
-}
-
-func (c *tribunalConfig) clerkNode() string {
-	if c.ClerkNode == "" {
-		return defaultClerkNode
-	}
-	return c.ClerkNode
-}
-
-func (c *tribunalConfig) hungOutput() string {
-	if c.HungOutput == "" {
-		return defaultHungOutput
-	}
-	return c.HungOutput
-}
-
-func (c *tribunalConfig) consensusStrategy() flowv1.ConsensusStrategy {
-	return nodeconfig.ParseConsensusStrategy(c.ConsensusStrategy)
-}
-
-type verdictContext struct {
-	Trigger  string `json:"trigger"`
-	Decision string `json:"decision"`
-}
+// ---------------------------------------------------------------------------
+// Entry point
+// ---------------------------------------------------------------------------
 
 func main() {
 	slog.Info("tribunal: starting")
@@ -163,74 +110,27 @@ func handleTribunal(ctx context.Context, client *flow.Client, workitem *flow.Wor
 	question, allowedOutcomes := frameHearingQuestion(flowv1.LawTier(law.GetTier()))
 
 	tallyCfg := tally.TallyConfig{
-		ConsensusStrategy: cfg.consensusStrategy(),
-		MaxRounds:         cfg.maxRounds(),
-		JurySize:          int(cfg.jurySize()),
-		JurorNode:         cfg.jurorNode(),
+		ConsensusStrategy: cfg.EffectiveConsensusStrategy(),
+		MaxRounds:         cfg.EffectiveMaxRounds(),
+		JurySize:          int(cfg.EffectiveJurySize()),
+		JurorNode:         cfg.EffectiveJurorNode(),
 	}
 
-	var priorReasoning string
-	var lastResult tally.TallyResult
-
-	for round := 1; round <= tallyCfg.MaxRounds; round++ {
-		slog.Info("tribunal: deliberation round",
-			"law_id", lawID,
-			"round", round,
-			"max_rounds", tallyCfg.MaxRounds,
-		)
-
-		tasks, buildErr := tally.BuildFanOutTasks(tallyCfg, tally.RoundInput{
-			Question:            question,
-			Evidence:            evidence,
-			AllowedOutcomes:     allowedOutcomes,
-			PriorRoundReasoning: priorReasoning,
-		})
-		if buildErr != nil {
-			return fmt.Errorf("tribunal: build fan-out tasks (round %d): %w", round, buildErr)
-		}
-
-		roundChildren, fanErr := workitem.FanOut(tasks)
-		if fanErr != nil {
-			return fmt.Errorf("tribunal: fan-out (round %d): %w", round, fanErr)
-		}
-
-		allCompleted, awaitErr := workitem.AwaitAll()
-		if awaitErr != nil {
-			return fmt.Errorf("tribunal: await children (round %d): %w", round, awaitErr)
-		}
-
-		roundCompleted := filterRoundChildren(allCompleted, roundChildren)
-		votes, collectErr := tally.CollectVotes(ctx, client, workitem.ID(), roundCompleted)
-		if collectErr != nil {
-			return fmt.Errorf("tribunal: collect votes (round %d): %w", round, collectErr)
-		}
-
-		result := tally.Tally(votes, tallyCfg.ConsensusStrategy)
-		result.Round = round
-		lastResult = result
-
-		slog.Info("tribunal: tally result",
-			"law_id", lawID,
-			"round", round,
-			"consensus", result.IsConsensus,
-			"outcome", result.Outcome,
-			"vote_count", len(votes),
-		)
-
-		if result.IsConsensus {
-			break
-		}
-		if round < tallyCfg.MaxRounds {
-			priorReasoning = tally.SummariseRound(votes)
-		}
+	lastResult, err := tally.Deliberate(ctx, client, workitem, tallyCfg, tally.RoundInput{
+		Question:        question,
+		Evidence:        evidence,
+		AllowedOutcomes: allowedOutcomes,
+	}, "tribunal", "law_id", lawID)
+	if err != nil {
+		return err
 	}
 
 	if lastResult.IsHung {
 		slog.Info("tribunal: hung after max rounds, routing to hung output",
 			"law_id", lawID,
-			"output", cfg.hungOutput(),
+			"output", cfg.EffectiveHungOutput(),
 		)
-		if err := workitem.RouteTo(cfg.hungOutput()); err != nil {
+		if err := workitem.RouteTo(cfg.EffectiveHungOutput()); err != nil {
 			return fmt.Errorf("tribunal: route to hung output: %w", err)
 		}
 		return nil
@@ -257,24 +157,6 @@ func queryRelatedLaws(
 	return resp.GetLaws(), nil
 }
 
-func filterRoundChildren(
-	allCompleted []flow.ChildWorkitemStatus,
-	roundChildren []*flow.ChildWorkitem,
-) []flow.ChildWorkitemStatus {
-	roundChildIDs := make(map[string]bool, len(roundChildren))
-	for _, ch := range roundChildren {
-		roundChildIDs[ch.ID()] = true
-	}
-
-	roundCompleted := make([]flow.ChildWorkitemStatus, 0, len(roundChildren))
-	for _, ch := range allCompleted {
-		if roundChildIDs[ch.WorkitemID] {
-			roundCompleted = append(roundCompleted, ch)
-		}
-	}
-	return roundCompleted
-}
-
 func spawnClerkChild(
 	workitem *flow.Workitem,
 	cfg *tribunalConfig,
@@ -283,7 +165,7 @@ func spawnClerkChild(
 	result tally.TallyResult,
 ) error {
 	decision := synthesizeDecision(law.PB(), question, result)
-	vctxJSON, err := json.Marshal(verdictContext{
+	vctxJSON, err := json.Marshal(tally.VerdictContext{
 		Trigger:  "hearing",
 		Decision: decision,
 	})
@@ -299,13 +181,13 @@ func spawnClerkChild(
 	if err := child.StoreArtefact(artefactVerdictContext, "", vctxJSON); err != nil {
 		return fmt.Errorf("tribunal: store verdict-context on child: %w", err)
 	}
-	if err := child.RouteTo(cfg.clerkNode()); err != nil {
+	if err := child.RouteTo(cfg.EffectiveClerkNode()); err != nil {
 		return fmt.Errorf("tribunal: route child to clerk: %w", err)
 	}
 
 	slog.Info("tribunal: consensus reached, clerk child created",
 		"child_id", child.ID(),
-		"clerk_node", cfg.clerkNode(),
+		"clerk_node", cfg.EffectiveClerkNode(),
 		"outcome", result.Outcome,
 	)
 
@@ -327,22 +209,7 @@ func synthesizeDecision(law *flowv1.Law, question string, result tally.TallyResu
 		fmt.Fprintf(&b, "The law's current goal is: %s. ", law.GetGoal())
 	}
 
-	var supporting []string
-	for _, vote := range result.Votes {
-		if vote.Outcome == result.Outcome && vote.Reasoning != "" {
-			supporting = append(supporting, vote.Reasoning)
-		}
-	}
-	if len(supporting) > 0 {
-		b.WriteString("Supporting arguments: ")
-		for i, reason := range supporting {
-			if i > 0 {
-				b.WriteString("; ")
-			}
-			b.WriteString(reason)
-		}
-		b.WriteString(".")
-	}
+	b.WriteString(tally.SupportingArguments(result))
 
 	return b.String()
 }

@@ -70,80 +70,12 @@ const (
 )
 
 // ---------------------------------------------------------------------------
-// Defaults
-// ---------------------------------------------------------------------------
-
-const (
-	defaultJurySize   int32 = 5
-	defaultJurorNode        = "juror"
-	defaultClerkNode        = "clerk-forge"
-	defaultHungOutput       = "hung"
-	defaultMaxRounds        = 3
-)
-
-// ---------------------------------------------------------------------------
 // Configuration
 // ---------------------------------------------------------------------------
 
-// arbiterConfig holds the Arbiter's runtime configuration.
-type arbiterConfig struct {
-	JurySize          int32  `yaml:"jurySize"`
-	JurorNode         string `yaml:"jurorNode"`
-	ConsensusStrategy string `yaml:"consensusStrategy"`
-	MaxRounds         int    `yaml:"maxRounds"`
-	ClerkNode         string `yaml:"clerkNode"`
-	HungOutput        string `yaml:"hungOutput"`
-}
-
-func (c *arbiterConfig) jurySize() int32 {
-	if c.JurySize < 1 {
-		return defaultJurySize
-	}
-	return c.JurySize
-}
-
-func (c *arbiterConfig) jurorNode() string {
-	if c.JurorNode == "" {
-		return defaultJurorNode
-	}
-	return c.JurorNode
-}
-
-func (c *arbiterConfig) clerkNode() string {
-	if c.ClerkNode == "" {
-		return defaultClerkNode
-	}
-	return c.ClerkNode
-}
-
-func (c *arbiterConfig) hungOutput() string {
-	if c.HungOutput == "" {
-		return defaultHungOutput
-	}
-	return c.HungOutput
-}
-
-func (c *arbiterConfig) maxRounds() int {
-	if c.MaxRounds < 1 {
-		return defaultMaxRounds
-	}
-	return c.MaxRounds
-}
-
-func (c *arbiterConfig) consensusStrategy() flowv1.ConsensusStrategy {
-	return nodeconfig.ParseConsensusStrategy(c.ConsensusStrategy)
-}
-
-// ---------------------------------------------------------------------------
-// Verdict Context (prose-only)
-// ---------------------------------------------------------------------------
-
-// verdictContext carries the Arbiter's prose decision for downstream Clerk
-// consumption. Two fields only — no structured fields.
-type verdictContext struct {
-	Trigger  string `json:"trigger"`
-	Decision string `json:"decision"`
-}
+// arbiterConfig holds the Arbiter's runtime configuration. It shares the
+// jury deliberation settings with the Tribunal via tally.JuryConfig.
+type arbiterConfig = tally.JuryConfig
 
 // ---------------------------------------------------------------------------
 // Entry point
@@ -190,22 +122,28 @@ func handleArbiter(ctx context.Context, client *flow.Client, workitem *flow.Work
 	if err != nil {
 		return fmt.Errorf("arbiter: get children: %w", err)
 	}
-	if hasCompletedChild(children) {
-		return handlePostResume(workitem, children)
+	if tally.HasCompletedChild(children) {
+		return tally.HandlePostResume("arbiter", workitem, children,
+			func(*flow.ChildWorkitemStatus) error {
+				slog.Info("arbiter: clerk child cancelled, propagating cancellation")
+				if err := workitem.Complete(flow.WithReason(
+					flowv1.CompletionReason_COMPLETION_REASON_CANCELLED,
+				)); err != nil {
+					return fmt.Errorf("arbiter: complete with cancelled: %w", err)
+				}
+				return nil
+			},
+			func(*flow.ChildWorkitemStatus) error {
+				slog.Info("arbiter: clerk child succeeded, completing")
+				if err := workitem.Complete(); err != nil {
+					return fmt.Errorf("arbiter: complete (post-resume): %w", err)
+				}
+				return nil
+			},
+		)
 	}
 
 	return handleFirstInvocation(ctx, client, workitem, cfg)
-}
-
-// hasCompletedChild returns true if at least one child is in the Completed
-// phase, indicating this is a post-resume invocation.
-func hasCompletedChild(children []flow.ChildWorkitemStatus) bool {
-	for _, ch := range children {
-		if ch.Phase == flow.PhaseCompleted {
-			return true
-		}
-	}
-	return false
 }
 
 // ---------------------------------------------------------------------------
@@ -232,83 +170,19 @@ func handleFirstInvocation(ctx context.Context, client *flow.Client,
 
 	// ── Step 3: Deliberation loop ───────────────────────────────────
 	tallyCfg := tally.TallyConfig{
-		ConsensusStrategy: cfg.consensusStrategy(),
-		MaxRounds:         cfg.maxRounds(),
-		JurySize:          int(cfg.jurySize()),
-		JurorNode:         cfg.jurorNode(),
+		ConsensusStrategy: cfg.EffectiveConsensusStrategy(),
+		MaxRounds:         cfg.EffectiveMaxRounds(),
+		JurySize:          int(cfg.EffectiveJurySize()),
+		JurorNode:         cfg.EffectiveJurorNode(),
 	}
 
-	var priorReasoning string
-	var lastResult tally.TallyResult
-
-	for round := 1; round <= tallyCfg.MaxRounds; round++ {
-		slog.Info("arbiter: deliberation round",
-			"round", round,
-			"max_rounds", tallyCfg.MaxRounds,
-		)
-
-		// Build fan-out tasks.
-		input := tally.RoundInput{
-			Question:            question,
-			Evidence:            evidence,
-			AllowedOutcomes:     allowedOutcomes,
-			PriorRoundReasoning: priorReasoning,
-		}
-		tasks, buildErr := tally.BuildFanOutTasks(tallyCfg, input)
-		if buildErr != nil {
-			return fmt.Errorf("arbiter: build fan-out tasks (round %d): %w", round, buildErr)
-		}
-
-		// Fan out to jurors.
-		roundChildren, fanErr := workitem.FanOut(tasks)
-		if fanErr != nil {
-			return fmt.Errorf("arbiter: fan-out (round %d): %w", round, fanErr)
-		}
-
-		// Await all children (returns all children, including prior rounds).
-		allCompleted, awaitErr := workitem.AwaitAll()
-		if awaitErr != nil {
-			return fmt.Errorf("arbiter: await children (round %d): %w", round, awaitErr)
-		}
-
-		// Filter to only this round's children for vote collection.
-		roundChildIDs := make(map[string]bool, len(roundChildren))
-		for _, ch := range roundChildren {
-			roundChildIDs[ch.ID()] = true
-		}
-		roundCompleted := make([]flow.ChildWorkitemStatus, 0, len(roundChildren))
-		for _, ch := range allCompleted {
-			if roundChildIDs[ch.WorkitemID] {
-				roundCompleted = append(roundCompleted, ch)
-			}
-		}
-
-		// Collect votes from this round's children only.
-		votes, collectErr := tally.CollectVotes(ctx, client, workitem.ID(), roundCompleted)
-		if collectErr != nil {
-			return fmt.Errorf("arbiter: collect votes (round %d): %w", round, collectErr)
-		}
-
-		// Tally votes.
-		result := tally.Tally(votes, tallyCfg.ConsensusStrategy)
-		result.Round = round
-		lastResult = result
-
-		slog.Info("arbiter: tally result",
-			"round", round,
-			"consensus", result.IsConsensus,
-			"outcome", result.Outcome,
-			"vote_count", len(votes),
-		)
-
-		if result.IsConsensus {
-			break
-		}
-
-		// Hung this round — build prior-round reasoning for retry.
-		if round < tallyCfg.MaxRounds {
-			priorReasoning = tally.SummariseRound(votes)
-		}
+	lastResult, err := tally.Deliberate(ctx, client, workitem, tallyCfg, tally.RoundInput{
+		Question:        question,
+		Evidence:        evidence,
+		AllowedOutcomes: allowedOutcomes,
+	}, "arbiter")
+	if err != nil {
+		return err
 	}
 
 	// ── Step 4: Post-loop outcomes ──────────────────────────────────
@@ -324,7 +198,7 @@ func handleDeliberationOutcome(
 	// Hung — max rounds exhausted with no consensus.
 	if result.IsHung {
 		slog.Info("arbiter: hung after max rounds, routing to hung output")
-		if err := workitem.RouteTo(cfg.hungOutput()); err != nil {
+		if err := workitem.RouteTo(cfg.EffectiveHungOutput()); err != nil {
 			return fmt.Errorf("arbiter: route to hung: %w", err)
 		}
 		return nil
@@ -353,7 +227,7 @@ func spawnClerkAndSuspend(
 	// Synthesize prose decision from jury reasoning.
 	decision := synthesizeDecision(result)
 
-	vctx := verdictContext{
+	vctx := tally.VerdictContext{
 		Trigger:  "deadlock-resolution",
 		Decision: decision,
 	}
@@ -374,13 +248,13 @@ func spawnClerkAndSuspend(
 	}
 
 	// Route child to clerk node.
-	if err := child.RouteTo(cfg.clerkNode()); err != nil {
+	if err := child.RouteTo(cfg.EffectiveClerkNode()); err != nil {
 		return fmt.Errorf("arbiter: route child to clerk: %w", err)
 	}
 
 	slog.Info("arbiter: clerk child created, suspending",
 		"child_id", child.ID(),
-		"clerk_node", cfg.clerkNode(),
+		"clerk_node", cfg.EffectiveClerkNode(),
 	)
 
 	// Suspend until clerk child completes.
@@ -400,71 +274,7 @@ func synthesizeDecision(result tally.TallyResult) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "The jury reached consensus for %q after %d round(s). ", result.Outcome, result.Round)
 
-	// Collect reasoning from jurors who voted for the winning outcome.
-	var supporting []string
-	for _, v := range result.Votes {
-		if v.Outcome == result.Outcome && v.Reasoning != "" {
-			supporting = append(supporting, v.Reasoning)
-		}
-	}
-
-	if len(supporting) > 0 {
-		b.WriteString("Supporting arguments: ")
-		for i, reason := range supporting {
-			if i > 0 {
-				b.WriteString("; ")
-			}
-			b.WriteString(reason)
-		}
-		b.WriteString(".")
-	}
+	b.WriteString(tally.SupportingArguments(result))
 
 	return b.String()
-}
-
-// ---------------------------------------------------------------------------
-// Post-resume — check Clerk child outcome
-// ---------------------------------------------------------------------------
-
-// handlePostResume runs after the Operator re-dispatches the Arbiter because
-// the suspend condition was met (clerk child completed). It checks the
-// child's CompletionReason and completes accordingly.
-func handlePostResume(
-	workitem *flow.Workitem,
-	children []flow.ChildWorkitemStatus,
-) error {
-	// Find the first completed child.
-	var completed *flow.ChildWorkitemStatus
-	for i := range children {
-		if children[i].Phase == flow.PhaseCompleted {
-			completed = &children[i]
-			break
-		}
-	}
-
-	if completed == nil {
-		return fmt.Errorf("arbiter: post-resume but no completed child found")
-	}
-
-	slog.Info("arbiter: post-resume",
-		"child_id", completed.WorkitemID,
-		"completion_reason", completed.CompletionReason,
-	)
-
-	if completed.CompletionReason == flowv1.CompletionReason_COMPLETION_REASON_CANCELLED.String() {
-		slog.Info("arbiter: clerk child cancelled, propagating cancellation")
-		if err := workitem.Complete(flow.WithReason(
-			flowv1.CompletionReason_COMPLETION_REASON_CANCELLED,
-		)); err != nil {
-			return fmt.Errorf("arbiter: complete with cancelled: %w", err)
-		}
-		return nil
-	}
-
-	// Success — clerk completed normally.
-	slog.Info("arbiter: clerk child succeeded, completing")
-	if err := workitem.Complete(); err != nil {
-		return fmt.Errorf("arbiter: complete (post-resume): %w", err)
-	}
-	return nil
 }

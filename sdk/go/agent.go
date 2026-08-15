@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"maps"
 	"strings"
+	"sync"
 	"text/template"
 	"time"
 
@@ -202,8 +203,17 @@ func (a *Agent) Run(ctx context.Context, templateData any) ([]byte, error) {
 
 	// 2. Start managed heartbeat loop.
 	hbCtx, hbCancel := context.WithCancel(ctx)
-	defer hbCancel()
-	go a.heartbeatLoop(hbCtx)
+	var hbWG sync.WaitGroup
+	hbWG.Go(func() {
+		a.heartbeatLoop(hbCtx)
+	})
+	// Cancel and wait for the loop to exit before returning so no heartbeat
+	// lands after Run returns (a tick in flight at cancel time must finish
+	// before the caller observes Run's completion).
+	defer func() {
+		hbCancel()
+		hbWG.Wait()
+	}()
 
 	// 3. Execute the provider's inference logic, retrying only invalid content.
 	queryPrompt := queryBuf.Bytes()

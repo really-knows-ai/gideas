@@ -407,7 +407,7 @@ func assertRoutedTo(t *testing.T, spy *arbiterSpy, expected string) {
 
 // clerkChildVerdictContext extracts and unmarshals the verdict-context
 // artefact stored on the clerk child.
-func clerkChildVerdictContext(t *testing.T, spy *arbiterSpy) verdictContext {
+func clerkChildVerdictContext(t *testing.T, spy *arbiterSpy) tally.VerdictContext {
 	t.Helper()
 
 	// Find the clerk child (the last created child after juror children).
@@ -421,7 +421,7 @@ func clerkChildVerdictContext(t *testing.T, spy *arbiterSpy) verdictContext {
 	if !ok {
 		t.Fatalf("verdict-context not stored on clerk child %s", clerkChildID)
 	}
-	var vctx verdictContext
+	var vctx tally.VerdictContext
 	if err := json.Unmarshal(raw, &vctx); err != nil {
 		t.Fatalf("unmarshal verdict-context: %v", err)
 	}

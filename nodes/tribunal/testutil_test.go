@@ -337,7 +337,7 @@ func assertRoutedTo(t *testing.T, spy *tribunalSpy, output string) {
 	}
 }
 
-func clerkChildVerdictContext(t *testing.T, spy *tribunalSpy) (verdictContext, string) {
+func clerkChildVerdictContext(t *testing.T, spy *tribunalSpy) (tally.VerdictContext, string) {
 	t.Helper()
 
 	if len(spy.CreatedChildren) == 0 {
@@ -349,7 +349,7 @@ func clerkChildVerdictContext(t *testing.T, spy *tribunalSpy) (verdictContext, s
 		t.Fatalf("verdict-context not stored on child %s", childID)
 	}
 
-	var vctx verdictContext
+	var vctx tally.VerdictContext
 	if err := json.Unmarshal(raw, &vctx); err != nil {
 		t.Fatalf("unmarshal verdict-context: %v", err)
 	}

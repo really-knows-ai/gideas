@@ -34,12 +34,12 @@ func TestTribunal_HappyPath_ConsensusRound1_ClerkChildAndComplete(t *testing.T) 
 		t.Fatalf("expected 4 routed children, got %d", len(spy.RoutedChildren))
 	}
 	for i := range 3 {
-		if spy.RoutedChildren[i].TargetNode != defaultJurorNode {
-			t.Fatalf("juror child %d routed to %q, want %q", i, spy.RoutedChildren[i].TargetNode, defaultJurorNode)
+		if spy.RoutedChildren[i].TargetNode != tally.DefaultJurorNode {
+			t.Fatalf("juror child %d routed to %q, want %q", i, spy.RoutedChildren[i].TargetNode, tally.DefaultJurorNode)
 		}
 	}
-	if spy.RoutedChildren[3].TargetNode != defaultClerkNode {
-		t.Fatalf("clerk child routed to %q, want %q", spy.RoutedChildren[3].TargetNode, defaultClerkNode)
+	if spy.RoutedChildren[3].TargetNode != tally.DefaultClerkNode {
+		t.Fatalf("clerk child routed to %q, want %q", spy.RoutedChildren[3].TargetNode, tally.DefaultClerkNode)
 	}
 
 	assertCompleted(t, spy)
@@ -75,7 +75,7 @@ func TestTribunal_HungAfterMaxRounds_RoutesToHung(t *testing.T) {
 	spy.mu.Lock()
 	defer spy.mu.Unlock()
 
-	assertRoutedTo(t, spy, defaultHungOutput)
+	assertRoutedTo(t, spy, tally.DefaultHungOutput)
 	if len(spy.CompletedReasons) != 0 {
 		t.Fatalf("unexpected completions: %v", spy.CompletedReasons)
 	}
@@ -334,7 +334,7 @@ func TestTribunal_ConsensusStrategies(t *testing.T) {
 			defer spy.mu.Unlock()
 
 			if tt.wantRoute {
-				assertRoutedTo(t, spy, defaultHungOutput)
+				assertRoutedTo(t, spy, tally.DefaultHungOutput)
 				return
 			}
 			assertCompleted(t, spy)
@@ -344,20 +344,20 @@ func TestTribunal_ConsensusStrategies(t *testing.T) {
 
 func TestTribunal_ConfigDefaultsAndCustomConfig(t *testing.T) {
 	defaults := &tribunalConfig{}
-	if defaults.jurySize() != defaultJurySize {
-		t.Fatalf("jurySize default = %d, want %d", defaults.jurySize(), defaultJurySize)
+	if defaults.EffectiveJurySize() != tally.DefaultJurySize {
+		t.Fatalf("jurySize default = %d, want %d", defaults.EffectiveJurySize(), tally.DefaultJurySize)
 	}
-	if defaults.jurorNode() != defaultJurorNode {
-		t.Fatalf("jurorNode default = %q, want %q", defaults.jurorNode(), defaultJurorNode)
+	if defaults.EffectiveJurorNode() != tally.DefaultJurorNode {
+		t.Fatalf("jurorNode default = %q, want %q", defaults.EffectiveJurorNode(), tally.DefaultJurorNode)
 	}
-	if defaults.clerkNode() != defaultClerkNode {
-		t.Fatalf("clerkNode default = %q, want %q", defaults.clerkNode(), defaultClerkNode)
+	if defaults.EffectiveClerkNode() != tally.DefaultClerkNode {
+		t.Fatalf("clerkNode default = %q, want %q", defaults.EffectiveClerkNode(), tally.DefaultClerkNode)
 	}
-	if defaults.hungOutput() != defaultHungOutput {
-		t.Fatalf("hungOutput default = %q, want %q", defaults.hungOutput(), defaultHungOutput)
+	if defaults.EffectiveHungOutput() != tally.DefaultHungOutput {
+		t.Fatalf("hungOutput default = %q, want %q", defaults.EffectiveHungOutput(), tally.DefaultHungOutput)
 	}
-	if defaults.maxRounds() != defaultMaxRounds {
-		t.Fatalf("maxRounds default = %d, want %d", defaults.maxRounds(), defaultMaxRounds)
+	if defaults.EffectiveMaxRounds() != tally.DefaultMaxRounds {
+		t.Fatalf("maxRounds default = %d, want %d", defaults.EffectiveMaxRounds(), tally.DefaultMaxRounds)
 	}
 
 	custom := &tribunalConfig{
@@ -368,13 +368,13 @@ func TestTribunal_ConfigDefaultsAndCustomConfig(t *testing.T) {
 		ClerkNode:         "clerk-special",
 		HungOutput:        "needs-human",
 	}
-	if custom.jurySize() != 7 || custom.jurorNode() != "jury-box" || custom.maxRounds() != 4 {
+	if custom.EffectiveJurySize() != 7 || custom.EffectiveJurorNode() != "jury-box" || custom.EffectiveMaxRounds() != 4 {
 		t.Fatal("custom numeric/string config not applied")
 	}
-	if custom.clerkNode() != "clerk-special" || custom.hungOutput() != "needs-human" {
+	if custom.EffectiveClerkNode() != "clerk-special" || custom.EffectiveHungOutput() != "needs-human" {
 		t.Fatal("custom routing config not applied")
 	}
-	if custom.consensusStrategy() != flowv1.ConsensusStrategy_CONSENSUS_STRATEGY_UNANIMITY {
+	if custom.EffectiveConsensusStrategy() != flowv1.ConsensusStrategy_CONSENSUS_STRATEGY_UNANIMITY {
 		t.Fatal("custom consensus strategy not parsed")
 	}
 }

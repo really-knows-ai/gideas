@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
+	"github.com/foundry/flow/nodes/internal/tally"
 	flow "github.com/foundry/flow/sdk/go"
 )
 
@@ -975,9 +976,9 @@ func TestHasCompletedChild(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := hasCompletedChild(tt.children)
+			got := tally.HasCompletedChild(tt.children)
 			if got != tt.want {
-				t.Errorf("hasCompletedChild() = %v, want %v", got, tt.want)
+				t.Errorf("HasCompletedChild() = %v, want %v", got, tt.want)
 			}
 		})
 	}
