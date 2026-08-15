@@ -44,7 +44,7 @@ service CartographerService {
 
 message ExecuteCypherRequest {
   string cypher = 1;
-  google.protobuf.Value params = 2;
+  google.protobuf.Struct params = 2;
   string transaction_id = 3;
 }
 

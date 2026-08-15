@@ -26,7 +26,7 @@ const (
 type ExecuteCypherRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Cypher        string                 `protobuf:"bytes,1,opt,name=cypher,proto3" json:"cypher,omitempty"`
-	Params        *structpb.Value        `protobuf:"bytes,2,opt,name=params,proto3" json:"params,omitempty"`
+	Params        *structpb.Struct       `protobuf:"bytes,2,opt,name=params,proto3" json:"params,omitempty"`
 	TransactionId string                 `protobuf:"bytes,3,opt,name=transaction_id,json=transactionId,proto3" json:"transaction_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -69,7 +69,7 @@ func (x *ExecuteCypherRequest) GetCypher() string {
 	return ""
 }
 
-func (x *ExecuteCypherRequest) GetParams() *structpb.Value {
+func (x *ExecuteCypherRequest) GetParams() *structpb.Struct {
 	if x != nil {
 		return x.Params
 	}
@@ -2716,10 +2716,10 @@ var File_flow_v1_cartographer_proto protoreflect.FileDescriptor
 
 const file_flow_v1_cartographer_proto_rawDesc = "" +
 	"\n" +
-	"\x1aflow/v1/cartographer.proto\x12\aflow.v1\x1a\x1cgoogle/protobuf/struct.proto\x1a\x1egoogle/protobuf/duration.proto\"\x85\x01\n" +
+	"\x1aflow/v1/cartographer.proto\x12\aflow.v1\x1a\x1cgoogle/protobuf/struct.proto\x1a\x1egoogle/protobuf/duration.proto\"\x86\x01\n" +
 	"\x14ExecuteCypherRequest\x12\x16\n" +
-	"\x06cypher\x18\x01 \x01(\tR\x06cypher\x12.\n" +
-	"\x06params\x18\x02 \x01(\v2\x16.google.protobuf.ValueR\x06params\x12%\n" +
+	"\x06cypher\x18\x01 \x01(\tR\x06cypher\x12/\n" +
+	"\x06params\x18\x02 \x01(\v2\x17.google.protobuf.StructR\x06params\x12%\n" +
 	"\x0etransaction_id\x18\x03 \x01(\tR\rtransactionId\"\x1d\n" +
 	"\x03Row\x12\x16\n" +
 	"\x06values\x18\x01 \x03(\tR\x06values\"9\n" +
@@ -3053,11 +3053,11 @@ var file_flow_v1_cartographer_proto_goTypes = []any{
 	nil,                                 // 57: flow.v1.DeleteEdgeResponse.PropertiesEntry
 	nil,                                 // 58: flow.v1.DiffEntry.PropertiesEntry
 	nil,                                 // 59: flow.v1.Entity.PropertiesEntry
-	(*structpb.Value)(nil),              // 60: google.protobuf.Value
+	(*structpb.Struct)(nil),             // 60: google.protobuf.Struct
 	(*durationpb.Duration)(nil),         // 61: google.protobuf.Duration
 }
 var file_flow_v1_cartographer_proto_depIdxs = []int32{
-	60, // 0: flow.v1.ExecuteCypherRequest.params:type_name -> google.protobuf.Value
+	60, // 0: flow.v1.ExecuteCypherRequest.params:type_name -> google.protobuf.Struct
 	1,  // 1: flow.v1.ExecuteCypherResponse.rows:type_name -> flow.v1.Row
 	5,  // 2: flow.v1.SearchNeighborsResponse.results:type_name -> flow.v1.SearchNeighborResult
 	49, // 3: flow.v1.SearchNeighborResult.properties:type_name -> flow.v1.SearchNeighborResult.PropertiesEntry
