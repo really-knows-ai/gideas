@@ -1005,10 +1005,12 @@ func TestTx_Refresh_ConflictAborted(t *testing.T) {
 // returns the ignorable ErrTransactionCommitted instead of reaching the wire.
 func TestTx_Commit(t *testing.T) {
 	var capturedTxID string
+	var capturedAck bool
 	var rollbackCalled bool
 	mock := &mockCartographerClient{
 		commitTx: func(ctx context.Context, req *flowv1.CommitTransactionRequest) (*flowv1.CommitTransactionResponse, error) {
 			capturedTxID = req.GetTransactionId()
+			capturedAck = req.GetAck()
 			return &flowv1.CommitTransactionResponse{}, nil
 		},
 		rollbackTx: func(
@@ -1026,6 +1028,9 @@ func TestTx_Commit(t *testing.T) {
 	if capturedTxID != embassyTestTxID {
 		t.Errorf("expected tx ID %s on Commit, got %q", embassyTestTxID, capturedTxID)
 	}
+	if capturedAck {
+		t.Error("expected ack=false on the wire for a plain Commit (push is asynchronous, SPEC R10)")
+	}
 	if err := tx.Commit(); err != ErrTransactionCommitted {
 		t.Errorf("expected ErrTransactionCommitted on a second Commit, got %v", err)
 	}
@@ -1037,6 +1042,33 @@ func TestTx_Commit(t *testing.T) {
 	}
 	if rollbackCalled {
 		t.Error("expected no Rollback wire call after a successful Commit")
+	}
+}
+
+// TestTx_Commit_WithAck pins the SPEC R10 commit(WithAck()) blocking-push
+// mode: the ack flag reaches the wire so the Cartographer wakes the sync
+// worker and blocks until the push completes (a plain Commit leaves it false —
+// see TestTx_Commit).
+func TestTx_Commit_WithAck(t *testing.T) {
+	var capturedTxID string
+	var capturedAck bool
+	mock := &mockCartographerClient{
+		commitTx: func(ctx context.Context, req *flowv1.CommitTransactionRequest) (*flowv1.CommitTransactionResponse, error) {
+			capturedTxID = req.GetTransactionId()
+			capturedAck = req.GetAck()
+			return &flowv1.CommitTransactionResponse{}, nil
+		},
+	}
+	tx := newMockTx(mock)
+
+	if err := tx.Commit(WithAck()); err != nil {
+		t.Fatalf("Commit(WithAck) returned error: %v", err)
+	}
+	if capturedTxID != embassyTestTxID {
+		t.Errorf("expected tx ID %s on Commit, got %q", embassyTestTxID, capturedTxID)
+	}
+	if !capturedAck {
+		t.Error("expected ack=true on the wire for Commit(WithAck())")
 	}
 }
 
@@ -1068,7 +1100,9 @@ func TestTx_Rollback(t *testing.T) {
 
 // TestTx_ExtendTimeout pins tx.ExtendTimeout's wire mapping: the transaction
 // ID and the requested duration reach the wire (SPEC R9 — duration resets the
-// expiry timer).
+// expiry timer), and the response's applied_timeout (the value the server
+// granted, SPEC:237-246) is surfaced on the handle via AppliedTimeout rather
+// than discarded.
 func TestTx_ExtendTimeout(t *testing.T) {
 	var capturedTxID string
 	var capturedDuration time.Duration
@@ -1089,6 +1123,9 @@ func TestTx_ExtendTimeout(t *testing.T) {
 	}
 	if capturedDuration != 24*time.Hour {
 		t.Errorf("expected the requested 24h duration on the wire, got %v", capturedDuration)
+	}
+	if got := tx.AppliedTimeout(); got != 24*time.Hour {
+		t.Errorf("expected the server-granted 24h applied timeout on the handle, got %v", got)
 	}
 }
 

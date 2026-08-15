@@ -214,17 +214,21 @@ func WithPageToken(token string) ListEntitiesOption {
 type BeginTransactionOption func(*beginTransactionConfig)
 
 type beginTransactionConfig struct {
-	timeout time.Duration
+	timeout    time.Duration
+	timeoutSet bool // distinguishes WithTimeout(0) from an omitted option
 }
 
 // WithTimeout overrides the default transaction timeout for a
 // graph.BeginTransaction call (SPEC R9). The duration is passed to the wire
-// verbatim — no silent capping — and a duration exceeding the 7-day hard
-// maximum is rejected by the Cartographer with INVALID_ARGUMENT, which the
-// SDK surfaces to the caller.
+// verbatim — no silent capping and no silent default-substitution — and a
+// duration that is non-positive or exceeds the 7-day hard maximum is rejected
+// by the Cartographer with INVALID_ARGUMENT (SPEC error-table row "Invalid
+// transaction timeout duration", applying to both BeginTransaction and
+// ExtendTimeout), which the SDK surfaces to the caller.
 func WithTimeout(d time.Duration) BeginTransactionOption {
 	return func(c *beginTransactionConfig) {
 		c.timeout = d
+		c.timeoutSet = true
 	}
 }
 
@@ -278,7 +282,7 @@ func (g *Graph) BeginTransaction(opts ...BeginTransactionOption) (*Transaction, 
 	}
 
 	req := &flowv1.BeginTransactionRequest{}
-	if cfg.timeout > 0 {
+	if cfg.timeoutSet {
 		req.Timeout = durationpb.New(cfg.timeout)
 	}
 
@@ -292,11 +296,16 @@ func (g *Graph) BeginTransaction(opts ...BeginTransactionOption) (*Transaction, 
 		return nil, err
 	}
 
-	return &Transaction{
+	tx := &Transaction{
 		session:   g.session,
 		id:        resp.GetTransactionId(),
 		idTypeMap: g.idTypeMap,
-	}, nil
+	}
+	// Surface the applied timeout the server actually granted (SPEC R2: the
+	// response carries "the applied timeout (the value actually granted)"),
+	// not the value the client requested.
+	tx.appliedTimeout = resp.GetAppliedTimeout().AsDuration()
+	return tx, nil
 }
 
 // Sync wakes the background sync worker and waits for one full cycle (fetch →

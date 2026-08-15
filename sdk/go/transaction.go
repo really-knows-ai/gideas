@@ -22,14 +22,26 @@ var ErrTransactionCommitted = fmt.Errorf("flow sdk: transaction has been committ
 
 // Transaction wraps a Cartographer transaction with an isolated graph context.
 // The handle is safe to share across goroutines: the terminal/lifecycle
-// fields (rolledBack, committed) are guarded by mu.
+// fields (rolledBack, committed) and the server-granted appliedTimeout are
+// guarded by mu.
 type Transaction struct {
-	session    *session
-	id         string
-	mu         sync.Mutex // guards rolledBack, committed
-	idTypeMap  *idTypeMap
-	rolledBack bool
-	committed  bool
+	session        *session
+	id             string
+	mu             sync.Mutex // guards rolledBack, committed, appliedTimeout
+	idTypeMap      *idTypeMap
+	rolledBack     bool
+	committed      bool
+	appliedTimeout time.Duration
+}
+
+// AppliedTimeout returns the timeout the server most recently granted for the
+// transaction (SPEC R2/R9): the applied_timeout BeginTransaction or the last
+// successful ExtendTimeout surfaced on the wire, not the value the client
+// requested. Zero when the server response carried no applied_timeout.
+func (tx *Transaction) AppliedTimeout() time.Duration {
+	tx.mu.Lock()
+	defer tx.mu.Unlock()
+	return tx.appliedTimeout
 }
 
 // checkTerminal returns an error if the transaction has been rolled back or
@@ -386,16 +398,43 @@ func (tx *Transaction) Refresh() error {
 	}, "")
 }
 
+// CommitOption configures a Transaction.Commit call.
+type CommitOption func(*commitConfig)
+
+type commitConfig struct {
+	ack bool
+}
+
+// WithAck makes Commit block until the background sync worker has pushed the
+// merged commit to the remote (SPEC R10 commit(WithAck())): the wire carries
+// ack=true and the Cartographer wakes the worker and waits for one full sync
+// cycle before returning. Without WithAck, Commit returns immediately and the
+// worker picks the push up on its next timer cycle.
+func WithAck() CommitOption {
+	return func(c *commitConfig) {
+		c.ack = true
+	}
+}
+
 // Commit commits the transaction's changes back to main (SPEC R9). On success
 // the handle is marked committed and rejects every further operation locally,
 // so the R4 example's deferred `tx.Rollback()` after a successful Commit
-// surfaces the terminal error the caller ignores.
-func (tx *Transaction) Commit() error {
+// surfaces the terminal error the caller ignores. Commit(WithAck()) blocks
+// until the merged commit is pushed to the configured remote (SPEC R10).
+func (tx *Transaction) Commit(opts ...CommitOption) error {
 	if err := tx.checkTerminal(); err != nil {
 		return err
 	}
 
-	req := &flowv1.CommitTransactionRequest{TransactionId: tx.id}
+	cfg := &commitConfig{}
+	for _, o := range opts {
+		o(cfg)
+	}
+
+	req := &flowv1.CommitTransactionRequest{
+		TransactionId: tx.id,
+		Ack:           cfg.ack,
+	}
 	err := tx.session.call(tx.session.ctx, func(ctx context.Context) error {
 		_, callErr := tx.session.Cartographer.CommitTransaction(ctx, req)
 		return callErr
@@ -436,7 +475,10 @@ func (tx *Transaction) Rollback() error {
 // ExtendTimeout resets the transaction's expiry timer (SPEC R9). The duration
 // must be positive and the total lifetime must not exceed the 7-day hard
 // maximum; the Cartographer rejects violations with INVALID_ARGUMENT (no
-// silent capping), which the SDK surfaces.
+// silent capping), which the SDK surfaces. On success the applied timeout the
+// server granted is surfaced on the handle via AppliedTimeout (SPEC R9: the
+// response exists "so the SDK surfaces what the server granted rather than
+// assuming it").
 func (tx *Transaction) ExtendTimeout(duration time.Duration) error {
 	if err := tx.checkTerminal(); err != nil {
 		return err
@@ -446,10 +488,20 @@ func (tx *Transaction) ExtendTimeout(duration time.Duration) error {
 		TransactionId: tx.id,
 		Duration:      durationpb.New(duration),
 	}
-	return tx.session.call(tx.session.ctx, func(ctx context.Context) error {
-		_, callErr := tx.session.Cartographer.ExtendTimeout(ctx, req)
+	var resp *flowv1.ExtendTimeoutResponse
+	err := tx.session.call(tx.session.ctx, func(ctx context.Context) error {
+		var callErr error
+		resp, callErr = tx.session.Cartographer.ExtendTimeout(ctx, req)
 		return callErr
 	}, "")
+	if err != nil {
+		return err
+	}
+
+	tx.mu.Lock()
+	tx.appliedTimeout = resp.GetAppliedTimeout().AsDuration()
+	tx.mu.Unlock()
+	return nil
 }
 
 // ---------------------------------------------------------------------------
