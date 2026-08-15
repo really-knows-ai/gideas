@@ -810,6 +810,27 @@ func connectionPairsOnConn(conn *lbug.Connection, table string) ([]fromToPair, e
 	return pairs, nil
 }
 
+// connectionEdgePairs reads every edge type's FROM/TO endpoint pairs from its
+// rel table in the catalog on an arbitrary connection. An edgeless edge type's
+// `_untyped` placeholder pair is normalized away (the key stays absent) so the
+// schema-metadata round-trip stays consistent with applySchemaMetadata's rule
+// derivation and validateMetadataAgainstCatalog's `_untyped` fallback.
+func connectionEdgePairs(conn *lbug.Connection, edges map[string]*store.EdgeTypeDef) (map[string][]fromToPair, error) {
+	pairs := make(map[string][]fromToPair)
+	untyped := []fromToPair{{From: untypedTableName, To: untypedTableName}}
+	for _, name := range sortedKeys(edges) {
+		actual, err := connectionPairsOnConn(conn, name)
+		if err != nil {
+			return nil, fmt.Errorf("read relationship endpoints for %q: %w", name, err)
+		}
+		if equalFromToPairs(actual, untyped) {
+			continue
+		}
+		pairs[name] = actual
+	}
+	return pairs, nil
+}
+
 func equalFromToPairs(left, right []fromToPair) bool {
 	keys := func(pairs []fromToPair) []string {
 		result := make([]string, len(pairs))

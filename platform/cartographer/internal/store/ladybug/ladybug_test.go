@@ -251,6 +251,86 @@ func TestApplySchema_Idempotent(t *testing.T) {
 	}
 }
 
+// TestApplySchema_RetryAfterMidLoopErrorConverges pins the in-process retry
+// idempotency of ApplySchema. The write-ahead metadata +
+// restoreMainSchemaMetadataLocked convergence covers the crash case, but an
+// in-process error mid-DDL-loop (e.g. a transient I/O failure after ≥1 ALTER
+// TABLE ADD succeeded) leaves the catalog advanced while db.entityTypeDefs is
+// refreshed only after the full loop succeeds. A retried ApplySchema then
+// diffs against the stale cache and would re-issue the non-idempotent ALTER
+// TABLE ADD against a column the catalog already holds — failing again on
+// every retry until a pod restart. The diff must run against the live catalog
+// so the retry converges.
+func TestApplySchema_RetryAfterMidLoopErrorConverges(t *testing.T) {
+	ctx := context.Background()
+	s, err := openInMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeStore(t, s)
+	if err := s.ApplySchema(ctx, &flowv1.Schema{EntityTypes: []*flowv1.EntityType{
+		{Name: "Document", Properties: []*flowv1.Property{{Name: "title", Type: "string"}}},
+	}}); err != nil {
+		t.Fatalf("ApplySchema v1: %v", err)
+	}
+
+	db := s.(*ladybugDB)
+	// Fabricate the exact residue a mid-loop failure leaves behind: the first
+	// run's ALTER TABLE ADD for "author" succeeded in the catalog, but
+	// ApplySchema aborted before db.entityTypeDefs was refreshed, so the cache
+	// still records only the pre-ALTER property set (and the FTS index rebuild
+	// that follows the ALTER loop never ran).
+	r, err := db.conn.Query("ALTER TABLE `Document` ADD `author` STRING;")
+	if err != nil {
+		t.Fatalf("fabricate partial ALTER residue: %v", err)
+	}
+	r.Close()
+
+	// The retry must converge instead of re-issuing the non-idempotent ALTER
+	// for "author" against a column the catalog already holds.
+	if err := s.ApplySchema(ctx, &flowv1.Schema{EntityTypes: []*flowv1.EntityType{
+		{Name: "Document", Properties: []*flowv1.Property{
+			{Name: "title", Type: "string"},
+			{Name: "author", Type: "string"},
+			{Name: "body", Type: "string"},
+		}},
+	}}); err != nil {
+		t.Fatalf("retried ApplySchema after mid-loop failure must converge, got: %v", err)
+	}
+
+	// The converged def records every property.
+	def, ok := s.EntityType("Document")
+	if !ok {
+		t.Fatal("Document entity type missing after retry")
+	}
+	for _, want := range []string{"title", "author", "body"} {
+		if !propertyDefPresent(def.Properties, want) {
+			t.Fatalf("retry did not converge property %q: %+v", want, def.Properties)
+		}
+	}
+	// The FTS index was rebuilt over the full string set — including the
+	// "author" column the partial run added before it failed: a search over it
+	// must find a match (query.go silently skips index-less types, so this
+	// fails if the retry skipped the index rebuild).
+	ent, err := s.CreateEntity(ctx, "Document", "", map[string]string{"author": "retryneedle"}, nil, "")
+	if err != nil {
+		t.Fatalf("CreateEntity with author: %v", err)
+	}
+	matches, err := s.FullTextSearch(ctx, "retryneedle", "Document", "")
+	if err != nil {
+		t.Fatalf("FullTextSearch over converged column: %v", err)
+	}
+	found := false
+	for i := range matches {
+		if matches[i].Id == ent.Id {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("FTS index was not rebuilt over the converged author column")
+	}
+}
+
 func TestApplySchema_TableExists(t *testing.T) {
 	s, err := openInMemory()
 	if err != nil {

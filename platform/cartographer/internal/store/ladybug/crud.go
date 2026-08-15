@@ -981,6 +981,206 @@ func connTableExists(conn *lbug.Connection, name string) (bool, error) {
 	return false, nil
 }
 
+// --------------------------------------------------------------------------
+// Internal helpers — insert/lookup on an arbitrary connection
+// --------------------------------------------------------------------------
+
+func insertEntityOnConn(
+	conn *lbug.Connection, entityType string, entity *store.Entity,
+	typeDefs map[string]*store.EntityTypeDef,
+) error {
+	// Cross-type ID-uniqueness probe, mirroring CreateEntity's data-integrity
+	// check (crud.go): the id column is PRIMARY KEY only within each node
+	// table, so an entity whose ID already exists under a different type's
+	// table would otherwise insert silently on the re-hydration read path —
+	// reachable from corrupt/hand-edited git state — after which findEntityByID
+	// resolves the ID nondeterministically (map iteration order). Fail loudly
+	// instead (never silently produce a wrong result on a read path). The
+	// O(#entity_types) scan shares findEntityByID's ponytail ceiling (upgrade
+	// path: a global ID→type index).
+	if _, perr := findEntityByID(conn, typeDefs, entity.Id); perr == nil {
+		return fmt.Errorf("%w: entity with id %q already exists", store.ErrEntityAlreadyExists, entity.Id)
+	} else if !errors.Is(perr, store.ErrEntityNotFound) {
+		return perr
+	}
+	var assigns []string
+	params := map[string]any{"id": entity.Id}
+	assigns = append(assigns, "id: $id")
+	for k, v := range entity.Properties {
+		pk := "p_" + k
+		assigns = append(assigns, quoteID(k)+": $"+pk)
+		params[pk] = v
+	}
+	if len(entity.Embedding) > 0 {
+		assigns = append(assigns, "embedding: $embedding")
+		embAny := make([]any, len(entity.Embedding))
+		for i, v := range entity.Embedding {
+			embAny[i] = v
+		}
+		params["embedding"] = embAny
+	}
+	q := fmt.Sprintf("CREATE (n:%s {%s});", quoteID(entityType), strings.Join(assigns, ", "))
+	stmt, pErr := conn.Prepare(q)
+	if pErr != nil {
+		return pErr
+	}
+	r, eErr := conn.Execute(stmt, params)
+	stmt.Close()
+	if eErr != nil {
+		return eErr
+	}
+	r.Close()
+	return nil
+}
+
+// insertEdgeOnConn verifies both endpoints exist under one of the edge type's
+// FROM/TO endpoint pairs before creating the edge, then creates it. pairs is
+// the edge type's FROM/TO endpoint set (SPEC R2: fixed at CREATE time from the
+// rel table's endpoint clauses).
+func insertEdgeOnConn(conn *lbug.Connection, edgeType string, pairs []fromToPair, edge *store.Edge) error {
+	// Verify both endpoints exist and form a permitted FROM/TO pair before
+	// creating the edge. The MATCH (a {id: $from}), (b {id: $to}) CREATE ...
+	// statement silently no-ops when an endpoint matches nothing — creating no
+	// edge and no error — so an edge whose source or target entity is absent
+	// would vanish from the graph with no signal on the re-hydration read path.
+	// The load path fails loudly on every other corruption (unparseable files,
+	// missing keys, type/directory mismatch); an absent or cross-pair endpoint
+	// must fail loudly too (never silently drop a row or swallow a not-exist on
+	// a read path).
+	//
+	// The endpoint set is validated by PAIR, not by per-role label union: for a
+	// multi-pair edge type (e.g. rules Alpha→Beta and Beta→Alpha both via the
+	// same edge type) the union of FROM labels equals the union of TO labels, so
+	// an edge whose endpoints both resolve to Alpha-typed entities would pass a
+	// membership check against either union while the rel table's per-pair
+	// endpoint clauses reject (or silently no-op) the CREATE — the edge would
+	// not be served. The write path rejects the same edge via validateEdgeRulesFor
+	// (crud.go), so the load path must too. Resolving each endpoint to its actual
+	// node label (untyped MATCH returns the node's own label) and requiring the
+	// resulting pair to be one of the edge type's FROM/TO pairs makes every
+	// wrong-pair case fail loudly with ErrSourceOrTargetNotFound, mirroring the
+	// normal write path's typed findEntityByID + rule validation (crud.go
+	// CreateEdge).
+	fromLabel, err := nodeLabelOnConn(conn, edge.FromEntityID)
+	if err != nil {
+		// Only a genuine "not found" maps to ErrSourceOrTargetNotFound; a real
+		// DB failure (Prepare/Execute) must propagate as an operational error
+		// instead of being masked as NOT_FOUND (mirrors CreateEdge's probe
+		// classification in crud.go).
+		if !errors.Is(err, store.ErrEntityNotFound) {
+			return fmt.Errorf("resolve edge %q from endpoint entity %q: %w", edge.Id, edge.FromEntityID, err)
+		}
+		return fmt.Errorf("%w: edge %q from endpoint entity %q not found",
+			store.ErrSourceOrTargetNotFound, edge.Id, edge.FromEntityID)
+	}
+	toLabel, err := nodeLabelOnConn(conn, edge.ToEntityID)
+	if err != nil {
+		if !errors.Is(err, store.ErrEntityNotFound) {
+			return fmt.Errorf("resolve edge %q to endpoint entity %q: %w", edge.Id, edge.ToEntityID, err)
+		}
+		return fmt.Errorf("%w: edge %q to endpoint entity %q not found",
+			store.ErrSourceOrTargetNotFound, edge.Id, edge.ToEntityID)
+	}
+	pairOK := false
+	for _, p := range pairs {
+		if p.From == fromLabel && p.To == toLabel {
+			pairOK = true
+			break
+		}
+	}
+	if !pairOK {
+		return fmt.Errorf("%w: edge %q connects %q -> %q, not one of edge type %q's FROM/TO pairs",
+			store.ErrSourceOrTargetNotFound, edge.Id, fromLabel, toLabel, edgeType)
+	}
+	relProps := make([]string, 0, 1+len(edge.Properties))
+	params := map[string]any{"from": edge.FromEntityID, "to": edge.ToEntityID, "id": edge.Id}
+	relProps = append(relProps, "id: $id")
+	for k, v := range edge.Properties {
+		pk := "p_" + k
+		relProps = append(relProps, quoteID(k)+": $"+pk)
+		params[pk] = v
+	}
+	q := fmt.Sprintf("MATCH (a {id: $from}), (b {id: $to}) CREATE (a)-[:%s {%s}]->(b);",
+		quoteID(edgeType), strings.Join(relProps, ", "))
+	stmt, pErr := conn.Prepare(q)
+	if pErr != nil {
+		return pErr
+	}
+	r, eErr := conn.Execute(stmt, params)
+	stmt.Close()
+	if eErr != nil {
+		return eErr
+	}
+	r.Close()
+	return nil
+}
+
+func listEdgesOnConn(conn *lbug.Connection, edgeType string) ([]store.Edge, error) {
+	q := fmt.Sprintf("MATCH (a)-[r:%s]->(b) RETURN a.id, r, b.id;", quoteID(edgeType))
+	result, err := conn.Query(q)
+	if err != nil {
+		return nil, err
+	}
+	defer result.Close()
+
+	var edges []store.Edge
+	for result.HasNext() {
+		tuple, err := result.Next()
+		if err != nil {
+			return nil, fmt.Errorf("read edge row: %w", err)
+		}
+		m, err := tuple.GetAsMap()
+		tuple.Close()
+		if err != nil {
+			return nil, fmt.Errorf("parse edge row: %w", err)
+		}
+		fromID := fmt.Sprintf("%v", m["a.id"])
+		rel, ok := m["r"].(lbug.Relationship)
+		if !ok {
+			return nil, fmt.Errorf("edge row for %q: unexpected relationship type %T", edgeType, m["r"])
+		}
+		toID := fmt.Sprintf("%v", m["b.id"])
+		edges = append(edges, *edgeFromRel(rel, edgeType, fromID, toID))
+	}
+	if edges == nil {
+		edges = []store.Edge{}
+	}
+	return edges, nil
+}
+
+// nodeLabelOnConn resolves an entity ID to its node label (type name). The
+// entity tables are created before edge tables on both the main and branch
+// file-load paths, so the node is findable here.
+func nodeLabelOnConn(conn *lbug.Connection, id string) (string, error) {
+	stmt, err := conn.Prepare("MATCH (n {id: $id}) RETURN n;")
+	if err != nil {
+		return "", err
+	}
+	result, err := conn.Execute(stmt, map[string]any{"id": id})
+	stmt.Close()
+	if err != nil {
+		return "", err
+	}
+	defer result.Close()
+	if !result.HasNext() {
+		return "", fmt.Errorf("%w: endpoint entity %q not found", store.ErrEntityNotFound, id)
+	}
+	tuple, err := result.Next()
+	if err != nil {
+		return "", err
+	}
+	m, err := tuple.GetAsMap()
+	tuple.Close()
+	if err != nil {
+		return "", err
+	}
+	node, ok := m["n"].(lbug.Node)
+	if !ok {
+		return "", fmt.Errorf("endpoint entity %q: unexpected node type %T", id, m["n"])
+	}
+	return node.Label, nil
+}
+
 // validateEdgeRulesFor validates that sourceType->targetType via edgeType is allowed.
 // It checks the sourceType's ConnectionRules (stored in ruleIndex) to see if the
 // targetType and edgeType are permitted. If the source type has no rules, all
