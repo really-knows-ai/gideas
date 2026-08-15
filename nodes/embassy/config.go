@@ -73,11 +73,6 @@ type embassyConfig struct {
 	Naturalisation *naturalisationConfig `json:"naturalisation,omitempty"`
 }
 
-// IsFederated returns true when the Embassy operates within a Federation.
-func (c *embassyConfig) IsFederated() bool {
-	return c.FederationIdentity != ""
-}
-
 // loadConfig reads Embassy configuration from environment variables.
 // Missing optional variables produce sensible defaults (non-federated mode
 // with empty import type registries).
