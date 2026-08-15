@@ -129,6 +129,36 @@ func isRemoteUnreachable(err error) bool {
 		(errors.As(err, &netErr) && netErr.Timeout())
 }
 
+// mapPushError converts common push errors to typed package sentinels.
+// git.NoErrAlreadyUpToDate is a no-op success (nil), auth and unreachable
+// classes map through classifyRemoteError, and anything else is wrapped
+// generically. Classification is based on typed errors — never on matching
+// library error message text.
+func mapPushError(err error) error {
+	if errors.Is(err, git.NoErrAlreadyUpToDate) {
+		return nil
+	}
+	// ponytail: go-git surfaces a server-side non-fast-forward rejection as an
+	// untyped text error (from checkFastForwardUpdate / the receive-pack report
+	// status), not wrapped in git.ErrNonFastForwardUpdate. The only typed signal
+	// this code can detect without grepping library text is that sentinel, so
+	// ErrPushRejected is produced only when go-git does wrap it. Consequence: a
+	// genuine rejected push may surface as a generic "push:" error instead of
+	// ErrPushRejected. This is acceptable in production because the commit
+	// pull-before-push path (FetchAndMerge) enforces a fast-forward before
+	// pushing, so a rejected push is effectively unreachable via production
+	// flows. Upgrade path: wrap the push result in a typed sentinel at the
+	// point the pull-before-push checks divergence, or patch go-git to return a
+	// typed error for non-fast-forward pushes.
+	if errors.Is(err, git.ErrNonFastForwardUpdate) {
+		return ErrPushRejected
+	}
+	if err := classifyRemoteError(err); err != nil {
+		return err
+	}
+	return fmt.Errorf("push: %w", err)
+}
+
 // setLocalRefAndCheckout sets the local branch ref to the given hash and
 // checks out the branch. After the forced checkout, untracked files are
 // cleaned to ensure the working tree exactly matches the target commit —
@@ -329,28 +359,7 @@ func (g *gitStore) PushRemote(ctx context.Context) error {
 		RefSpecs:   []config.RefSpec{"refs/heads/main:refs/heads/main"},
 	})
 	if err != nil {
-		if errors.Is(err, git.NoErrAlreadyUpToDate) {
-			return nil
-		}
-		// ponytail: go-git surfaces a server-side non-fast-forward rejection as an
-		// untyped text error (from checkFastForwardUpdate / the receive-pack report
-		// status), not wrapped in git.ErrNonFastForwardUpdate. The only typed signal
-		// this code can detect without grepping library text is that sentinel, so
-		// ErrPushRejected is produced only when go-git does wrap it. Consequence: a
-		// genuine rejected push may surface as a generic "push:" error instead of
-		// ErrPushRejected. This is acceptable in production because the commit
-		// pull-before-push path (FetchAndMerge) enforces a fast-forward before
-		// pushing, so a rejected push is effectively unreachable via production
-		// flows. Upgrade path: wrap the push result in a typed sentinel at the
-		// point the pull-before-push checks divergence, or patch go-git to return a
-		// typed error for non-fast-forward pushes.
-		if errors.Is(err, git.ErrNonFastForwardUpdate) {
-			return ErrPushRejected
-		}
-		if err := classifyRemoteError(err); err != nil {
-			return err
-		}
-		return fmt.Errorf("push: %w", err)
+		return mapPushError(err)
 	}
 	return nil
 }
