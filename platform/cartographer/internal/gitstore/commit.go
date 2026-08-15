@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -31,7 +32,7 @@ func (g *gitStore) GitRm(ctx context.Context, path string) error {
 	// Check if path exists
 	_, err := g.fs.Stat(path)
 	if err != nil {
-		if isNotExist(err) {
+		if os.IsNotExist(err) {
 			return nil
 		}
 		return fmt.Errorf("stat %s: %w", path, err)

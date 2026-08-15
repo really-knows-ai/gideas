@@ -142,7 +142,7 @@ func (g *gitStore) removeEntityFile(entityType string, id string) error {
 func listTypesWithJSON(fs billy.Filesystem, baseDir string) ([]string, error) {
 	entries, err := fs.ReadDir(baseDir)
 	if err != nil {
-		if isNotExist(err) {
+		if os.IsNotExist(err) {
 			return []string{}, nil
 		}
 		return nil, fmt.Errorf("read dir %s: %w", baseDir, err)
@@ -171,18 +171,6 @@ func listTypesWithJSON(fs billy.Filesystem, baseDir string) ([]string, error) {
 
 	sort.Strings(types)
 	return types, nil
-}
-
-// isNotExist returns true if err indicates a file or directory does not exist.
-// It matches os.ErrNotExist (and errors wrapping it), covering OS-backed errors
-// (os.PathError / syscall.ENOENT) as well as the go-billy OSFS and memfs
-// filesystems, both of which surface os.ErrNotExist for missing paths.
-// ponytail: billy v5.9 exposes no billy-native not-exist sentinel distinct from
-// os.ErrNotExist, so matching os.IsNotExist is the full surface today; if a
-// future billy filesystem returns a non-wrapping not-exist error, extend this
-// guard to match it.
-func isNotExist(err error) bool {
-	return os.IsNotExist(err)
 }
 
 // ============================================================================
@@ -248,7 +236,7 @@ func (g *gitStore) writeJSONFile(root, kind, elemType, id string, ej any) error 
 func (g *gitStore) removeJSONFile(root, kind, elemType, id string) error {
 	path := filepath.Join(root, elemType, id+".json")
 	if err := g.fs.Remove(path); err != nil {
-		if isNotExist(err) {
+		if os.IsNotExist(err) {
 			return nil
 		}
 		return fmt.Errorf("remove %s file %s: %w", kind, path, err)
@@ -273,7 +261,7 @@ func readAllElementFiles[J, F any](
 	dir := filepath.Join(root, elemType)
 	entries, err := g.fs.ReadDir(dir)
 	if err != nil {
-		if isNotExist(err) {
+		if os.IsNotExist(err) {
 			return []F{}, nil
 		}
 		return nil, fmt.Errorf("read %s dir %s: %w", kind, dir, err)
