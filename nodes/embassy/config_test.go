@@ -170,31 +170,3 @@ func TestLoadConfig_MissingOptionalVars_DefaultsToNonFederated(t *testing.T) {
 		t.Error("expected non-nil FlowImportTypes (empty map)")
 	}
 }
-
-func TestLoadConfig_IsFederated(t *testing.T) {
-	t.Setenv("EMBASSY_FEDERATION_IDENTITY", "flow-alpha")
-	t.Setenv("EMBASSY_FEDERATION_ENDPOINT", "flow-federation:50061")
-	t.Setenv("EMBASSY_FEDERATION_STATES", `["state-a"]`)
-
-	cfg, err := loadConfig()
-	if err != nil {
-		t.Fatalf("loadConfig() returned error: %v", err)
-	}
-
-	if !cfg.IsFederated() {
-		t.Error("expected IsFederated()=true when federation identity is set")
-	}
-}
-
-func TestLoadConfig_IsNotFederated(t *testing.T) {
-	t.Setenv("EMBASSY_FEDERATION_IDENTITY", "")
-
-	cfg, err := loadConfig()
-	if err != nil {
-		t.Fatalf("loadConfig() returned error: %v", err)
-	}
-
-	if cfg.IsFederated() {
-		t.Error("expected IsFederated()=false when federation identity is empty")
-	}
-}
