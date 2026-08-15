@@ -13440,3 +13440,132 @@ func TestRecoverOpenTransactionsMidSwapMismatchRollsBack(t *testing.T) {
 		t.Fatalf("rollback did not remove the mismatched branch DB: %v", err)
 	}
 }
+
+// TestRecoverOpenTransactionsCleansOrphanedRefreshTempBranches pins the
+// mid-refresh swap crash-window cleanup (SPEC R9 change-log recovery): the
+// refresh branch-DB swap (resetBranchStoreFromWorkingTree) builds the
+// replacement branch under a temporary key (tempID := s.newIDFn()) and renames
+// branches/<tempID>.{lbug,schema.json,state.json} onto the transaction's
+// canonical names, so a crash after some but not all of the swap's renames
+// strands the not-yet-renamed temp files under branches/. The temporary key
+// never becomes a git branch, so recovery's git-branch enumeration never
+// visits it — without the sweep every mid-refresh crash leaks the orphaned
+// temp files (plus the engine's write-ahead-log companion) indefinitely. The
+// sweep must remove the orphaned temp files while leaving live transaction
+// branches (git branch + branch files) untouched.
+func TestRecoverOpenTransactionsCleansOrphanedRefreshTempBranches(t *testing.T) {
+	ctx := testCtx()
+	dataPath := t.TempDir()
+	st, err := ladybug.Open(dataPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	gs, err := gitstore.New(dataPath)
+	if err != nil {
+		t.Fatalf("open git store: %v", err)
+	}
+	opPub, _ := generateTestKey()
+	srv := NewCartographerServer(
+		st, gs, opPub, initTestKey(), nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000,
+		WithLadybugPath(dataPath),
+	)
+	srv.MarkDBReady()
+	applyTestSchema(ctx, t, st)
+	begin, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
+	if err != nil {
+		t.Fatalf("BeginTransaction: %v", err)
+	}
+	if _, err := srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
+		EntityType: "Component", Properties: map[string]string{"name": "tx"}, TransactionId: begin.TransactionId,
+	}); err != nil {
+		t.Fatalf("CreateEntity: %v", err)
+	}
+	branchesDir := filepath.Join(dataPath, "branches")
+
+	// Replicate the swap's on-disk state exactly as resetBranchStoreFromWorkingTree
+	// builds it, then crash after the first rename: build the replacement under
+	// a temp key, mark the refresh in progress, mirror the durable state
+	// record, re-apply the transaction's changes, close the replacement (its
+	// WAL checkpointed), and rename only the temp .lbug onto the transaction's
+	// canonical name — leaving the temp .schema.json and .state.json (and the
+	// engine's torn WAL companion) orphaned under the temp key.
+	const tempID = "88888888-8888-4888-8888-888888888888"
+	if err := srv.buildBranchStoreFromWorkingTree(ctx, tempID); err != nil {
+		t.Fatalf("build replacement branch: %v", err)
+	}
+	state, lookupErr := srv.txManager.Lookup(begin.TransactionId)
+	if lookupErr != nil {
+		t.Fatalf("look up transaction state: %v", lookupErr)
+	}
+	state.BranchRefreshInProgress = true
+	if err := srv.persistTransactionState(ctx, state); err != nil {
+		t.Fatalf("persist refresh marker: %v", err)
+	}
+	if err := st.SaveBranchTransactionState(ctx, tempID, durableTransactionState(state)); err != nil {
+		t.Fatalf("persist temp state record: %v", err)
+	}
+	if err := srv.reapplyTransactionChanges(ctx, tempID, state.ChangeLog); err != nil {
+		t.Fatalf("re-apply transaction changes onto replacement: %v", err)
+	}
+	if err := st.CloseBranchDB(ctx, tempID); err != nil {
+		t.Fatalf("close replacement branch: %v", err)
+	}
+	// Evict the live in-memory handle for the tx branch (its files stay on
+	// disk) so the rename below does not race the engine's handle, mirroring
+	// the swap's CloseBranchDB(txID) before its renames.
+	if err := st.CloseBranchDB(ctx, begin.TransactionId); err != nil {
+		t.Fatalf("close tx branch handle: %v", err)
+	}
+	if err := os.Rename(
+		filepath.Join(branchesDir, tempID+".lbug"),
+		filepath.Join(branchesDir, begin.TransactionId+".lbug"),
+	); err != nil {
+		t.Fatalf("swap replacement .lbug onto tx name: %v", err)
+	}
+	// The engine's write-ahead-log companion (<key>.lbug.wal) is the artifact a
+	// hard crash tears alongside the database file; plant it so the sweep's WAL
+	// cleanup is pinned.
+	walPath := filepath.Join(branchesDir, tempID+".lbug.wal")
+	if err := os.WriteFile(walPath, []byte("torn wal"), 0600); err != nil {
+		t.Fatalf("plant torn temp WAL: %v", err)
+	}
+
+	if err := st.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+	// Restart: the orphaned temp files must be swept while the canonical
+	// transaction branch survives recovery.
+	reopened, err := ladybug.Open(dataPath)
+	if err != nil {
+		t.Fatalf("reopen store: %v", err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	reopenedGit, err := gitstore.New(dataPath)
+	if err != nil {
+		t.Fatalf("reopen git store: %v", err)
+	}
+	restarted := NewCartographerServer(
+		reopened, reopenedGit, opPub, initTestKey(), nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000,
+		WithLadybugPath(dataPath),
+	)
+	restarted.MarkDBReady()
+	if err := restarted.RecoverOpenTransactions(ctx); err != nil {
+		t.Fatalf("RecoverOpenTransactions: %v", err)
+	}
+	// The orphaned refresh temp files (including the torn WAL) are gone.
+	for _, name := range []string{
+		tempID + ".lbug", tempID + ".schema.json", tempID + ".state.json", tempID + ".lbug.wal",
+	} {
+		if _, err := os.Stat(filepath.Join(branchesDir, name)); !os.IsNotExist(err) {
+			t.Fatalf("orphaned refresh temp file %q survived recovery: %v", name, err)
+		}
+	}
+	// The canonical transaction branch survives: it is recovered as a live
+	// transaction and its branch DB is intact.
+	if _, err := restarted.txManager.Lookup(begin.TransactionId); err != nil {
+		t.Fatalf("canonical transaction branch was not recovered: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(branchesDir, begin.TransactionId+".lbug")); err != nil {
+		t.Fatalf("canonical transaction branch DB missing: %v", err)
+	}
+}
