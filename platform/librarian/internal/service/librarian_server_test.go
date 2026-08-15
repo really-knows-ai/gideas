@@ -1193,6 +1193,28 @@ func TestGetActiveDisputes_WithLawIDFilter(t *testing.T) {
 // Vec Embedding Hooks
 // ---------------------------------------------------------------------------
 
+// vecEmbeddingStored reports whether a vec embedding exists for the given law
+// by searching the vec0 table with the deterministic stub embedding for the
+// law's goal text. Replaces the deleted HasVecEmbedding assertion.
+func vecEmbeddingStored(t *testing.T, srv *LibrarianServer, lawID, goal string) bool {
+	t.Helper()
+	emb := &stubEmbedder{dims: testEmbeddingDims}
+	query, err := emb.Embed(context.Background(), goal)
+	if err != nil {
+		t.Fatalf("embed goal: %v", err)
+	}
+	results, err := srv.store.SearchVecSimilar(context.Background(), query, 10)
+	if err != nil {
+		t.Fatalf("SearchVecSimilar: %v", err)
+	}
+	for _, r := range results {
+		if r.LawID == lawID {
+			return true
+		}
+	}
+	return false
+}
+
 func TestWriteLaw_StoresVecEmbedding(t *testing.T) {
 	srv := newTestServerWithEmbedder(t)
 	ctx := context.Background()
@@ -1210,11 +1232,7 @@ func TestWriteLaw_StoresVecEmbedding(t *testing.T) {
 		t.Fatalf("WriteLaw: %v", err)
 	}
 
-	has, err := srv.store.HasVecEmbedding(ctx, resp.GetLawId())
-	if err != nil {
-		t.Fatalf("HasVecEmbedding: %v", err)
-	}
-	if !has {
+	if !vecEmbeddingStored(t, srv, resp.GetLawId(), "New ruling with embedding") {
 		t.Fatal("expected vec embedding to be stored after WriteLaw")
 	}
 }
@@ -1247,11 +1265,7 @@ func TestWriteLaw_UpdateStoresVecEmbedding(t *testing.T) {
 		t.Fatalf("WriteLaw update: %v", err)
 	}
 
-	has, err := srv.store.HasVecEmbedding(ctx, findResp.GetLawId())
-	if err != nil {
-		t.Fatalf("HasVecEmbedding: %v", err)
-	}
-	if !has {
+	if !vecEmbeddingStored(t, srv, findResp.GetLawId(), "Updated finding with new embedding") {
 		t.Fatal("expected vec embedding to be updated after WriteLaw update")
 	}
 }
@@ -1268,11 +1282,7 @@ func TestRecordFinding_StoresVecEmbedding(t *testing.T) {
 		t.Fatalf("RecordFinding: %v", err)
 	}
 
-	has, err := srv.store.HasVecEmbedding(ctx, resp.GetLawId())
-	if err != nil {
-		t.Fatalf("HasVecEmbedding: %v", err)
-	}
-	if !has {
+	if !vecEmbeddingStored(t, srv, resp.GetLawId(), "Finding with embedding") {
 		t.Fatal("expected vec embedding to be stored after RecordFinding")
 	}
 }
@@ -1291,11 +1301,7 @@ func TestRetireLaw_DeletesVecEmbedding(t *testing.T) {
 	}
 
 	// Verify embedding exists.
-	has, err := srv.store.HasVecEmbedding(ctx, findResp.GetLawId())
-	if err != nil {
-		t.Fatalf("HasVecEmbedding before retire: %v", err)
-	}
-	if !has {
+	if !vecEmbeddingStored(t, srv, findResp.GetLawId(), "To retire") {
 		t.Fatal("expected vec embedding before retirement")
 	}
 
@@ -1306,11 +1312,7 @@ func TestRetireLaw_DeletesVecEmbedding(t *testing.T) {
 	}
 
 	// Verify embedding is deleted.
-	has, err = srv.store.HasVecEmbedding(ctx, findResp.GetLawId())
-	if err != nil {
-		t.Fatalf("HasVecEmbedding after retire: %v", err)
-	}
-	if has {
+	if vecEmbeddingStored(t, srv, findResp.GetLawId(), "To retire") {
 		t.Fatal("expected vec embedding to be deleted after retirement")
 	}
 }
@@ -1333,11 +1335,7 @@ func TestWriteLaw_NoEmbedder_NoVecEmbedding(t *testing.T) {
 	}
 
 	// No embedder means no vec embedding.
-	has, err := srv.store.HasVecEmbedding(ctx, resp.GetLawId())
-	if err != nil {
-		t.Fatalf("HasVecEmbedding: %v", err)
-	}
-	if has {
+	if vecEmbeddingStored(t, srv, resp.GetLawId(), "No embedder") {
 		t.Fatal("expected no vec embedding when embedder is nil")
 	}
 }
@@ -1891,11 +1889,7 @@ func TestReplicateLaws_StoresVecEmbedding(t *testing.T) {
 	}
 
 	// Verify vec embedding was stored.
-	has, err := srv.store.HasVecEmbedding(ctx, "replicated-law-1")
-	if err != nil {
-		t.Fatalf("HasVecEmbedding: %v", err)
-	}
-	if !has {
+	if !vecEmbeddingStored(t, srv, "replicated-law-1", "Replicated law from authority") {
 		t.Fatal("expected vec embedding to be stored after ReplicateLaws")
 	}
 }
