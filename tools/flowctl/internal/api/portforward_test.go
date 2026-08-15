@@ -109,6 +109,49 @@ func (f *blockingSPDYForwarder) ForwardPod(ctx context.Context, namespace, podNa
 	return 10000 + count, func() {}, nil
 }
 
+// blockingStopForwarder mimics the pre-fix productionSPDYForwarder stop func:
+// it closes a channel with no close-once guard, so a second concurrent stop
+// call panics "close of closed channel". The first stop call is blocked until
+// released, and a second call while the first is blocked closes secondCall —
+// the duplicate-stop signal the concurrent Close/CloseAll test asserts must
+// never fire.
+type blockingStopForwarder struct {
+	mu         sync.Mutex
+	callCount  int
+	firstEnter chan struct{} // closed when the first stop call enters
+	secondCall chan struct{} // closed if a second stop call arrives while the first is blocked
+	release    chan struct{} // close to unblock the stop calls
+	secondSeen bool          // guarded by mu: whether secondCall has been closed
+}
+
+func newBlockingStopForwarder() *blockingStopForwarder {
+	return &blockingStopForwarder{
+		firstEnter: make(chan struct{}),
+		secondCall: make(chan struct{}),
+		release:    make(chan struct{}),
+	}
+}
+
+func (f *blockingStopForwarder) ForwardPod(ctx context.Context, namespace, podName string, remotePort int) (localPort int, stop func(), err error) {
+	stopChan := make(chan struct{})
+	stop = func() {
+		f.mu.Lock()
+		f.callCount++
+		count := f.callCount
+		if count == 1 {
+			close(f.firstEnter)
+		} else if !f.secondSeen {
+			f.secondSeen = true
+			close(f.secondCall)
+		}
+		f.mu.Unlock()
+
+		<-f.release
+		close(stopChan) // no close-once guard: a second call panics
+	}
+	return 10001, stop, nil
+}
+
 // ─── Test Helpers ──────────────────────────────────────────────────────────
 
 // makePod creates a pod with the given phase, ready condition, and IP.
@@ -474,4 +517,59 @@ func TestForwardPod_ConcurrentSameKey(t *testing.T) {
 	}
 }
 
+// ─── T14: Concurrent Close + CloseAll does not panic on double-stop ─────────
 
+// TestForwardPod_ConcurrentCloseAndCloseAll pins the close-once guard on the
+// forward's stop func: concurrent Close and CloseAll for the same forward must
+// not panic "close of closed channel". The blockingStopForwarder reproduces
+// the pre-fix production stop func (unguarded channel close), so without the
+// sync.Once guard the second stop call would panic. The first stop call is
+// blocked until released; the test asserts the second concurrent Close/CloseAll
+// never reaches a second stop call while the first is still in flight.
+func TestForwardPod_ConcurrentCloseAndCloseAll(t *testing.T) {
+	spdy := newBlockingStopForwarder()
+	mgr := NewPortForwardManager(nil, nil, spdy)
+
+	ctx := context.Background()
+	fid, _, err := mgr.ForwardPod(ctx, "ns", "pod", 8080)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		<-start
+		_ = mgr.Close(fid)
+	}()
+	go func() {
+		defer wg.Done()
+		<-start
+		_ = mgr.CloseAll()
+	}()
+
+	close(start)
+	<-spdy.firstEnter // the first stop call is blocked inside the forwarder
+
+	// While the first stop is in flight, a concurrent Close/CloseAll must not
+	// invoke the stop a second time (the guard makes the second caller a
+	// no-op). A genuine second stop call would signal secondCall here.
+	select {
+	case <-spdy.secondCall:
+		close(spdy.release)
+		wg.Wait()
+		t.Fatal("concurrent Close/CloseAll invoked the forwarder stop func twice")
+	case <-time.After(500 * time.Millisecond):
+	}
+	close(spdy.release)
+	wg.Wait()
+
+	if spdy.callCount != 1 {
+		t.Errorf("expected exactly 1 stop invocation, got %d", spdy.callCount)
+	}
+	if len(mgr.forwards) != 0 {
+		t.Errorf("expected 0 forwards after concurrent Close/CloseAll, got %d", len(mgr.forwards))
+	}
+}

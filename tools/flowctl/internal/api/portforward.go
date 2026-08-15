@@ -16,11 +16,8 @@ import (
 
 // forwardState tracks a single active port-forward.
 type forwardState struct {
-	localPort  int
-	remotePort int
-	namespace  string
-	podName    string
-	stopFunc   func() // calls SPDY stop func and removes from map; set by ForwardPod
+	localPort int
+	stopFunc  func() // calls SPDY stop func and removes from map; set by ForwardPod
 }
 
 // inflightForward records a same-key ForwardPod creation in progress so a
@@ -130,8 +127,14 @@ func (f *productionSPDYForwarder) ForwardPod(ctx context.Context, namespace, pod
 		return 0, nil, ctx.Err()
 	}
 
+	var stopOnce sync.Once
 	stop = func() {
-		close(stopChan)
+		// Close-once guard: Close and CloseAll can invoke this stop func from
+		// different goroutines (concurrent Close/CloseAll), so a bare close
+		// would panic "close of closed channel" on the second call.
+		stopOnce.Do(func() {
+			close(stopChan)
+		})
 	}
 
 	return localPort, stop, nil
@@ -206,16 +209,20 @@ func (m *PortForwardManager) ForwardPod(ctx context.Context, namespace, podName 
 		}
 
 		state := &forwardState{
-			localPort:  lp,
-			remotePort: remotePort,
-			namespace:  namespace,
-			podName:    podName,
+			localPort: lp,
 		}
+		var stopOnce sync.Once
 		state.stopFunc = func() {
-			if spdyStop != nil {
-				spdyStop()
-			}
-			cleanup()
+			// Close-once guard: Close and CloseAll can invoke stopFunc from
+			// different goroutines, so the forwarder's stop (and the map
+			// cleanup) must run exactly once regardless of which caller wins
+			// the race.
+			stopOnce.Do(func() {
+				if spdyStop != nil {
+					spdyStop()
+				}
+				cleanup()
+			})
 		}
 
 		m.forwards[key] = state
