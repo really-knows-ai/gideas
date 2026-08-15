@@ -41,12 +41,10 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"log/slog"
 	"os"
-	"text/template"
 
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
 	"github.com/foundry/flow/nodes/internal/handlers"
@@ -77,55 +75,6 @@ type appraisalConfig struct {
 type AppraiserPersonalityConfig struct {
 	ID          string `yaml:"id"`
 	Personality string `yaml:"personality"`
-}
-
-// ---------------------------------------------------------------------------
-// Agent Construction Helper
-// ---------------------------------------------------------------------------
-
-// buildAgent is the shared construction pattern for all appraisal agents.
-// It renders the system prompt template, parses the query template, and
-// creates a flow.Agent with schema, model (KimiK2Ollama), and prompts.
-//
-// The model is created internally — model choice is a code-time decision
-// coupled to the prompts, not deploy-time config.
-func buildAgent(
-	client *flow.Client,
-	name string,
-	sysTmplStr string,
-	sysData any,
-	queryTmplStr string,
-	schema []byte,
-) (*flow.Agent, error) {
-	// 1. Render system prompt with config params.
-	sysTmpl, err := template.New("system").Parse(sysTmplStr)
-	if err != nil {
-		return nil, fmt.Errorf("%s: parse system template: %w", name, err)
-	}
-
-	var sysBuf bytes.Buffer
-	if err := sysTmpl.Execute(&sysBuf, sysData); err != nil {
-		return nil, fmt.Errorf("%s: render system prompt: %w", name, err)
-	}
-
-	// 2. Parse query template.
-	queryTmpl, err := template.New("query").Parse(queryTmplStr)
-	if err != nil {
-		return nil, fmt.Errorf("%s: parse query template: %w", name, err)
-	}
-
-	// 3. Create flow.Agent with schema, model, prompts.
-	agent, err := flow.NewAgent(client,
-		flow.WithSchema(schema),
-		flow.WithModelName("kimi-k2.5:cloud"),
-		flow.WithSystemPrompt(sysBuf.String()),
-		flow.WithQueryTemplate(queryTmpl),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("%s: create agent: %w", name, err)
-	}
-
-	return agent, nil
 }
 
 // ---------------------------------------------------------------------------

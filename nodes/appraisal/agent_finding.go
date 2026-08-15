@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
+	"github.com/foundry/flow/nodes/internal/nodeutil"
 	flow "github.com/foundry/flow/sdk/go"
 )
 
@@ -133,7 +134,7 @@ func NewFindingAgent(client *flow.Client, cfg *appraisalConfig) (*FindingAgent, 
 		GovernedArtefact: cfg.GovernedArtefact,
 	}
 
-	agent, err := buildAgent(client, "finding agent",
+	agent, err := nodeutil.BuildAgent(client, "finding agent", "kimi-k2.5:cloud",
 		sysTmplStr, sysData,
 		queryTmplStr, findingSchema)
 	if err != nil {

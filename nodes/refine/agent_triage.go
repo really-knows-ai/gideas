@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
+	"github.com/foundry/flow/nodes/internal/nodeutil"
 	flow "github.com/foundry/flow/sdk/go"
 )
 
@@ -144,7 +145,7 @@ type triageTemplateQueryData struct {
 //   - actionOnlyAgent for canWontFix=false items (action-only schema, simplified prompt)
 //   - fullAgent for canWontFix=true items (action-or-refuse schema, full prompt)
 //
-// The model (GptOss120bOllama) is created internally by buildAgent.
+// The model (GptOss120bOllama) is created internally by nodeutil.BuildAgent.
 // If cfg.TriageSystemPrompt is non-empty, it overrides the system prompt for
 // the full agent only. If cfg.TriageQueryTemplate is non-empty, it overrides
 // the query template for the full agent only.
@@ -166,7 +167,7 @@ func NewTriageAgent(client *flow.Client, cfg *refineConfig) (*TriageAgent, error
 	}
 
 	// Create action-only agent (always uses baked-in defaults — cannot refuse).
-	actionOnlyAgent, err := buildAgent(client, "triage agent (action-only)",
+	actionOnlyAgent, err := nodeutil.BuildAgent(client, "triage agent (action-only)", "deepseek-v4-flash:cloud",
 		triageSystemPromptTemplate, sysData,
 		triageQueryActionOnly, triageSchemaActionOnly)
 	if err != nil {
@@ -174,7 +175,7 @@ func NewTriageAgent(client *flow.Client, cfg *refineConfig) (*TriageAgent, error
 	}
 
 	// Create full agent (may refuse with justification).
-	fullAgent, err := buildAgent(client, "triage agent (full)",
+	fullAgent, err := nodeutil.BuildAgent(client, "triage agent (full)", "deepseek-v4-flash:cloud",
 		fullSysTmpl, sysData,
 		fullQueryTmpl, triageSchemaFull)
 	if err != nil {

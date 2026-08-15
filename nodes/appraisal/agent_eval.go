@@ -8,6 +8,7 @@ import (
 
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
 	"github.com/foundry/flow/nodes/internal/artefacts"
+	"github.com/foundry/flow/nodes/internal/nodeutil"
 	flow "github.com/foundry/flow/sdk/go"
 )
 
@@ -120,7 +121,7 @@ func NewEvalAgent(client *flow.Client, cfg *appraisalConfig) (*EvalAgent, error)
 		InputArtefact:  inputLabel,
 	}
 
-	agent, err := buildAgent(client, "eval agent",
+	agent, err := nodeutil.BuildAgent(client, "eval agent", "kimi-k2.5:cloud",
 		sysTmplStr, sysData,
 		queryTmplStr, evalSchema)
 	if err != nil {
