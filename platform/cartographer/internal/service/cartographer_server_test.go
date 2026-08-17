@@ -1489,6 +1489,9 @@ func TestWipeGraph_ExpiredTxDoesNotBlock(t *testing.T) {
 // lands on main's history — otherwise the next sync-cycle RestoreMain brings
 // the pre-wipe files back and stale data silently survives the wipe.
 func TestWipeGraph_TreeOnTxBranchWipeLandsOnMain(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: wipe lands on main (real git)")
+	}
 	base, err := openTestStore(t)
 	if err != nil {
 		t.Fatalf("openTestStore: %v", err)
@@ -2732,6 +2735,9 @@ func TestTransaction_BeginRollback(t *testing.T) {
 }
 
 func TestTransaction_ChangeLogAdmissionFailureRollsBackEveryMutationFamily(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: real git + recovery")
+	}
 	type mutationCase struct {
 		name  string
 		setup func(context.Context, *testing.T, store.Store, string)
@@ -3017,6 +3023,9 @@ func TestTransaction_ChangeLogRollbackFailureIsExplicitAndRetryable(t *testing.T
 }
 
 func TestRollbackTransaction_RestoresMainAfterFailedMerge(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: real git + recovery")
+	}
 	base, err := openTestStore(t)
 	if err != nil {
 		t.Fatalf("openTestStore: %v", err)
@@ -3073,6 +3082,9 @@ func TestRollbackTransaction_RestoresMainAfterFailedMerge(t *testing.T) {
 // FastForwardMerge surfaces gitstore.ErrMergeDiverged, the handler must map it
 // to INTERNAL — not the distinct "Refresh conflict → ABORTED" code.
 func TestCommitTransaction_MergeDivergedIsInternal(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: real git + recovery")
+	}
 	base, err := openTestStore(t)
 	if err != nil {
 		t.Fatalf("openTestStore: %v", err)
@@ -4119,6 +4131,9 @@ func TestBeginTransaction_NoRemote_StillCreatesTransaction(t *testing.T) {
 //
 //nolint:gocyclo // One subtest per SPEC Sync error-table row; each is a t.Run branch.
 func TestSync_WakesWorkerAndBlocks(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: real git sync worker")
+	}
 	t.Run("blocks until cycle completes", func(t *testing.T) {
 		gs, err := gitstore.New(t.TempDir())
 		if err != nil {
@@ -4449,6 +4464,9 @@ func TestSync_PerTypeWriteCapabilityDenied(t *testing.T) {
 // sw.WakeAndWait directly; this test pins the handler wiring
 // (SetPushNeeded → req.GetAck() → WakeAndWait) end to end.
 func TestCommitTransaction_WithSyncWorker_AckWaitsForPush(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: real git sync worker")
+	}
 	gs, err := gitstore.New(t.TempDir())
 	if err != nil {
 		t.Fatalf("gitstore.New: %v", err)
@@ -4521,6 +4539,9 @@ func TestCommitTransaction_WithSyncWorker_AckWaitsForPush(t *testing.T) {
 // (non-fast-forward)"), not a raw INTERNAL error, and the push flag stays set
 // for the next cycle.
 func TestCommitTransaction_WithSyncWorker_AckPushFailureSurfacesMappedError(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: real git sync worker")
+	}
 	gs, err := gitstore.New(t.TempDir())
 	if err != nil {
 		t.Fatalf("gitstore.New: %v", err)
@@ -4566,6 +4587,9 @@ func TestCommitTransaction_WithSyncWorker_AckPushFailureSurfacesMappedError(t *t
 // mapGitError as UNAVAILABLE, not a raw INTERNAL error, and the push flag stays
 // set for the next cycle.
 func TestCommitTransaction_WithSyncWorker_AckPushRetriesExhaustedSurfacesUnavailable(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: real git sync worker")
+	}
 	gs, err := gitstore.New(t.TempDir())
 	if err != nil {
 		t.Fatalf("gitstore.New: %v", err)
@@ -4609,6 +4633,9 @@ func TestCommitTransaction_WithSyncWorker_AckPushRetriesExhaustedSurfacesUnavail
 // commit surfaces DEADLINE_EXCEEDED (mapGitError's context-error mapping, not
 // a raw INTERNAL), with the push flag left set for the next cycle.
 func TestCommitTransaction_WithSyncWorker_AckCallerDeadlineSurfacesDeadlineExceeded(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: real git sync worker")
+	}
 	gs, err := gitstore.New(t.TempDir())
 	if err != nil {
 		t.Fatalf("gitstore.New: %v", err)
@@ -4665,6 +4692,9 @@ func TestCommitTransaction_WithSyncWorker_AckCallerDeadlineSurfacesDeadlineExcee
 // regression that made the handler wake-and-wait unconditionally would trip
 // this test's timeout while the cycle parks in the gate below.
 func TestCommitTransaction_WithSyncWorker_NoAckReturnsWithoutBlocking(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: real git sync worker")
+	}
 	gs, err := gitstore.New(t.TempDir())
 	if err != nil {
 		t.Fatalf("gitstore.New: %v", err)
@@ -5242,6 +5272,9 @@ func TestCommitTransaction_RetryAfterCommitCreatedDoesNotDuplicateCommit(t *test
 // guard intact for genuinely conflicting changes: the wedge here is the
 // baseline-advance path, not the conflict detection.
 func TestRefreshTransaction_CommitMergeFailedThenMainAdvancedUnwedges(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: real git refresh/recovery")
+	}
 	base, err := openTestStore(t)
 	if err != nil {
 		t.Fatalf("openTestStore: %v", err)
@@ -5337,6 +5370,9 @@ func TestRefreshTransaction_CommitMergeFailedThenMainAdvancedUnwedges(t *testing
 }
 
 func TestCommitTransaction_CommitFailureWithoutCommitAllowsRefreshAndRetry(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: real git refresh/recovery")
+	}
 	base, err := openTestStore(t)
 	if err != nil {
 		t.Fatalf("openTestStore: %v", err)
@@ -5394,6 +5430,9 @@ func TestCommitTransaction_CommitFailureWithoutCommitAllowsRefreshAndRetry(t *te
 }
 
 func TestCommitTransaction_ErrorAfterCommitRetainsResumableState(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed store + reopen/durability")
+	}
 	ladybugPath := t.TempDir()
 	base, err := ladybug.Open(ladybugPath)
 	if err != nil {
@@ -5492,6 +5531,9 @@ func TestCommitTransaction_ErrorAfterCommitRetainsResumableState(t *testing.T) {
 }
 
 func TestRollbackTransaction_AfterReconciledCommitError(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: real git refresh/recovery")
+	}
 	for _, tc := range []struct {
 		name       string
 		failBefore bool
@@ -5549,6 +5591,9 @@ func TestRollbackTransaction_AfterReconciledCommitError(t *testing.T) {
 }
 
 func TestCommitTransaction_StateWriteFailureRemainsDiscoverableAndRetryable(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: real git refresh/recovery")
+	}
 	for _, tc := range []struct {
 		name          string
 		fail          func(store.BranchTransactionState) bool
@@ -5639,6 +5684,9 @@ func TestCommitTransaction_StateWriteFailureRemainsDiscoverableAndRetryable(t *t
 }
 
 func TestRollbackTransaction_AfterRestartDuringMainRehydrationRestoresMain(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed store + reopen/durability")
+	}
 	ctx := testCtx()
 	dataPath := t.TempDir()
 	opPub, _ := generateTestKey()
@@ -5708,6 +5756,9 @@ func TestRollbackTransaction_AfterRestartDuringMainRehydrationRestoresMain(t *te
 }
 
 func TestRecoverOpenTransactionsPreservesDivergenceAndSchemaBaselines(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed store + reopen/durability")
+	}
 	for _, tc := range []struct {
 		name          string
 		advanceMain   bool
@@ -6489,6 +6540,9 @@ func TestRefreshTransaction_DoesNotResetTimeoutTimer(t *testing.T) {
 // missing the interim entity, and the fast-forward merge failed with INTERNAL,
 // leaving main LadybugDB and git main divergent.
 func TestRefreshTransaction_EmptyRefreshThenMutateAndCommit(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: real git refresh/recovery")
+	}
 	base, err := openTestStore(t)
 	if err != nil {
 		t.Fatalf("openTestStore: %v", err)
@@ -6548,6 +6602,9 @@ func TestRefreshTransaction_EmptyRefreshThenMutateAndCommit(t *testing.T) {
 }
 
 func TestRefreshTransaction_ConcurrentCommitCannotUseStaleHead(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: real git refresh/recovery")
+	}
 	base, err := openTestStore(t)
 	if err != nil {
 		t.Fatalf("openTestStore: %v", err)
@@ -6620,6 +6677,9 @@ func TestRefreshTransaction_ConcurrentCommitCannotUseStaleHead(t *testing.T) {
 }
 
 func TestRefreshTransaction_HydrationFailureDoesNotAdvanceSyncHead(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: real git refresh/recovery")
+	}
 	base, err := openTestStore(t)
 	if err != nil {
 		t.Fatalf("openTestStore: %v", err)
@@ -6669,6 +6729,9 @@ func TestRefreshTransaction_HydrationFailureDoesNotAdvanceSyncHead(t *testing.T)
 }
 
 func TestRefreshTransaction_ConflictLeavesCleanRefreshedBranch(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed store + reopen/durability")
+	}
 	ladybugPath := t.TempDir()
 	base, err := ladybug.Open(ladybugPath)
 	if err != nil {
@@ -6743,6 +6806,9 @@ func TestRefreshTransaction_ConflictLeavesCleanRefreshedBranch(t *testing.T) {
 // rebuilt. The existing aborted-refresh tests assert the branch DB contents but
 // never call GetTransactionDiff.
 func TestRefreshTransaction_AbortedRefreshPreservesDiff(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed store + reopen/durability")
+	}
 	ladybugPath := t.TempDir()
 	base, err := ladybug.Open(ladybugPath)
 	if err != nil {
@@ -6983,6 +7049,9 @@ func TestRefreshTransaction_CreatedThenDeletedWithinTransaction(t *testing.T) {
 // step 3 UUID-overlap rule). The ChangeAddEntity entry is what detects the
 // overlap.
 func TestRefreshTransaction_CreatedThenDeleted_ConflictsWhenMainHasUUID(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed store + reopen/durability")
+	}
 	ladybugPath := t.TempDir()
 	base, err := ladybug.Open(ladybugPath)
 	if err != nil {
@@ -7356,6 +7425,9 @@ func TestRecoveryDiffClassifiesModifiedEdges(t *testing.T) {
 
 //nolint:gocyclo
 func TestRecoverOpenTransactionsAfterStoreRestart(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed store + reopen/durability")
+	}
 	ctx := testCtx()
 	dataPath := t.TempDir()
 	opPub, _ := generateTestKey()
@@ -7490,6 +7562,9 @@ func TestRecoverOpenTransactionsAfterStoreRestart(t *testing.T) {
 }
 
 func TestRecoverOpenTransactionsPersistsAppliedTimeout(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed store + reopen/durability")
+	}
 	ctx := testCtx()
 	dataPath := t.TempDir()
 	opPub, _ := generateTestKey()
@@ -7584,6 +7659,9 @@ func TestRecoverOpenTransactionsPersistsAppliedTimeout(t *testing.T) {
 // is already expired (DEADLINE_EXCEEDED) rather than re-armed for a fresh
 // 30-minute lease of life from the restart instant.
 func TestRecoverOpenTransactionsPreservesAbsoluteLifetime(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed store + reopen/durability")
+	}
 	ctx := testCtx()
 	dataPath := t.TempDir()
 	opPub, _ := generateTestKey()
@@ -7674,6 +7752,9 @@ func TestRecoverOpenTransactionsPreservesAbsoluteLifetime(t *testing.T) {
 }
 
 func TestRecoverRollbackOnlyTransactionWhenRejectedUpdateDoesNotIncreaseNetDiff(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed store + reopen/durability")
+	}
 	ctx := testCtx()
 	dataPath := t.TempDir()
 	opPub, _ := generateTestKey()
@@ -7805,6 +7886,9 @@ func TestChangeLogMarkerFailureStillCleansRejectedTransaction(t *testing.T) {
 }
 
 func TestChangeLogMarkerAndCleanupFailureCannotRecoverAsActive(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed store + reopen/durability")
+	}
 	ctx := testCtx()
 	dataPath := t.TempDir()
 	opPub, _ := generateTestKey()
@@ -7905,6 +7989,9 @@ func TestChangeLogMarkerAndCleanupFailureCannotRecoverAsActive(t *testing.T) {
 // current schema, so the recovered transaction commits normally instead of
 // being wedged in FAILED_PRECONDITION.
 func TestRecoverOpenTransactionsSchemaPushDoesNotBlockCommit(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed store + reopen/durability")
+	}
 	ctx := testCtx()
 	dataPath := t.TempDir()
 	opPub, _ := generateTestKey()
@@ -7990,6 +8077,9 @@ func TestRecoverOpenTransactionsSchemaPushDoesNotBlockCommit(t *testing.T) {
 // deleted) so startup proceeds instead of wedging on a hard open error until a
 // human deletes the file (the pre-fix behavior).
 func TestRecoverOpenTransactionsRollsBackCorruptBranch(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed store + reopen/durability")
+	}
 	ctx := testCtx()
 	dataPath := t.TempDir()
 	st, err := ladybug.Open(dataPath)
@@ -8039,6 +8129,9 @@ func TestRecoverOpenTransactionsRollsBackCorruptBranch(t *testing.T) {
 }
 
 func TestRecoverOpenTransactionsMissingBranchRestoresMain(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed store + reopen/durability")
+	}
 	ctx := testCtx()
 	dataPath := t.TempDir()
 	st, err := ladybug.Open(dataPath)
@@ -8088,6 +8181,9 @@ func TestRecoverOpenTransactionsMissingBranchRestoresMain(t *testing.T) {
 }
 
 func TestRecoverOpenTransactionsMainLookupFailuresAbort(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: real git refresh/recovery")
+	}
 	for _, operation := range []string{
 		"lookup lock", "restore", "clean", "list entities", "read entities", "list edges", "read edges",
 	} {
@@ -8149,6 +8245,9 @@ func TestRecoverOpenTransactionsMainLookupFailuresAbort(t *testing.T) {
 }
 
 func TestRecoverOpenTransactionsIdenticalCleanupIsRetryable(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: real git refresh/recovery")
+	}
 	for _, operation := range []string{"restore", "clean", "drop", "delete"} {
 		t.Run(operation, func(t *testing.T) {
 			ctx := testCtx()
@@ -10402,6 +10501,9 @@ func TestApplySchema_BeforeDBReady(t *testing.T) {
 // validation. TestApplySchema_BeforeDBReady uses a valid schema, so only a
 // combined fault can detect a reorder that surfaced the validation error first.
 func TestApplySchema_InvalidSchemaBeforeDBReady(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed store + reopen/durability")
+	}
 	opPub, _ := generateTestKey()
 	scPub, _ := generateTestKey()
 	st, _ := ladybug.Open(t.TempDir())
@@ -11649,6 +11751,9 @@ func TestListEntities_Pagination(t *testing.T) {
 // =========================================================================
 
 func TestReadPathTransactionID_Rejected(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: real git transaction validation")
+	}
 	applySchemaAndSeed := func(ctx context.Context, t *testing.T, srv *CartographerServer) {
 		t.Helper()
 		applyTestSchema(ctx, t, srv.store)
@@ -11768,6 +11873,9 @@ func TestReadPathTransactionID_Rejected(t *testing.T) {
 // DeleteEdge) rejects a malformed transactionId with INVALID_ARGUMENT and an
 // unknown-but-valid transactionId with NOT_FOUND via lockTransactionMutation.
 func TestMutationTransactionID_Rejected(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: real git transaction validation")
+	}
 	validID := "11111111-1111-4111-8111-111111111111"
 	tests := []struct {
 		name string
@@ -11830,6 +11938,9 @@ func TestMutationTransactionID_Rejected(t *testing.T) {
 // fault modes; the empty-ID gate is the first check in each handler and has no
 // other service-layer test reaching it with a real (non-fake) handler.
 func TestMutationTransactionID_EmptyRejected(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: real git transaction validation")
+	}
 	tests := []struct {
 		name string
 		call func(context.Context, *CartographerServer) error
@@ -11882,6 +11993,9 @@ func TestMutationTransactionID_EmptyRejected(t *testing.T) {
 // the structural and capability checks, so a nonexistent transaction combined
 // with a structural fault surfaced INVALID_ARGUMENT instead of NOT_FOUND.
 func TestWriteCheckOrder_TransactionValidationPrecedesStructural(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: real git transaction validation")
+	}
 	// Each write RPC with the structural fault that would surface first if the
 	// active-transaction gate ran after structural validation.
 	writeCases := []struct {
@@ -12242,6 +12356,9 @@ func TestExportGraph_DeterministicResourceExhausted(t *testing.T) {
 // retried commit re-hydrates from the transaction branch and main.lbug
 // converges with git main.
 func TestCommitTransaction_RecoveredPartialCommitRehydratesAfterStartupRebuild(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed store + reopen/durability")
+	}
 	ctx := testCtx()
 	dataPath := t.TempDir()
 	opPub, _ := generateTestKey()
@@ -12351,6 +12468,9 @@ func TestCommitTransaction_RecoveredPartialCommitRehydratesAfterStartupRebuild(t
 // record of the transaction's mutations (SPEC R9 change-log recovery) — must
 // survive, and no temporary files may leak.
 func TestRefreshTransaction_CrashSafeRebuildPreservesBranchDBOnFailure(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed store + reopen/durability")
+	}
 	ctx := testCtx()
 	dataPath := t.TempDir()
 	st, err := ladybug.Open(dataPath)
@@ -12435,6 +12555,9 @@ func TestRefreshTransaction_CrashSafeRebuildPreservesBranchDBOnFailure(t *testin
 // main's new state plus the transaction's changes, and the subsequent commit
 // converges main.lbug with git main.
 func TestRefreshTransaction_FileBackedCrashSafeSwap(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed store + reopen/durability")
+	}
 	ctx := testCtx()
 	dataPath := t.TempDir()
 	opPub, _ := generateTestKey()
@@ -12552,6 +12675,9 @@ func (s *swapRecordingStore) CloseBranchDB(ctx context.Context, txID string) err
 // until the atomic rename overwrites them), close the temp replacement, then
 // release the temp key after the rename.
 func TestRefreshTransaction_SwapClosesTempBranchBeforeRename(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed store + reopen/durability")
+	}
 	ctx := testCtx()
 	dataPath := t.TempDir()
 	st, err := ladybug.Open(dataPath)
@@ -12624,6 +12750,9 @@ func TestRefreshTransaction_SwapClosesTempBranchBeforeRename(t *testing.T) {
 // what a crash between the refresh swap's rename and the (old) close did —
 // must still yield every row from the file alone.
 func TestStoreCloseBranchDB_CheckpointsDataBeforeFileRename(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed store + reopen/durability")
+	}
 	dataPath := t.TempDir()
 	st, err := ladybug.Open(dataPath)
 	if err != nil {
@@ -12680,6 +12809,9 @@ func TestStoreCloseBranchDB_CheckpointsDataBeforeFileRename(t *testing.T) {
 // HydrateBranchFromFiles and persistTransactionState) must be rolled back
 // instead of hard-failing startup.
 func TestRecoverOpenTransactionsMissingStateRollsBack(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed store + reopen/durability")
+	}
 	ctx := testCtx()
 	dataPath := t.TempDir()
 	st, err := ladybug.Open(dataPath)
@@ -12790,6 +12922,9 @@ func (s *refreshTailPersistFailingStore) SaveBranchTransactionState(
 // instead of misclassifying the transaction as already committed and deleting
 // it (or, in the partial-reapply sub-window, reconstructing a truncated log).
 func TestRefreshTransaction_MidRefreshCrashPreservesMutations(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed store + reopen/durability")
+	}
 	ctx := testCtx()
 	dataPath := t.TempDir()
 	opPub, _ := generateTestKey()
@@ -12931,6 +13066,9 @@ func (h *captureLogHandler) WithGroup(string) slog.Handler      { return h }
 // already-committed transaction. Recovery must roll the branch back loudly
 // instead of silently reporting the transaction as committed.
 func TestRecoverOpenTransactionsMidRefreshEmptyDiffRollsBack(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed store + reopen/durability")
+	}
 	ctx := testCtx()
 	dataPath := t.TempDir()
 	opPub, _ := generateTestKey()
@@ -13049,6 +13187,9 @@ func TestRecoverOpenTransactionsMidRefreshEmptyDiffRollsBack(t *testing.T) {
 // entity as a suspected deletion when it was present in main at the
 // transaction's begin head and is absent from the branch DB.
 func TestRecoverOpenTransactionsStaleBranchNoFalseDeletions(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed store + reopen/durability")
+	}
 	ctx := testCtx()
 	dataPath := t.TempDir()
 	opPub, _ := generateTestKey()
@@ -13149,6 +13290,9 @@ func TestRecoverOpenTransactionsStaleBranchNoFalseDeletions(t *testing.T) {
 // — never silently reporting it as committed and never touching another
 // transaction's data.
 func TestRecoverOpenTransactionsAbortedRefreshRollsBackLoudly(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed store + reopen/durability")
+	}
 	ctx := testCtx()
 	dataPath := t.TempDir()
 	opPub, _ := generateTestKey()
@@ -13268,6 +13412,9 @@ func TestRecoverOpenTransactionsAbortedRefreshRollsBackLoudly(t *testing.T) {
 // push is delivered — it must not return success while the push flag is still
 // set.
 func TestCommitTransaction_MergeCompletedAckWaitsForPush(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: real git sync worker")
+	}
 	ladybugPath := t.TempDir()
 	gs, err := gitstore.New(ladybugPath)
 	if err != nil {
@@ -13458,6 +13605,9 @@ func (s *hydrationDirErrorStore) HydrateBranchFromFiles(
 // previously hit the removed ErrInvalidEntityDir/ErrInvalidEdgeDir →
 // INVALID_ARGUMENT mappings (errors.go).
 func TestRefreshTransaction_RehydrationFailureIsInternal(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed store + reopen/durability")
+	}
 	ctx := testCtx()
 	dataPath := t.TempDir()
 	opPub, _ := generateTestKey()
@@ -13818,6 +13968,9 @@ func TestGetTransactionDiff_LiveDeletePopulatesDeletionBuckets(t *testing.T) {
 // TestWipeGraph_GitSideMidWipeFailure; this test seeds an untracked residual
 // file and asserts the WipeGraph-level wipe removes it.
 func TestWipeGraph_RemovesUntrackedResidualFiles(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed store + wipe lands on main")
+	}
 	ctx := context.Background()
 	dataPath := t.TempDir()
 	st, err := openTestStore(t)
@@ -13887,6 +14040,9 @@ func TestSync_MissingCapabilityBeforeRemoteProbe(t *testing.T) {
 // old recovery propagated and cmd/main.go treated as fatal (pod crash loop).
 // Recovery must roll the mid-swap casualty back loudly instead.
 func TestRecoverOpenTransactionsMidSwapMismatchRollsBack(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed store + reopen/durability")
+	}
 	ctx := testCtx()
 	dataPath := t.TempDir()
 	opPub, _ := generateTestKey()
@@ -14023,6 +14179,9 @@ func TestRecoverOpenTransactionsMidSwapMismatchRollsBack(t *testing.T) {
 // sweep must remove the orphaned temp files while leaving live transaction
 // branches (git branch + branch files) untouched.
 func TestRecoverOpenTransactionsCleansOrphanedRefreshTempBranches(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed store + reopen/durability")
+	}
 	ctx := testCtx()
 	dataPath := t.TempDir()
 	st, err := ladybug.Open(dataPath)

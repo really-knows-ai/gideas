@@ -195,6 +195,9 @@ func committedTreeFile(gs *gitStore, path string) error {
 // ============================================================================
 
 func TestInitNewRepo(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: real git repository on disk")
+	}
 	tmpDir := t.TempDir()
 	gs, err := New(tmpDir)
 	if err != nil {
@@ -259,6 +262,9 @@ func TestInitNewRepo(t *testing.T) {
 // TestHydrationDirs asserts HydrationDirs points into the graph-repo working
 // tree used by the service layer for main re-hydration.
 func TestHydrationDirs(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: real git repository on disk")
+	}
 	tmpDir := t.TempDir()
 	gs, err := New(tmpDir)
 	if err != nil {
@@ -277,6 +283,9 @@ func TestHydrationDirs(t *testing.T) {
 
 // TestInitExistingRepo opens an existing repository on disk.
 func TestInitExistingRepo(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: real git repository on disk")
+	}
 	tmpDir := t.TempDir()
 	if _, err := New(tmpDir); err != nil {
 		t.Fatalf("first New failed: %v", err)
@@ -288,6 +297,9 @@ func TestInitExistingRepo(t *testing.T) {
 }
 
 func TestInitBadPath(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: real git repository on disk")
+	}
 	// Use a path in a read-only directory
 	badPath := "/nonexistent-root-xyz"
 	_, err := New(badPath)
@@ -301,6 +313,9 @@ func TestInitBadPath(t *testing.T) {
 // empty base path, and callers must be able to distinguish the guard via
 // errors.Is rather than a nil-interface or ad-hoc error string.
 func TestNewEmptyBasePath(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: real git repository on disk")
+	}
 	store, err := New("")
 	if !errors.Is(err, ErrEmptyBasePath) {
 		t.Fatalf("New(\"\") = %v, want ErrEmptyBasePath", err)
@@ -311,6 +326,9 @@ func TestNewEmptyBasePath(t *testing.T) {
 }
 
 func TestInitNonDirectoryGit(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: real git repository on disk")
+	}
 	// A .git path that exists as a regular file must yield a clear error,
 	// not the misleading "stat .git: %!w(<nil>)" from a nil stat error.
 	tmpDir := t.TempDir()
@@ -343,6 +361,9 @@ func TestInitNonDirectoryGit(t *testing.T) {
 // IsEmpty's main-ref lookup succeeds, and BeginTransaction's branch-from-main
 // (CreateBranch) can resolve main (SPEC durability/recovery).
 func TestNewRepairsCrashedInit(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: real git repository on disk")
+	}
 	basePath := t.TempDir()
 	repoPath := filepath.Join(basePath, "graph-repo")
 	if _, err := git.PlainInitWithOptions(repoPath, &git.PlainInitOptions{
@@ -3340,6 +3361,9 @@ func TestFetchAndMergeNoRemote(t *testing.T) {
 // non-auth failure; the full anonymous-push success path is pinned by
 // TestPushRemoteAnonymous.)
 func TestPushRemoteWithAuth(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: real git repository on disk")
+	}
 	gs := setupTestStore(t)
 	err := gs.WithGitLock(func() error {
 		// A URL that demands credentials (embedded user) with no auth provider
@@ -3415,6 +3439,9 @@ func TestPushRemoteWithAuth(t *testing.T) {
 // exactly like a plain public https URL), so the anonymous push is driven
 // end-to-end without the network, and the remote ref must advance.
 func TestPushRemoteAnonymous(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: real git repository on disk")
+	}
 	tmpDir := t.TempDir()
 	bareDir := filepath.Join(tmpDir, "remote.git")
 
@@ -3619,6 +3646,9 @@ func TestPushMainOnlyScopeBoundary(t *testing.T) {
 }
 
 func TestCloneSingleBranchNoAuth(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: real git repository on disk")
+	}
 	tmpDir := t.TempDir()
 	sourceDir := filepath.Join(tmpDir, "source")
 	source, err := git.PlainInitWithOptions(sourceDir, &git.PlainInitOptions{
@@ -3744,6 +3774,9 @@ func TestCloneSingleBranchNoAuth(t *testing.T) {
 // setLocalRefAndCheckout — they survive the clone and are re-hydrated into
 // main.lbug as phantom graph data.
 func TestCloneSingleBranchCleansUntracked(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: real git repository on disk")
+	}
 	tmpDir := t.TempDir()
 	sourceDir := filepath.Join(tmpDir, "source")
 	source, err := git.PlainInitWithOptions(sourceDir, &git.PlainInitOptions{
@@ -3835,6 +3868,9 @@ func TestCloneSingleBranchCleansUntracked(t *testing.T) {
 // discard local commits (data loss), so the call must fail loudly with
 // ErrRepoNotEmpty and leave local main untouched.
 func TestCloneSingleBranchNonEmptyRepoRejected(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: real git repository on disk")
+	}
 	tmpDir := t.TempDir()
 	sourceDir := filepath.Join(tmpDir, "source")
 	source, err := git.PlainInitWithOptions(sourceDir, &git.PlainInitOptions{
@@ -4570,6 +4606,9 @@ func (a noopAuth) String() string { return "noop" }
 // TestRemotePushPull exercises PushRemote and FetchAndMerge using temp
 // directory repos with file:// URLs set directly on the gitStore.
 func TestRemotePushPull(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: real git repository on disk")
+	}
 	tmpDir := t.TempDir()
 	bareDir := filepath.Join(tmpDir, "remote.git")
 
@@ -4657,6 +4696,9 @@ func TestRemotePushPull(t *testing.T) {
 // (the same flow CloneSingleBranch composes), driven by hand so the reopen
 // and backend re-wiring steps can be asserted individually.
 func TestCloneSingleBranchFromRemote(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: real git repository on disk")
+	}
 	tmpDir := t.TempDir()
 
 	// Create a source repo with a commit
@@ -5012,6 +5054,9 @@ func TestCommitExistsOnBranchNoCommit(t *testing.T) {
 // TestPushAlreadyUpToDate tests that pushing when already up-to-date
 // returns no error (NoErrAlreadyUpToDate is handled as success).
 func TestPushAlreadyUpToDate(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: real git repository on disk")
+	}
 	tmpDir := t.TempDir()
 	bareDir := filepath.Join(tmpDir, "remote.git")
 
@@ -5191,6 +5236,9 @@ func copyDir(t *testing.T, src, dst string) {
 // additional history. FetchAndMerge must fast-forward local main from the
 // init commit to the remote's HEAD without returning ErrPullDiverged.
 func TestFetchAndMerge_BootstrapFromInitOnly(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: real git repository on disk")
+	}
 	tmpDir := t.TempDir()
 	bareDir := filepath.Join(tmpDir, "remote.git")
 
@@ -5307,6 +5355,9 @@ func TestFetchAndMerge_BootstrapFromInitOnly(t *testing.T) {
 // TestFetchAndMerge_AlreadyUpToDate tests that FetchAndMerge when both
 // sides are identical returns no error and the HEAD hash is unchanged.
 func TestFetchAndMerge_AlreadyUpToDate(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: real git repository on disk")
+	}
 	tmpDir := t.TempDir()
 	bareDir := filepath.Join(tmpDir, "remote.git")
 
@@ -5341,6 +5392,9 @@ func TestFetchAndMerge_AlreadyUpToDate(t *testing.T) {
 // setLocalRefAndCheckout fast-forward path rather than the early
 // up-to-date return.
 func TestFetchAndMerge_FastForward(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: real git repository on disk")
+	}
 	tmpDir := t.TempDir()
 	bareDir := filepath.Join(tmpDir, "remote.git")
 
@@ -5429,6 +5483,9 @@ func TestFetchAndMerge_FastForward(t *testing.T) {
 // maps ErrPullDiverged to FAILED_PRECONDITION, matching SPEC R10 / error-table
 // row "Sync diverged" (SPEC:980).
 func TestFetchAndMerge_Diverged(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: real git repository on disk")
+	}
 	tmpDir := t.TempDir()
 	bareDir := filepath.Join(tmpDir, "remote.git")
 
@@ -5527,6 +5584,9 @@ func TestFetchAndMerge_Diverged(t *testing.T) {
 // never sees a clean cycle over stale local state (SPEC R10 BeginTransaction
 // implicit sync).
 func TestFetchAndMerge_DivergencePersistsAcrossCycles(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: real git repository on disk")
+	}
 	tmpDir := t.TempDir()
 	bareDir := filepath.Join(tmpDir, "remote.git")
 
@@ -5636,6 +5696,9 @@ func TestFetchAndMerge_DivergencePersistsAcrossCycles(t *testing.T) {
 // ensureRemoteExists deletes/recreates origin on URL change), forcing the
 // fetch to re-create the tracking ref from the remote's behind-local tip.
 func TestFetchAndMerge_LocalAhead(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: real git repository on disk")
+	}
 	tmpDir := t.TempDir()
 	bareDir := filepath.Join(tmpDir, "remote.git")
 
@@ -5703,6 +5766,9 @@ func TestFetchAndMerge_LocalAhead(t *testing.T) {
 // fetch refspec was hardwired to "refs/heads/main", so for a non-main branch
 // the tracking-ref read at "refs/remotes/<remote>/<branch>" was stale/absent.
 func TestFetchAndMerge_NonMainBranch(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: real git repository on disk")
+	}
 	tmpDir := t.TempDir()
 	bareDir := filepath.Join(tmpDir, "remote.git")
 
@@ -5795,6 +5861,9 @@ func TestFetchAndMerge_NonMainBranch(t *testing.T) {
 // wt.Clean removes stale untracked files — the working tree must exactly
 // match the remote state.
 func TestFetchAndMerge_PullAfterWipe(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: real git repository on disk")
+	}
 	tmpDir := t.TempDir()
 	bareDir := filepath.Join(tmpDir, "remote.git")
 
@@ -5930,6 +5999,9 @@ func TestFetchAndMerge_PullAfterWipe(t *testing.T) {
 // TestPullAlreadyUpToDate2 tests that pulling when already up-to-date
 // returns no error.
 func TestPullAlreadyUpToDate2(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: real git repository on disk")
+	}
 	tmpDir := t.TempDir()
 	bareDir := filepath.Join(tmpDir, "remote.git")
 

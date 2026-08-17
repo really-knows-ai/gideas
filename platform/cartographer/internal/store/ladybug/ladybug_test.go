@@ -62,6 +62,9 @@ func TestOpenClose(t *testing.T) {
 }
 
 func TestOpenFileBacked(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed LadybugDB store")
+	}
 	dir := t.TempDir()
 	s, err := Open(dir)
 	if err != nil {
@@ -434,6 +437,9 @@ func TestApplySchema_EntityTypeDefs(t *testing.T) {
 }
 
 func TestSchemaCache_RebuildOnOpen(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed LadybugDB store")
+	}
 	dir := t.TempDir()
 
 	// First session: open, apply schema, close.
@@ -710,6 +716,9 @@ func TestApplySchema_NilSchema_Rejected(t *testing.T) {
 // EntityTypeNames/TableExists/ListMainEntityTypes; and WipeSchema enumerates
 // every catalog table and drops the placeholder with the rest.
 func TestUntypedPlaceholder_Lifecycle(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed LadybugDB store")
+	}
 	t.Run("edgeless edge type creates the placeholder node table", func(t *testing.T) {
 		s, err := openInMemory()
 		if err != nil {
@@ -2939,6 +2948,9 @@ func TestFullTextSearch_NoResultCap(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestPersistence_AcrossCloseReopen(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed LadybugDB store")
+	}
 	dir := t.TempDir()
 	s, err := Open(dir)
 	if err != nil {
@@ -2971,6 +2983,9 @@ func TestPersistence_AcrossCloseReopen(t *testing.T) {
 }
 
 func TestPersistence_SchemaSurvivesReopen(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed LadybugDB store")
+	}
 	dir := t.TempDir()
 	s, err := Open(dir)
 	if err != nil {
@@ -2996,6 +3011,9 @@ func TestPersistence_SchemaSurvivesReopen(t *testing.T) {
 }
 
 func TestPersistence_CompleteSchemaMetadataSurvivesReopen(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed LadybugDB store")
+	}
 	dir := t.TempDir()
 	s, err := Open(dir)
 	if err != nil {
@@ -3052,6 +3070,9 @@ func TestPersistence_CompleteSchemaMetadataSurvivesReopen(t *testing.T) {
 }
 
 func TestPersistence_MissingOrCorruptSchemaMetadataFailsClosed(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed LadybugDB store")
+	}
 	for _, test := range []struct {
 		name   string
 		mutate func(string) error
@@ -3094,6 +3115,9 @@ func TestPersistence_MissingOrCorruptSchemaMetadataFailsClosed(t *testing.T) {
 // bricks startup. A present-but-corrupt metadata file stays a loud failure
 // (the guard matches only the not-exist read error).
 func TestPersistence_MissingBranchSchemaMetadataRollsBackOnReopen(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed LadybugDB store")
+	}
 	dir := t.TempDir()
 	ctx := context.Background()
 	s, err := Open(dir)
@@ -3156,6 +3180,9 @@ func TestPersistence_MissingBranchSchemaMetadataRollsBackOnReopen(t *testing.T) 
 // classified identically: the client never received the txID, so the partial
 // branch is just as harmless.
 func TestBranch_EmptyBranchNoMetadataRollsBackOnReopen(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed LadybugDB store")
+	}
 	dir := t.TempDir()
 	s, err := Open(dir)
 	if err != nil {
@@ -3217,6 +3244,9 @@ func TestBranch_EmptyBranchNoMetadataRollsBackOnReopen(t *testing.T) {
 // unreadable file is an operational failure and must stay a hard error so the
 // rollback path never deletes a branch DB that was never corrupt.
 func TestBranch_CorruptBranchLbugRollsBackOnReopen(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed LadybugDB store")
+	}
 	t.Run("readable corrupt .lbug rolls back", func(t *testing.T) {
 		dir := t.TempDir()
 		s, err := Open(dir)
@@ -3315,6 +3345,9 @@ func TestBranch_CorruptBranchLbugRollsBackOnReopen(t *testing.T) {
 }
 
 func TestPersistence_CatalogMetadataMismatchFailsClosed(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed LadybugDB store")
+	}
 	for _, test := range []struct {
 		name   string
 		mutate func(*schemaMetadata)
@@ -3386,6 +3419,9 @@ func TestPersistence_CatalogMetadataMismatchFailsClosed(t *testing.T) {
 }
 
 func TestPersistence_ValidMetadataRestoresEmptyCatalog(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed LadybugDB store")
+	}
 	dir := t.TempDir()
 	s, err := Open(dir)
 	if err != nil {
@@ -3409,6 +3445,9 @@ func TestPersistence_ValidMetadataRestoresEmptyCatalog(t *testing.T) {
 }
 
 func TestApplySchemaMetadataFailuresFailClosed(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed LadybugDB store")
+	}
 	schema := &flowv1.Schema{EntityTypes: []*flowv1.EntityType{{
 		Name: "Component", Properties: []*flowv1.Property{{Name: "name", Type: "string"}},
 	}}}
@@ -3527,6 +3566,9 @@ func TestWriteSchemaMetadataPublishesDurably(t *testing.T) {
 // metadata"); the Open-time reconcile must complete the interrupted bootstrap
 // and adopt the vector state so the store reopens usable.
 func TestVectorBootstrapIndexFailureHealsOnReopen(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed LadybugDB store")
+	}
 	for _, branch := range []string{"", "tx-vector-index-failure"} {
 		name := "main"
 		if branch != "" {
@@ -3604,6 +3646,9 @@ func TestVectorBootstrapIndexFailureHealsOnReopen(t *testing.T) {
 // usable. The in-memory rejection of the retry (the branch is marked failed by
 // the failed publish) is unchanged.
 func TestBranchVectorMetadataPublishFailureRecoversOnReopen(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed LadybugDB store")
+	}
 	dir := t.TempDir()
 	database, err := Open(dir)
 	if err != nil {
@@ -3668,6 +3713,9 @@ func TestBranchVectorMetadataPublishFailureRecoversOnReopen(t *testing.T) {
 // state so the store reopens usable. The in-memory rejection of the retry (the
 // store is marked failed by the failed publish) is unchanged.
 func TestMainVectorMetadataPublishFailureRecoversOnReopen(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed LadybugDB store")
+	}
 	dir := t.TempDir()
 	database, err := Open(dir)
 	if err != nil {
@@ -3715,6 +3763,9 @@ func TestMainVectorMetadataPublishFailureRecoversOnReopen(t *testing.T) {
 }
 
 func TestFileBackedVectorBootstrapSurvivesMainAndBranchReopen(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed LadybugDB store")
+	}
 	dir := t.TempDir()
 	database, err := Open(dir)
 	if err != nil {
@@ -3780,6 +3831,9 @@ func TestFileBackedVectorBootstrapSurvivesMainAndBranchReopen(t *testing.T) {
 // main's metadata still records VectorIndexes=false/VectorDimensions=0 and the
 // reopen bricks startup.
 func TestRehydrateFromBranch_PromotedVectorMetadataSurvivesReopen(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed LadybugDB store")
+	}
 	dir := t.TempDir()
 	database, err := Open(dir)
 	if err != nil {
@@ -3859,6 +3913,9 @@ func vectorBootstrapCrashSchema() *flowv1.Schema {
 }
 
 func TestVectorBootstrapCrashWindow_UpdateEntityHealsOnReopen(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed LadybugDB store")
+	}
 	ctx := context.Background()
 	dir := t.TempDir()
 	s, err := Open(dir)
@@ -3935,6 +3992,9 @@ func TestVectorBootstrapCrashWindow_UpdateEntityHealsOnReopen(t *testing.T) {
 // schema.json records it indexed. reconcileVectorStateFromCatalog must complete
 // the missing index on Open, or validation bricks startup.
 func TestVectorBootstrapCrashWindow_EmbeddingRewriteHealsOnReopen(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed LadybugDB store")
+	}
 	ctx := context.Background()
 	dir := t.TempDir()
 	s, err := Open(dir)
@@ -3987,6 +4047,9 @@ func TestVectorBootstrapCrashWindow_EmbeddingRewriteHealsOnReopen(t *testing.T) 
 }
 
 func TestVectorBootstrapCrashWindow_RehydrateFromBranchHealsOnReopen(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed LadybugDB store")
+	}
 	ctx := context.Background()
 	dir := t.TempDir()
 	database, err := Open(dir)
@@ -4043,6 +4106,9 @@ func TestVectorBootstrapCrashWindow_RehydrateFromBranchHealsOnReopen(t *testing.
 }
 
 func TestVectorBootstrapCrashWindow_RehydrateMainFromFilesHealsOnReopen(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed LadybugDB store")
+	}
 	ctx := context.Background()
 	dir := t.TempDir()
 	s, err := Open(dir)
@@ -4096,6 +4162,9 @@ func TestVectorBootstrapCrashWindow_RehydrateMainFromFilesHealsOnReopen(t *testi
 }
 
 func TestVectorBootstrapCrashWindow_BranchFileLoadHealsOnReopen(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed LadybugDB store")
+	}
 	ctx := context.Background()
 	dir := t.TempDir()
 	database, err := Open(dir)
@@ -4496,6 +4565,9 @@ func TestBranch_CreateDrop(t *testing.T) {
 // and reading through the branch must still yield every row from the file
 // alone, via the same lazy branchLocked reopen a restarted process uses.
 func TestCloseBranchDB_CheckpointsDataWithoutRemovingFiles(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed LadybugDB store")
+	}
 	ctx := context.Background()
 	dir := t.TempDir()
 	st, err := Open(dir)
@@ -4603,6 +4675,9 @@ func TestBranchTransactionState_InMemoryLifecycle(t *testing.T) {
 }
 
 func TestBranchTransactionState_MissingRecordFailsClosed(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed LadybugDB store")
+	}
 	path := t.TempDir()
 	s, err := Open(path)
 	if err != nil {
@@ -4634,6 +4709,9 @@ func TestBranchTransactionState_MissingRecordFailsClosed(t *testing.T) {
 }
 
 func TestBranchTransactionState_PersistsAndRejectsCorruption(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed LadybugDB store")
+	}
 	path := t.TempDir()
 	s, err := Open(path)
 	if err != nil {
@@ -5203,6 +5281,9 @@ func TestFTSIndex_Search(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestRehydrateMainFromFiles_EntitiesDirOnly_ReturnsError(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed rehydration from working tree")
+	}
 	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
@@ -5245,6 +5326,9 @@ func TestRehydrateMainFromFiles_EntitiesDirOnly_ReturnsError(t *testing.T) {
 // failed": the R8 "automatic recovery on next startup" escape hatch
 // presupposes a consistent graph to serve).
 func TestRehydrateMainFromFiles_FailureKeepsMainConsistent(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed rehydration from working tree")
+	}
 	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
@@ -5302,6 +5386,9 @@ func TestRehydrateMainFromFiles_FailureKeepsMainConsistent(t *testing.T) {
 // entities and skipping every edge would hydrate an incomplete graph with no
 // signal.
 func TestHydrateBranchFromFiles_EntitiesDirOnly_ReturnsError(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed rehydration from working tree")
+	}
 	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
@@ -5349,6 +5436,9 @@ func TestHydrateBranchFromFiles_EntitiesDirOnly_ReturnsError(t *testing.T) {
 // indefinitely because only ApplySchema and restoreMainSchemaMetadataLocked
 // (neither of which runs in this corner) set the flag.
 func TestRehydrateMainFromFiles_SchemaAppliedAfterBothLostRecovery(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed LadybugDB store")
+	}
 	dir := t.TempDir()
 	s, err := Open(dir)
 	if err != nil {
@@ -5433,6 +5523,9 @@ func TestRehydrateMainFromFiles_SchemaAppliedAfterBothLostRecovery(t *testing.T)
 // schemaApplied unconditionally on the empty tree (the pre-fix behaviour
 // reported SchemaApplied=true against the wiped store).
 func TestRehydrateMainFromFiles_EmptyTreeLeavesSchemaUnappliedAfterWipe(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed LadybugDB store")
+	}
 	dir := t.TempDir()
 	s, err := Open(dir)
 	if err != nil {
@@ -5507,6 +5600,9 @@ func TestRehydrateMainFromFiles_EmptyTreeLeavesSchemaUnappliedAfterWipe(t *testi
 // registered type and every branch edge is silently dropped (insertEdgeOnConn's
 // CREATE silently no-ops against the mismatched endpoints).
 func TestReplicateSchemaToBranch_RealInferredPairsAfterBothLostRehydration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed LadybugDB store")
+	}
 	dir := t.TempDir()
 	s, err := Open(dir)
 	if err != nil {
@@ -5614,6 +5710,9 @@ func TestReplicateSchemaToBranch_RealInferredPairsAfterBothLostRehydration(t *te
 // metadata (ReplicateSchemaToBranch), so the reopened branch metadata must
 // validate too.
 func TestRehydrateMainFromFiles_InferredEdgeTypeSurvivesFileBackedReopen(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed LadybugDB store")
+	}
 	dir := t.TempDir()
 	s, err := Open(dir)
 	if err != nil {
@@ -5716,6 +5815,9 @@ func TestRehydrateMainFromFiles_InferredEdgeTypeSurvivesFileBackedReopen(t *test
 }
 
 func TestRehydrateMainFromFiles_BothMissing_NoError(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed rehydration from working tree")
+	}
 	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
@@ -5734,6 +5836,9 @@ func TestRehydrateMainFromFiles_BothMissing_NoError(t *testing.T) {
 }
 
 func TestLoadEntitiesFromDir_ReadDirError(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed rehydration from working tree")
+	}
 	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
@@ -5775,6 +5880,9 @@ func TestLoadEntitiesFromDir_ReadDirError(t *testing.T) {
 // replay of a property-bearing file would fail against a table with only the
 // `id` column.
 func TestRehydrateMainFromFiles_InferredTypeWithProperties(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed rehydration from working tree")
+	}
 	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
@@ -5832,6 +5940,9 @@ func TestRehydrateMainFromFiles_InferredTypeWithProperties(t *testing.T) {
 // for an inferred type failed with a raw engine error and re-hydration could
 // not recover edge data.
 func TestRehydrateMainFromFiles_InferredEdgeTypeWithProperties(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed rehydration from working tree")
+	}
 	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
@@ -5888,6 +5999,9 @@ func TestRehydrateMainFromFiles_InferredEdgeTypeWithProperties(t *testing.T) {
 // absent from the applied schema must have its rel table inferred so the
 // branch's edge files load instead of failing with a raw engine error.
 func TestHydrateBranchFromFiles_InferredEdgeTypeWithProperties(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed rehydration from working tree")
+	}
 	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
@@ -5960,6 +6074,9 @@ func TestHydrateBranchFromFiles_InferredEdgeTypeWithProperties(t *testing.T) {
 // non-ErrBranchNotFound error as a hard startup failure instead of rolling
 // back the one affected branch.
 func TestHydrateBranchFromFiles_InferredTypesSurviveFileBackedReopen(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed LadybugDB store")
+	}
 	dir := t.TempDir()
 	s, err := Open(dir)
 	if err != nil {
@@ -6042,6 +6159,9 @@ func TestHydrateBranchFromFiles_InferredTypesSurviveFileBackedReopen(t *testing.
 // schema.Validate and got rejected with ErrInvalidPropertyType — bricking the
 // next file-backed Open.
 func TestRehydrateMainFromFiles_InferredTypeSurvivesFileBackedReopen(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed LadybugDB store")
+	}
 	dir := t.TempDir()
 	s, err := Open(dir)
 	if err != nil {
@@ -6100,6 +6220,9 @@ func TestRehydrateMainFromFiles_InferredTypeSurvivesFileBackedReopen(t *testing.
 // consistent with the embedding column/index actually created. Without this the
 // in-memory def disagrees with the metadata model and with SearchNeighbors.
 func TestRehydrateMainFromFiles_InferredTypePromotesEnableVectorIndex(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed rehydration from working tree")
+	}
 	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
@@ -6144,6 +6267,9 @@ func TestRehydrateMainFromFiles_InferredTypePromotesEnableVectorIndex(t *testing
 // ---------------------------------------------------------------------------
 
 func TestApplySchema_AdditiveEntityProperty(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed LadybugDB store")
+	}
 	dir := t.TempDir()
 	s, err := Open(dir)
 	if err != nil {
@@ -6410,6 +6536,9 @@ func TestCheckBranchSchemaCompatibility(t *testing.T) {
 // ErrUnknownProperty and a file-backed reopen fails closed when the metadata
 // property is absent from the catalog.
 func TestEntityPropertiesNamedToAndType(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed LadybugDB store")
+	}
 	dir := t.TempDir()
 	s, err := Open(dir)
 	if err != nil {
@@ -6496,6 +6625,9 @@ func TestEntityPropertiesNamedToAndType(t *testing.T) {
 // ApplySchema re-apply (SPEC R6), and a CreateBranchDB + ReplicateSchemaToBranch
 // (the store-side begin-transaction sequence).
 func TestNonVectorTypeEmbeddingProperty_RoundTrips(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed LadybugDB store")
+	}
 	dir := t.TempDir()
 	s, err := Open(dir)
 	if err != nil {
@@ -6575,6 +6707,9 @@ func TestNonVectorTypeEmbeddingProperty_RoundTrips(t *testing.T) {
 }
 
 func TestApplySchema_AdditiveEdgeProperty(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed LadybugDB store")
+	}
 	dir := t.TempDir()
 	s, err := Open(dir)
 	if err != nil {
@@ -6676,6 +6811,9 @@ func TestApplySchema_AdditiveEdgeProperty(t *testing.T) {
 // change. The pre-existing edge must stay readable and listed while new edge
 // creation validates against the modified rules.
 func TestApplySchema_RuleModification_PreexistingEdgeRemainsValid(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed LadybugDB store")
+	}
 	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
@@ -6763,6 +6901,9 @@ func TestApplySchema_RuleModification_PreexistingEdgeRemainsValid(t *testing.T) 
 // ALTER. Such a change must therefore be rejected as a destructive schema
 // change, not silently applied.
 func TestApplySchema_AddNewFromToPairOnExistingEdgeType_Rejected(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed LadybugDB store")
+	}
 	dir := t.TempDir()
 	s, err := Open(dir)
 	if err != nil {
@@ -6822,6 +6963,9 @@ func TestApplySchema_AddNewFromToPairOnExistingEdgeType_Rejected(t *testing.T) {
 // endpoint comparison normalizes empty requested pairs to the placeholder (an
 // edgeless edge type must never false-positive the new check).
 func TestApplySchema_MixedAdditiveAndDestructive_AllOrNothing(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed LadybugDB store")
+	}
 	dir := t.TempDir()
 	s, err := Open(dir)
 	if err != nil {
@@ -6932,6 +7076,9 @@ func TestApplySchema_MixedAdditiveAndDestructive_AllOrNothing(t *testing.T) {
 // added, rebuild the extended type's FTS index, and preserve data written
 // before the crash.
 func TestApplySchemaCrashWindow_PartialCatalogRecoveredOnReopen(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed LadybugDB store")
+	}
 	ctx := context.Background()
 	schema1 := &flowv1.Schema{
 		EntityTypes: []*flowv1.EntityType{
@@ -7055,6 +7202,9 @@ func TestApplySchemaCrashWindow_PartialCatalogRecoveredOnReopen(t *testing.T) {
 // createNodeTableOnConn) must have the index recreated on the next Open so
 // FullTextSearch keeps covering the type instead of silently skipping it.
 func TestReopen_RecreatesMissingFTSIndex(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed LadybugDB store")
+	}
 	ctx := context.Background()
 	dir := t.TempDir()
 	s, err := Open(dir)
@@ -7115,6 +7265,9 @@ func propertyDefPresent(props []store.PropertyDef, name string) bool {
 // brick the store. The pair-derivation paths must dedup consistently so the
 // metadata-derived pair set matches the rel table's endpoint clauses on reopen.
 func TestApplySchema_RedundantRulesDedupPairsSurviveReopen(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed LadybugDB store")
+	}
 	dir := t.TempDir()
 	s, err := Open(dir)
 	if err != nil {
@@ -7560,6 +7713,9 @@ func TestApplySchema_DestructiveChange_VectorDisable(t *testing.T) {
 // then allow an embedding CreateEntity to lazily bootstrap the dimension, and
 // a close/reopen must restore the lazy vector index from the persisted schema.
 func TestApplySchema_EnableVectorIndexFalseToTrue_NonDestructive(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed LadybugDB store")
+	}
 	dir := t.TempDir()
 	s, err := Open(dir)
 	if err != nil {
@@ -7632,6 +7788,9 @@ func TestApplySchema_EnableVectorIndexFalseToTrue_NonDestructive(t *testing.T) {
 // itself — defense-in-depth behind the service-layer FAILED_PRECONDITION
 // (SPEC row ~915) which only guards a live transaction.
 func TestWipeSchema_ClosesOpenBranchesAndRemovesPersistedState(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed LadybugDB store")
+	}
 	dir := t.TempDir()
 	s, err := Open(dir)
 	if err != nil {
@@ -7693,6 +7852,9 @@ func TestWipeSchema_ClosesOpenBranchesAndRemovesPersistedState(t *testing.T) {
 }
 
 func TestWipeSchema_ThenApplySchema_EntityOnlyTransaction(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed LadybugDB store")
+	}
 	dir := t.TempDir()
 	s, err := Open(dir)
 	if err != nil {
@@ -7801,6 +7963,9 @@ func TestWipeSchema_ThenApplySchema_EntityOnlyTransaction(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestRehydrateMainFromFiles_HoldsLockForEntireOperation(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed LadybugDB store")
+	}
 	// Concurrent reads during rehydration must not observe partial state.
 	// The rehydration must hold db.mu for the entire wipe-and-load cycle.
 	s, err := openInMemory()
@@ -7939,6 +8104,9 @@ func TestFindEdgeByID_PropagatesPrepareError(t *testing.T) {
 }
 
 func TestLoadEntitiesFromDir_ReadFileError(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed rehydration from working tree")
+	}
 	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
@@ -8612,6 +8780,9 @@ func TestBranch_InheritsMainVectorDimension_RejectsConflict(t *testing.T) {
 // scope). Without this, the branch-copy path's CREATE targeting the embedding
 // column would fail because main's table never added it.
 func TestRehydrateFromBranch_PromotesEmbeddingDimensionToMain(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed rehydration from working tree")
+	}
 	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
@@ -8654,6 +8825,9 @@ func TestRehydrateFromBranch_PromotesEmbeddingDimensionToMain(t *testing.T) {
 // disagree with the returned type. Both paths (main and branch) must reject
 // such a file.
 func TestRehydrateMainFromFiles_RejectsTypeDirectoryMismatch(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed rehydration from working tree")
+	}
 	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
@@ -8691,6 +8865,9 @@ func TestRehydrateMainFromFiles_RejectsTypeDirectoryMismatch(t *testing.T) {
 
 // The same type/directory mismatch guard must apply on the branch load path.
 func TestHydrateBranchFromFiles_RejectsTypeDirectoryMismatch(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed rehydration from working tree")
+	}
 	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
@@ -8901,6 +9078,9 @@ func TestCorruptionCandidates_ReadableVersusUnreadable(t *testing.T) {
 // schema rehydrated from the persisted metadata. An unreadable main.lbug is an
 // operational failure and must NOT be deleted — Open fails and the file remains.
 func TestOpenCorruptDatabase_RecoversOrFailsClosed(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed LadybugDB store")
+	}
 	t.Run("readable corrupt file recovers", func(t *testing.T) {
 		dir := t.TempDir()
 		s, err := Open(dir)
@@ -8977,6 +9157,9 @@ func TestOpenCorruptDatabase_RecoversOrFailsClosed(t *testing.T) {
 // companion removal (they fail pre-fix, which removed only main.lbug and left
 // the torn WAL to fail the re-open).
 func TestOpenCorruptDatabase_RemovesTornWalCompanions(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed LadybugDB store")
+	}
 	// setupDB opens a file-backed store, applies a schema, and closes it,
 	// leaving a clean main.lbug + schema.json with no WAL residue.
 	setupDB := func(t *testing.T) string {
@@ -9072,6 +9255,9 @@ func TestOpenCorruptDatabase_RemovesTornWalCompanions(t *testing.T) {
 // live files — a branch's state/schema records (the renamed targets of the
 // .state-* and .schema-* temps) and main's schema metadata — untouched.
 func TestOpenCleansOrphanedAtomicTempFiles(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed LadybugDB store")
+	}
 	dir := t.TempDir()
 	s, err := Open(dir)
 	if err != nil {
@@ -9153,6 +9339,9 @@ func TestOpenCleansOrphanedAtomicTempFiles(t *testing.T) {
 // divergence directly: the first table's metadata is intact; a second table
 // exists in the catalog but was never published to metadata.
 func TestApplySchema_MidMultiTableDDLFailureFailsClosedOnReopen(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed LadybugDB store")
+	}
 	dir := t.TempDir()
 	s, err := Open(dir)
 	if err != nil {
@@ -9202,6 +9391,9 @@ func TestApplySchema_MidMultiTableDDLFailureFailsClosedOnReopen(t *testing.T) {
 // dropped on the re-hydration read path with no error (learnings rule: never
 // silently drop a row or swallow a not-exist on a read path).
 func TestRehydrateMainFromFiles_EdgeWithMissingEndpointFailsLoudly(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed rehydration from working tree")
+	}
 	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
@@ -9243,6 +9435,9 @@ func TestRehydrateMainFromFiles_EdgeWithMissingEndpointFailsLoudly(t *testing.T)
 // surfaces ErrSourceOrTargetNotFound, mirroring the typed write path
 // (crud.go CreateEdge's findEntityByID + rule validation).
 func TestRehydrateFiles_WrongLabelEndpointFailsLoudly(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed rehydration from working tree")
+	}
 	for _, tc := range []struct {
 		name   string
 		branch bool
@@ -9316,6 +9511,9 @@ func TestRehydrateFiles_WrongLabelEndpointFailsLoudly(t *testing.T) {
 // (crud.go → ErrEdgeRuleViolation), so the load path must fail loudly with
 // ErrSourceOrTargetNotFound instead of relying on coincidental engine errors.
 func TestRehydrateFiles_CrossPairEndpointFailsLoudly(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed rehydration from working tree")
+	}
 	for _, tc := range []struct {
 		name   string
 		branch bool
@@ -9400,6 +9598,9 @@ func TestRehydrateFiles_CrossPairEndpointFailsLoudly(t *testing.T) {
 // entity/edge files through the gitstore write path, re-hydrates them through
 // the store load path, and asserts the persisted timestamps survive untouched.
 func TestRehydrateMainFromFiles_PersistedTimestampsSurvive(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed rehydration from working tree")
+	}
 	s, err := openInMemory()
 	if err != nil {
 		t.Fatal(err)
@@ -9493,6 +9694,9 @@ func TestRehydrateMainFromFiles_PersistedTimestampsSurvive(t *testing.T) {
 // orphaning the original file. The sibling checks (missing `type`, type/directory
 // mismatch, unparseable content) all fail loudly; the missing `id` must too.
 func TestRehydrateFiles_MissingIDFailsLoudly(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed rehydration from working tree")
+	}
 	for _, tc := range []struct {
 		name   string
 		branch bool
@@ -9565,6 +9769,9 @@ func TestRehydrateFiles_MissingIDFailsLoudly(t *testing.T) {
 // (gitstore_test.go): the sync worker's SPEC:982 INTERNAL row depends on
 // RehydrateMainFromFiles failing loudly when the working tree cannot be read.
 func TestRehydrateFiles_IOErrorFailsLoudly(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed rehydration from working tree")
+	}
 	for _, tc := range []struct {
 		name   string
 		branch bool
@@ -9646,6 +9853,9 @@ func TestRehydrateFiles_IOErrorFailsLoudly(t *testing.T) {
 // be tied to its directory label, so the sibling missing-`id` guard's
 // protection would be incomplete without it.
 func TestRehydrateFiles_MissingTypeFailsLoudly(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed rehydration from working tree")
+	}
 	for _, tc := range []struct {
 		name   string
 		branch bool
@@ -9701,6 +9911,9 @@ func TestRehydrateFiles_MissingTypeFailsLoudly(t *testing.T) {
 // branch.go:1362-1365 branch → ErrInvalidEdgeDir), even when the `id` key is
 // present.
 func TestRehydrateFiles_MissingEdgeKeysFailsLoudly(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed rehydration from working tree")
+	}
 	for _, tc := range []struct {
 		name   string
 		branch bool
@@ -9764,6 +9977,9 @@ func TestRehydrateFiles_MissingEdgeKeysFailsLoudly(t *testing.T) {
 // — the file guards treat unparseable content as a corrupt element file, never
 // skipping or silently accepting it.
 func TestRehydrateFiles_UnparseableJSONFailsLoudly(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed rehydration from working tree")
+	}
 	for _, tc := range []struct {
 		name   string
 		branch bool
@@ -9841,6 +10057,9 @@ func TestRehydrateFiles_UnparseableJSONFailsLoudly(t *testing.T) {
 // ErrEntityAlreadyExists on every load path that inserts entities (main and
 // branch).
 func TestRehydrateFiles_CrossTypeDuplicateIDFailsLoudly(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed rehydration from working tree")
+	}
 	for _, tc := range []struct {
 		name   string
 		branch bool
@@ -9912,6 +10131,9 @@ func TestRehydrateFiles_CrossTypeDuplicateIDFailsLoudly(t *testing.T) {
 // (LEARNINGS: store/gitstore read-path silent divergence). Every main/branch ×
 // entity/edge load path must fail loudly with the sentinel.
 func TestRehydrateFiles_EmbeddedIDConflictsWithFilenameFailsLoudly(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed rehydration from working tree")
+	}
 	for _, tc := range []struct {
 		name   string
 		branch bool
@@ -10001,6 +10223,9 @@ var nonCanonicalUUIDSpellings = []string{
 // R8). Each file's filename matches its embedded (non-canonical) id so the
 // filename↔id guard passes and the canonical-form guard is the one that fires.
 func TestRehydrateFiles_NonCanonicalUUIDFailsLoudly(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed rehydration from working tree")
+	}
 	for _, tc := range []struct {
 		name   string
 		branch bool
@@ -10076,6 +10301,9 @@ func TestRehydrateFiles_NonCanonicalUUIDFailsLoudly(t *testing.T) {
 // committed rows with no error and no inference — directory inference only ran
 // when the applied schema was entirely empty.
 func TestRehydrateFiles_InferredTypeWithAppliedSchema(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed rehydration from working tree")
+	}
 	for _, tc := range []struct {
 		name   string
 		branch bool
@@ -10220,6 +10448,9 @@ func TestRehydrateFiles_InferredTypeWithAppliedSchema(t *testing.T) {
 // filepath.Base(txID) == txID; these two read paths must too — defense in depth,
 // since a future caller could skip the service-layer UUID-v4 gate.
 func TestBranchReadPaths_RejectPathTraversalTxID(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed LadybugDB store")
+	}
 	dir := t.TempDir()
 	s, err := Open(dir)
 	if err != nil {
@@ -10263,6 +10494,9 @@ func TestBranchReadPaths_RejectPathTraversalTxID(t *testing.T) {
 // the destructive remove path must too — defense in depth, since a future caller
 // could skip the service-layer UUID-v4 gate.
 func TestInvalidateBranchState_RejectPathTraversalTxID(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: file-backed LadybugDB store")
+	}
 	dir := t.TempDir()
 	s, err := Open(dir)
 	if err != nil {

@@ -49,6 +49,22 @@ $(foreach srv,$(CGO_TEST_SERVICES),$(eval test-$(srv): ; $(if $(filter cartograp
 
 test-cartographer: ladybug-lib
 
+# The cartographer suite is split into a fast in-memory unit subset and a
+# file-backed/git integration subset. Tests that open a file-backed LadybugDB
+# store and/or do real git operations are guarded with `if testing.Short()`,
+# so they are skipped under `-short`:
+#   - test-cartographer-unit       -> go test -short  (fast, in-memory only)
+#   - test-cartographer-integration-> go test (no -short, runs EVERY test)
+#   - test-cartographer (the gate) -> go test (no -short, runs EVERY test)
+# Coverage is preserved: the guarded tests still run under every non-short
+# target, so the full gate exercises the whole suite unchanged.
+.PHONY: test-cartographer-unit test-cartographer-integration
+test-cartographer-unit: ladybug-lib
+	GOWORK="$(CURDIR)/.cache/ladybug/go.work" CGO_ENABLED=1 go test -short -timeout 30m -v ./platform/cartographer/...
+
+test-cartographer-integration: ladybug-lib
+	GOWORK="$(CURDIR)/.cache/ladybug/go.work" CGO_ENABLED=1 go test -timeout 30m -v ./platform/cartographer/...
+
 .PHONY: test-nodes
 test-nodes: ## Run Node unit tests across the shared nodes module.
 	CGO_ENABLED=1 go test -v ./nodes/...
