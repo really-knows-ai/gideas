@@ -5423,6 +5423,79 @@ func TestRehydrateMainFromFiles_SchemaAppliedAfterBothLostRecovery(t *testing.T)
 	}
 }
 
+// The post-WipeGraph restart corner (SPEC R2): WipeSchema removed schema.json,
+// dropped every table, and cleared the in-memory caches, so the startup rebuild
+// (cmd rehydrateMainAfterRecovery) re-hydrates the wiped (empty) tree. That
+// empty-tree re-hydration must NOT report the schema as applied — the store has
+// no schema and no tables until the operator's next ApplySchema — while a
+// subsequent real ApplySchema still restores the HealthCheck "schema applied"
+// dimension (SPEC R2). Pin: this test fails if RehydrateMainFromFiles flips
+// schemaApplied unconditionally on the empty tree (the pre-fix behaviour
+// reported SchemaApplied=true against the wiped store).
+func TestRehydrateMainFromFiles_EmptyTreeLeavesSchemaUnappliedAfterWipe(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	ctx := context.Background()
+	schema := &flowv1.Schema{EntityTypes: []*flowv1.EntityType{{
+		Name: "Component", Properties: []*flowv1.Property{{Name: "name", Type: "string"}},
+	}}}
+	if err := s.ApplySchema(ctx, schema); err != nil {
+		t.Fatalf("ApplySchema: %v", err)
+	}
+	// WipeGraph's store primitive: drop every table, remove schema.json, and
+	// clear the caches (schemaApplied=false on the live store).
+	if err := s.WipeSchema(ctx); err != nil {
+		t.Fatalf("WipeSchema: %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	// Simulate the restart: reopen the wiped store. With no schema.json and an
+	// empty catalog, Open restores no metadata and schemaApplied stays false.
+	reopened, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open after wipe: %v", err)
+	}
+	defer closeStore(t, reopened)
+	health, err := reopened.Health(ctx)
+	if err != nil {
+		t.Fatalf("Health: %v", err)
+	}
+	if health.SchemaApplied {
+		t.Fatal("fixture: expected SchemaApplied=false after reopening the wiped store")
+	}
+
+	// The startup rebuild re-hydrates the wiped tree: both directories are empty
+	// (the "wipe" commit exists but carries no entities/edges).
+	entitiesDir := filepath.Join(t.TempDir(), "entities")
+	edgesDir := filepath.Join(t.TempDir(), "edges")
+	if err := reopened.RehydrateMainFromFiles(ctx, entitiesDir, edgesDir); err != nil {
+		t.Fatalf("RehydrateMainFromFiles on empty tree: %v", err)
+	}
+	health, err = reopened.Health(ctx)
+	if err != nil {
+		t.Fatalf("Health after empty-tree re-hydration: %v", err)
+	}
+	if health.SchemaApplied {
+		t.Fatal("empty-tree re-hydration after WipeGraph must leave SchemaApplied=false")
+	}
+
+	// A real schema application restores the dimension.
+	if err := reopened.ApplySchema(ctx, schema); err != nil {
+		t.Fatalf("ApplySchema after wipe: %v", err)
+	}
+	health, err = reopened.Health(ctx)
+	if err != nil {
+		t.Fatalf("Health after re-apply: %v", err)
+	}
+	if !health.SchemaApplied {
+		t.Fatal("expected SchemaApplied=true after ApplySchema")
+	}
+}
+
 // TestReplicateSchemaToBranch_RealInferredPairsAfterBothLostRehydration pins the
 // stale-structural-pointer rule on the SPEC R8 both-lost recovery corner
 // (corrupt main.lbug + absent schema.json + committed git data): every edge

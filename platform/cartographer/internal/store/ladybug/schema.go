@@ -12,13 +12,23 @@ import (
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
 )
 
+// schemaManager owns the schema-management method group of ladybugDB: catalog
+// cache rebuilds, schema application (ApplySchema/DDL/alts), the schema-provider
+// accessors, Health, and the schema-metadata/vector-state helpers in
+// metadata.go and vector.go. The shared store state lives on ladybugDB; db is
+// the owner pointer back to it.
+type schemaManager struct {
+	db *ladybugDB
+}
+
 // ---------------------------------------------------------------------------
 // Catalog cache
 // ---------------------------------------------------------------------------
 
 // rebuildSchemaCache queries the LadybugDB catalog to populate
 // entityTypeDefs and edgeTypeDefs (acquires lock).
-func (db *ladybugDB) rebuildSchemaCache() error {
+func (sm *schemaManager) rebuildSchemaCache() error {
+	db := sm.db
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	return db.rebuildSchemaCacheLocked()
@@ -28,8 +38,8 @@ func (db *ladybugDB) rebuildSchemaCache() error {
 // LadybugDB's vector extension creates indexes of type HNSW. It delegates to
 // the conn-based vectorIndexesOnConn used by the branch schema rebuild; the
 // catalog-read error is propagated, never swallowed (see vectorIndexesOnConn).
-func (db *ladybugDB) collectVectorIndexes() (map[string]bool, error) {
-	return vectorIndexesOnConn(db.conn)
+func (sm *schemaManager) collectVectorIndexes() (map[string]bool, error) {
+	return vectorIndexesOnConn(sm.db.conn)
 }
 
 // indexExistsOnConn reports whether the given table has an index with the
@@ -145,8 +155,10 @@ func vectorIndexExists(conn *lbug.Connection, table string) (bool, error) {
 // columns are structural depends on the table kind: REL tables carry
 // structural from/to/type endpoint columns, and vector-indexed NODE tables
 // carry a structural embedding column).
-func (db *ladybugDB) getTableProperties(tableName, tableType string, vectorIndexed bool) ([]store.PropertyDef, error) {
-	return tablePropertiesOnConn(db.conn, tableName, tableType, vectorIndexed)
+func (sm *schemaManager) getTableProperties(
+	tableName, tableType string, vectorIndexed bool,
+) ([]store.PropertyDef, error) {
+	return tablePropertiesOnConn(sm.db.conn, tableName, tableType, vectorIndexed)
 }
 
 func vectorIndexesOnConn(conn *lbug.Connection) (map[string]bool, error) {
@@ -256,7 +268,8 @@ func quoteID(s string) string {
 // metadata on the next Open (creating the tables and columns the DDL never
 // reached), so no interruption of ApplySchema can leave the store in a state
 // that bricks every subsequent Open (SPEC R8 recoverability).
-func (db *ladybugDB) ApplySchema(ctx context.Context, s *flowv1.Schema) error {
+func (sm *schemaManager) ApplySchema(ctx context.Context, s *flowv1.Schema) error {
+	db := sm.db
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
@@ -345,7 +358,8 @@ func (db *ladybugDB) ApplySchema(ctx context.Context, s *flowv1.Schema) error {
 // disable, and — matching the SPEC R2 destructive class — an edge-type
 // rule modification that adds or removes a FROM/TO pair on an already-applied
 // edge type.
-func (db *ladybugDB) diffSchemaAgainstCatalog(s *flowv1.Schema) error {
+func (sm *schemaManager) diffSchemaAgainstCatalog(s *flowv1.Schema) error {
+	db := sm.db
 	// FROM/TO pairs for each requested edge type, derived from entity rules.
 	edgePairs := collectFromToPairs(s)
 
@@ -473,7 +487,8 @@ func (db *ladybugDB) diffSchemaAgainstCatalog(s *flowv1.Schema) error {
 // the check, so a transaction begun under an older schema can still commit
 // after a compatible schema push; a refreshed transaction is re-hydrated onto
 // the current schema and always passes.
-func (db *ladybugDB) CheckBranchSchemaCompatibility(_ context.Context, txID string) error {
+func (sm *schemaManager) CheckBranchSchemaCompatibility(_ context.Context, txID string) error {
+	db := sm.db
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	br, err := db.branchLocked(txID)
@@ -550,7 +565,8 @@ func branchPropertiesCompatible(typeName, kind string, branchProps, currentProps
 // createNodeTableOnConn's IF NOT EXISTS guard — makes the retry converge, and
 // the FTS rebuild derives its string set from the same live columns so a
 // string column a partial run added before it failed is still covered.
-func (db *ladybugDB) alterNodeTable(et *flowv1.EntityType, existing *store.EntityTypeDef) error {
+func (sm *schemaManager) alterNodeTable(et *flowv1.EntityType, existing *store.EntityTypeDef) error {
+	db := sm.db
 	props, err := db.getTableProperties(et.Name, tableTypeNode, existing.EnableVectorIndex)
 	if err != nil {
 		return fmt.Errorf("read catalog columns for %q: %w", et.Name, err)
@@ -603,7 +619,8 @@ func (db *ladybugDB) alterNodeTable(et *flowv1.EntityType, existing *store.Entit
 // unchanged, so it needs no defensive re-check. The failure mode stays loud:
 // the caller sees ErrDestructiveSchemaChange before a single DDL statement
 // executes, never a silent partial apply.
-func (db *ladybugDB) alterRelTable(et *flowv1.EdgeType) error {
+func (sm *schemaManager) alterRelTable(et *flowv1.EdgeType) error {
+	db := sm.db
 	// Same live-catalog diff as alterNodeTable: a retried ApplySchema after a
 	// mid-loop error would otherwise re-issue the non-idempotent ALTER TABLE
 	// ADD against a column the catalog already holds. Rel tables carry no FTS
@@ -619,7 +636,8 @@ func (db *ladybugDB) alterRelTable(et *flowv1.EdgeType) error {
 }
 
 // rebuildSchemaCacheLocked is the inner rebuild that assumes db.mu is held.
-func (db *ladybugDB) rebuildSchemaCacheLocked() error {
+func (sm *schemaManager) rebuildSchemaCacheLocked() error {
+	db := sm.db
 	// Create a temporary map, swap in-place while holding lock.
 	newEntity := make(map[string]*store.EntityTypeDef)
 	newEdge := make(map[string]*store.EdgeTypeDef)
@@ -690,14 +708,14 @@ func (db *ladybugDB) rebuildSchemaCacheLocked() error {
 // rejects pre-bootstrap no-embedding creates, and post-bootstrap no-embedding
 // creates store NULL. An FTS index is created on all string properties for
 // full-text search.
-func (db *ladybugDB) createNodeTable(et *flowv1.EntityType) error {
-	return createNodeTableOnConn(db.conn, et.Name, propsFrom(et.Properties))
+func (sm *schemaManager) createNodeTable(et *flowv1.EntityType) error {
+	return createNodeTableOnConn(sm.db.conn, et.Name, propsFrom(et.Properties))
 }
 
 // createRelTable translates an edge flow into a PropertyDef list and runs the
 // shared rel-table DDL (see createRelTableOnConn).
-func (db *ladybugDB) createRelTable(et *flowv1.EdgeType, pairs []fromToPair) error {
-	return createRelTableOnConn(db.conn, et.Name, propsFrom(et.Properties), pairs)
+func (sm *schemaManager) createRelTable(et *flowv1.EdgeType, pairs []fromToPair) error {
+	return createRelTableOnConn(sm.db.conn, et.Name, propsFrom(et.Properties), pairs)
 }
 
 // propsFrom converts proto property definitions (an entity or edge type's
@@ -884,13 +902,15 @@ func ladybugType(protoType string) string {
 // Schema provider methods
 // ---------------------------------------------------------------------------
 
-func (db *ladybugDB) EntityTypeNames() []string {
+func (sm *schemaManager) EntityTypeNames() []string {
+	db := sm.db
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	return typeNamesLocked(db.entityTypeDefs, db.failed)
 }
 
-func (db *ladybugDB) EdgeTypeNames() []string {
+func (sm *schemaManager) EdgeTypeNames() []string {
+	db := sm.db
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	return typeNamesLocked(db.edgeTypeDefs, db.failed)
@@ -905,13 +925,15 @@ func typeNamesLocked[V any](m map[string]V, failed bool) []string {
 	return sortedKeys(m)
 }
 
-func (db *ladybugDB) EntityType(name string) (*store.EntityTypeDef, bool) {
+func (sm *schemaManager) EntityType(name string) (*store.EntityTypeDef, bool) {
+	db := sm.db
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	return lookupTypeDef(db.entityTypeDefs, name, db.failed)
 }
 
-func (db *ladybugDB) EdgeType(name string) (*store.EdgeTypeDef, bool) {
+func (sm *schemaManager) EdgeType(name string) (*store.EdgeTypeDef, bool) {
+	db := sm.db
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	return lookupTypeDef(db.edgeTypeDefs, name, db.failed)
@@ -929,12 +951,13 @@ func lookupTypeDef[V any](m map[string]V, name string, failed bool) (V, bool) {
 	return def, true
 }
 
-func (db *ladybugDB) TableExists(entityType string) bool {
-	_, ok := db.EntityType(entityType)
+func (sm *schemaManager) TableExists(entityType string) bool {
+	_, ok := sm.EntityType(entityType)
 	return ok
 }
 
-func (db *ladybugDB) ListMainEntityTypes() ([]string, error) {
+func (sm *schemaManager) ListMainEntityTypes() ([]string, error) {
+	db := sm.db
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	if db.failed {
@@ -943,7 +966,8 @@ func (db *ladybugDB) ListMainEntityTypes() ([]string, error) {
 	return sortedKeys(db.entityTypeDefs), nil
 }
 
-func (db *ladybugDB) Health(_ context.Context) (*store.HealthResult, error) {
+func (sm *schemaManager) Health(_ context.Context) (*store.HealthResult, error) {
+	db := sm.db
 	db.mu.Lock()
 	defer db.mu.Unlock()
 

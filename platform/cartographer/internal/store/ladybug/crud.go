@@ -17,6 +17,15 @@ import (
 	"github.com/google/uuid"
 )
 
+// crudAccessor owns the entity/edge CRUD method group of ladybugDB: create,
+// update, delete, get, list, entity-type resolution, edge-rule validation, and
+// the branch/main lock acquisition (lockForRead/lockForWrite) the other method
+// groups share. The shared store state lives on ladybugDB; db is the owner
+// pointer back to it.
+type crudAccessor struct {
+	db *ladybugDB
+}
+
 // --------------------------------------------------------------------------
 // Entity CRUD
 // --------------------------------------------------------------------------
@@ -24,10 +33,11 @@ import (
 const mainBranch = "main"
 
 //nolint:gocyclo
-func (db *ladybugDB) CreateEntity(
+func (ca *crudAccessor) CreateEntity(
 	ctx context.Context, entityType, id string,
 	properties map[string]string, embedding []float32, branch string,
 ) (*store.Entity, error) {
+	db := ca.db
 	conn, typeDefs, unlock, err := db.lockForWrite(branch)
 	if err != nil {
 		return nil, err
@@ -203,10 +213,11 @@ func (db *ladybugDB) CreateEntity(
 }
 
 //nolint:gocyclo
-func (db *ladybugDB) UpdateEntity(
+func (ca *crudAccessor) UpdateEntity(
 	ctx context.Context, id string,
 	properties map[string]string, embedding []float32, branch string,
 ) (*store.Entity, error) {
+	db := ca.db
 	if err := validateUUID(id); err != nil {
 		return nil, err
 	}
@@ -377,9 +388,10 @@ func (db *ladybugDB) UpdateEntity(
 	return entity, nil
 }
 
-func (db *ladybugDB) DeleteEntity(
+func (ca *crudAccessor) DeleteEntity(
 	ctx context.Context, id, branch string,
 ) (*store.Entity, error) {
+	db := ca.db
 	if err := validateUUID(id); err != nil {
 		return nil, err
 	}
@@ -410,9 +422,10 @@ func (db *ladybugDB) DeleteEntity(
 	return entity, nil
 }
 
-func (db *ladybugDB) GetEntity(
+func (ca *crudAccessor) GetEntity(
 	ctx context.Context, id, branch string,
 ) (*store.Entity, error) {
+	db := ca.db
 	if err := validateUUID(id); err != nil {
 		return nil, err
 	}
@@ -430,10 +443,11 @@ func (db *ladybugDB) GetEntity(
 // Edge CRUD
 // --------------------------------------------------------------------------
 
-func (db *ladybugDB) CreateEdge(
+func (ca *crudAccessor) CreateEdge(
 	ctx context.Context, edgeType, fromID, toID string,
 	properties map[string]string, branch string,
 ) (*store.Edge, error) {
+	db := ca.db
 	if err := validateUUID(fromID); err != nil {
 		return nil, err
 	}
@@ -538,9 +552,10 @@ func (db *ladybugDB) CreateEdge(
 	}, nil
 }
 
-func (db *ladybugDB) DeleteEdge(
+func (ca *crudAccessor) DeleteEdge(
 	ctx context.Context, id, branch string,
 ) (*store.Edge, error) {
+	db := ca.db
 	if err := validateUUID(id); err != nil {
 		return nil, err
 	}
@@ -571,9 +586,10 @@ func (db *ladybugDB) DeleteEdge(
 	return edge, nil
 }
 
-func (db *ladybugDB) GetEdge(
+func (ca *crudAccessor) GetEdge(
 	ctx context.Context, id, branch string,
 ) (*store.Edge, error) {
+	db := ca.db
 	if err := validateUUID(id); err != nil {
 		return nil, err
 	}
@@ -587,9 +603,10 @@ func (db *ladybugDB) GetEdge(
 	return findEdgeByID(conn, typeDefs.edgeTypeDefs, id)
 }
 
-func (db *ladybugDB) ListEdgesOfType(
+func (ca *crudAccessor) ListEdgesOfType(
 	ctx context.Context, edgeType, branch string,
 ) ([]store.Edge, error) {
+	db := ca.db
 	conn, typeDefs, unlock, err := db.lockForRead(branch)
 	if err != nil {
 		return nil, err
@@ -610,7 +627,8 @@ func (db *ladybugDB) ListEdgesOfType(
 // Rules
 // --------------------------------------------------------------------------
 
-func (db *ladybugDB) ResolveEntityType(ctx context.Context, entityID, branch string) (string, error) {
+func (ca *crudAccessor) ResolveEntityType(ctx context.Context, entityID, branch string) (string, error) {
+	db := ca.db
 	if err := validateUUID(entityID); err != nil {
 		return "", err
 	}
@@ -634,7 +652,8 @@ func (db *ladybugDB) ResolveEntityType(ctx context.Context, entityID, branch str
 
 // lockForRead returns the connection and type defs for a branch (or main),
 // holding the appropriate read lock. Callers must call the returned unlock func.
-func (db *ladybugDB) lockForRead(branch string) (*lbug.Connection, *branchDBCache, func(), error) {
+func (ca *crudAccessor) lockForRead(branch string) (*lbug.Connection, *branchDBCache, func(), error) {
+	db := ca.db
 	if branch == "" || branch == mainBranch {
 		db.mu.Lock()
 		if db.closed || db.failed {
@@ -675,12 +694,12 @@ func (db *ladybugDB) lockForRead(branch string) (*lbug.Connection, *branchDBCach
 
 // lockForWrite returns the connection and type defs for write operations.
 // Same pattern as lockForRead but both paths are identical for the cache layer.
-func (db *ladybugDB) lockForWrite(branch string) (*lbug.Connection, *branchDBCache, func(), error) {
+func (ca *crudAccessor) lockForWrite(branch string) (*lbug.Connection, *branchDBCache, func(), error) {
 	// ponytail: Write path uses the same lock pattern as read; for the LadybugDB
 	// C library, concurrent writes within one connection are serialized below the
 	// Go layer. If contention becomes a bottleneck, promote to a write-preferring
 	// RWMutex or a dedicated write connection.
-	return db.lockForRead(branch)
+	return ca.lockForRead(branch)
 }
 
 // branchDBCache is a lightweight view of the type definitions for a branch or main DB.
@@ -1184,7 +1203,7 @@ func nodeLabelOnConn(conn *lbug.Connection, id string) (string, error) {
 // It checks the sourceType's ConnectionRules (stored in ruleIndex) to see if the
 // targetType and edgeType are permitted. If the source type has no rules, all
 // connections are denied; if it has rules, at least one rule must match.
-func (db *ladybugDB) validateEdgeRulesFor(typeDefs *branchDBCache,
+func (ca *crudAccessor) validateEdgeRulesFor(typeDefs *branchDBCache,
 	sourceType, targetType, edgeType string) error {
 	if _, ok := typeDefs.entityTypeDefs[sourceType]; !ok {
 		return fmt.Errorf("%w: %q", store.ErrUnknownEntityType, sourceType)

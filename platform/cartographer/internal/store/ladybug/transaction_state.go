@@ -17,15 +17,17 @@ type branchStateRecord struct {
 	State   store.BranchTransactionState `json:"state"`
 }
 
-func (db *ladybugDB) branchStatePath(txID string) string {
+func (bl *branchLifecycle) branchStatePath(txID string) string {
+	db := bl.db
 	return filepath.Join(db.path, "branches", txID+".state.json")
 }
 
 // SaveBranchTransactionState atomically replaces the branch's sole durable
 // transaction lifecycle record.
-func (db *ladybugDB) SaveBranchTransactionState(
+func (bl *branchLifecycle) SaveBranchTransactionState(
 	_ context.Context, txID string, state store.BranchTransactionState,
 ) error {
+	db := bl.db
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	if filepath.Base(txID) != txID || txID == "." || txID == ".." {
@@ -52,7 +54,10 @@ func (db *ladybugDB) SaveBranchTransactionState(
 
 // LoadBranchTransactionState loads the versioned lifecycle record. Missing,
 // malformed, and unsupported records fail closed.
-func (db *ladybugDB) LoadBranchTransactionState(_ context.Context, txID string) (store.BranchTransactionState, error) {
+func (bl *branchLifecycle) LoadBranchTransactionState(
+	_ context.Context, txID string,
+) (store.BranchTransactionState, error) {
+	db := bl.db
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	if db.closed || db.failed {
@@ -106,7 +111,8 @@ func validateBranchTransactionState(state store.BranchTransactionState) error {
 
 // InvalidateBranchState removes the sole lifecycle record. Recovery treats the
 // missing record as unsafe and refuses to register the branch.
-func (db *ladybugDB) InvalidateBranchState(_ context.Context, txID string) error {
+func (bl *branchLifecycle) InvalidateBranchState(_ context.Context, txID string) error {
+	db := bl.db
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	if db.closed || db.failed {

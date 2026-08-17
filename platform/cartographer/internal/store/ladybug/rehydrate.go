@@ -1,8 +1,10 @@
 package ladybug
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -12,6 +14,15 @@ import (
 	lbug "github.com/LadybugDB/go-ladybug"
 	"github.com/foundry/flow/cartographer/internal/store"
 )
+
+// rehydrator owns the re-hydration method group of ladybugDB: the file-tree
+// pre-flight, the shared file loaders, and the main/branch re-hydration entry
+// points (RehydrateMainFromFiles, RehydrateFromBranch, HydrateBranchFromFiles)
+// plus the branch dump/scan paths. The shared store state lives on ladybugDB;
+// db is the owner pointer back to it.
+type rehydrator struct {
+	db *ladybugDB
+}
 
 // --------------------------------------------------------------------------
 // Re-hydration source pre-flight
@@ -48,7 +59,8 @@ func checkEdgesDirCompleteness(entitiesDir, edgesDir string) error {
 // on next startup" escape hatch serves a destroyed graph. Upgrade path: load
 // once into the staging database and swap it onto main on success, eliminating
 // the second pass.
-func (db *ladybugDB) validateRehydrateSource(entitiesDir, edgesDir string) error {
+func (rh *rehydrator) validateRehydrateSource(entitiesDir, edgesDir string) error {
+	db := rh.db
 	staging, err := lbug.OpenInMemoryDatabase(lbug.DefaultSystemConfig())
 	if err != nil {
 		return fmt.Errorf("open re-hydration staging database: %w", err)
@@ -116,7 +128,8 @@ func (db *ladybugDB) validateRehydrateSource(entitiesDir, edgesDir string) error
 // absent) so ReplicateSchemaToBranch's createRelTableOnConn takes its
 // placeholder branch, which creates the `_untyped` NODE table the rel table's
 // endpoint clause references. Callers must hold db.mu.
-func (db *ladybugDB) rebuildEdgePairsLocked() error {
+func (rh *rehydrator) rebuildEdgePairsLocked() error {
+	db := rh.db
 	pairs, err := connectionEdgePairs(db.conn, db.edgeTypeDefs)
 	if err != nil {
 		return err
@@ -160,9 +173,10 @@ type jsonFileRow struct {
 // collect non-property structure (the edge variant resolves FROM/TO endpoint
 // pairs here); a perFile error propagates, since the edge variant's endpoint
 // resolution failure is a hard error.
-func (db *ladybugDB) inferPropertyNamesFromDir(
+func (rh *rehydrator) inferPropertyNamesFromDir(
 	typeDir string, perFile func(je jsonFileRow) error,
 ) (map[string]bool, error) {
+	db := rh.db
 	names := make(map[string]bool)
 	if files, err := db.readDir(typeDir); err == nil {
 		for _, f := range files {
@@ -195,9 +209,10 @@ func (db *ladybugDB) inferPropertyNamesFromDir(
 // an empty applied schema), the table is inferred on demand from the directory
 // structure (SPEC R8). It also (re)creates the FTS index on the type's string
 // properties so re-hydration restores the full search state (SPEC R8).
-func (db *ladybugDB) ensureEntityLoadSchema(
+func (rh *rehydrator) ensureEntityLoadSchema(
 	conn *lbug.Connection, typeName, typeDir string, entDefs map[string]*store.EntityTypeDef,
 ) error {
+	db := rh.db
 	def, known := entDefs[typeName]
 	var props []store.PropertyDef
 	if known {
@@ -259,9 +274,10 @@ func (db *ladybugDB) ensureEntityLoadSchema(
 // ponytail: inferred property types are always "string" (same rationale as
 // ensureEntityLoadSchema). If a future file representation carries non-string
 // property values, inference here would need corresponding handling.
-func (db *ladybugDB) ensureEdgeLoadSchema(
+func (rh *rehydrator) ensureEdgeLoadSchema(
 	conn *lbug.Connection, typeName, typeDir string, edgeDefs map[string]*store.EdgeTypeDef,
 ) error {
+	db := rh.db
 	if _, known := edgeDefs[typeName]; known {
 		// The rel table already exists (created by ApplySchema or restored from
 		// schema metadata); only types absent from the applied schema need
@@ -323,10 +339,11 @@ func (db *ladybugDB) ensureEdgeLoadSchema(
 // taken from the first embedding seen for the type. It also marks the type's
 // definition as vector-enabled in defs so the in-memory model stays in parity
 // with the column/index it creates during re-hydration.
-func (db *ladybugDB) ensureEmbeddingLoadSchema(
+func (rh *rehydrator) ensureEmbeddingLoadSchema(
 	conn *lbug.Connection, typeName string, embedding []float32,
 	defs map[string]*store.EntityTypeDef,
 ) error {
+	db := rh.db
 	vectorIndexed := false
 	if def, ok := defs[typeName]; ok {
 		vectorIndexed = def.EnableVectorIndex
@@ -383,9 +400,10 @@ type fileLoader struct {
 // the two paths cannot diverge. Both loaders serve main re-hydration
 // (RehydrateMainFromFiles passes db.conn) and branch hydration
 // (HydrateBranchFromFiles passes br.conn).
-func (db *ladybugDB) loadDirFilesOnConn(
+func (rh *rehydrator) loadDirFilesOnConn(
 	conn *lbug.Connection, dir string, l fileLoader,
 ) error {
+	db := rh.db
 	info, err := os.Stat(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -493,14 +511,14 @@ func (db *ladybugDB) loadDirFilesOnConn(
 // (RehydrateMainFromFiles passes db.conn) and branch hydration
 // (HydrateBranchFromFiles passes br.conn); the former per-connection
 // duplicates of this function were deleted.
-func (db *ladybugDB) loadEntitiesFromDirOnConn(conn *lbug.Connection, dir string,
+func (rh *rehydrator) loadEntitiesFromDirOnConn(conn *lbug.Connection, dir string,
 	entDefs map[string]*store.EntityTypeDef) error {
-	return db.loadDirFilesOnConn(conn, dir, fileLoader{
+	return rh.loadDirFilesOnConn(conn, dir, fileLoader{
 		noun:    "entity",
 		dirNoun: "entities",
 		errDir:  store.ErrInvalidEntityDir,
 		ensure: func(conn *lbug.Connection, typeName, typeDir string) error {
-			return db.ensureEntityLoadSchema(conn, typeName, typeDir, entDefs)
+			return rh.ensureEntityLoadSchema(conn, typeName, typeDir, entDefs)
 		},
 		required: func(je *jsonFileRow, path string) error {
 			if je.Type == "" {
@@ -515,7 +533,7 @@ func (db *ladybugDB) loadEntitiesFromDirOnConn(conn *lbug.Connection, dir string
 		},
 		insert: func(conn *lbug.Connection, typeName string, _ []fromToPair, je *jsonFileRow) error {
 			if len(je.Embedding) > 0 {
-				if err := db.ensureEmbeddingLoadSchema(conn, typeName, je.Embedding, entDefs); err != nil {
+				if err := rh.ensureEmbeddingLoadSchema(conn, typeName, je.Embedding, entDefs); err != nil {
 					return err
 				}
 			}
@@ -541,14 +559,14 @@ func (db *ladybugDB) loadEntitiesFromDirOnConn(conn *lbug.Connection, dir string
 // (RehydrateMainFromFiles passes db.conn) and branch hydration
 // (HydrateBranchFromFiles passes br.conn); the former per-connection
 // duplicates of this function were deleted.
-func (db *ladybugDB) loadEdgesFromDirOnConn(conn *lbug.Connection, dir string,
+func (rh *rehydrator) loadEdgesFromDirOnConn(conn *lbug.Connection, dir string,
 	edgeDefs map[string]*store.EdgeTypeDef) error {
-	return db.loadDirFilesOnConn(conn, dir, fileLoader{
+	return rh.loadDirFilesOnConn(conn, dir, fileLoader{
 		noun:    "edge",
 		dirNoun: "edges",
 		errDir:  store.ErrInvalidEdgeDir,
 		ensure: func(conn *lbug.Connection, typeName, typeDir string) error {
-			return db.ensureEdgeLoadSchema(conn, typeName, typeDir, edgeDefs)
+			return rh.ensureEdgeLoadSchema(conn, typeName, typeDir, edgeDefs)
 		},
 		pairs: func(conn *lbug.Connection, typeName string) ([]fromToPair, error) {
 			pairs, err := connectionPairsOnConn(conn, typeName)
@@ -585,4 +603,280 @@ func (db *ladybugDB) loadEdgesFromDirOnConn(conn *lbug.Connection, dir string,
 			return nil
 		},
 	})
+}
+
+// RehydrateFromBranch replaces main DB data with the branch data.
+// For in-memory mode we wipe main and bulk-insert from branch queries.
+func (rh *rehydrator) RehydrateFromBranch(ctx context.Context, txID string) error {
+	db := rh.db
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	br, err := db.branchLocked(txID)
+	if err != nil {
+		return err
+	}
+	br.mu.Lock()
+	defer br.mu.Unlock()
+	if br.failed {
+		return store.ErrDatabaseNotReady
+	}
+	// Snapshot entity/edge defs before releasing lock for branch work.
+	entDefs := make(map[string]*store.EntityTypeDef)
+	maps.Copy(entDefs, br.entityTypeDefs)
+	edgeDefs := make(map[string]*store.EdgeTypeDef)
+	maps.Copy(edgeDefs, br.edgeTypeDefs)
+	// Wipe all data from main.
+	result, err := db.conn.Query("MATCH (n) DETACH DELETE n;")
+	if err != nil {
+		return fmt.Errorf("wipe main: %w", err)
+	}
+	result.Close()
+
+	// Copy all entities from branch to main.
+	for _, name := range sortedKeys(entDefs) {
+		stmt, err := br.conn.Prepare(fmt.Sprintf("MATCH (n:%s) RETURN n;", quoteID(name)))
+		if err != nil {
+			return fmt.Errorf("query branch entities for %q: %w", name, err)
+		}
+		result, err := br.conn.Execute(stmt, map[string]any{})
+		stmt.Close()
+		if err != nil {
+			return fmt.Errorf("execute branch query for %q: %w", name, err)
+		}
+		for result.HasNext() {
+			tuple, err := result.Next()
+			if err != nil {
+				result.Close()
+				return fmt.Errorf("read branch entity: %w", err)
+			}
+			m, err := tuple.GetAsMap()
+			tuple.Close()
+			if err != nil {
+				result.Close()
+				return fmt.Errorf("parse branch entity: %w", err)
+			}
+			node, ok := m["n"].(lbug.Node)
+			if !ok {
+				result.Close()
+				return fmt.Errorf("branch entity of type %q: unexpected node type %T", name, m["n"])
+			}
+			entity := entityFromNode(node, name, entDefs[name].EnableVectorIndex)
+			// Ensure main's embedding column / vector index exists before
+			// inserting an entity that carries an embedding. The branch may have
+			// bootstrapped the dimension (SPEC R7 lazy bootstrap on the first
+			// embedding write), so main's table need not have the embedding
+			// column yet — the copy path leads with an entity that targets it.
+			if len(entity.Embedding) > 0 {
+				if err := db.ensureEmbeddingLoadSchema(db.conn, name, entity.Embedding, db.entityTypeDefs); err != nil {
+					result.Close()
+					return fmt.Errorf("promote embedding schema to main for %q: %w", name, err)
+				}
+			}
+			if err := insertEntityOnConn(db.conn, name, entity, entDefs); err != nil {
+				result.Close()
+				return fmt.Errorf("insert entity into main: %w", err)
+			}
+		}
+		result.Close()
+	}
+
+	// Copy all edges from branch to main.
+	for _, name := range sortedKeys(edgeDefs) {
+		// The CREATE below targets main's rel table, so main's FROM/TO endpoint
+		// clauses (SPEC R2, fixed at CREATE time) are the labels the endpoint
+		// probe must accept.
+		pairs, err := connectionPairsOnConn(db.conn, name)
+		if err != nil {
+			return fmt.Errorf("read relationship endpoints for %q: %w", name, err)
+		}
+		edges, err := listEdgesOnConn(br.conn, name)
+		if err != nil {
+			return fmt.Errorf("query branch edges for %q: %w", name, err)
+		}
+		for _, edge := range edges {
+			if err := insertEdgeOnConn(db.conn, name, pairs, &edge); err != nil {
+				return fmt.Errorf("insert edge into main: %w", err)
+			}
+		}
+	}
+
+	// Persist main's schema metadata (capturing the vector index/dimension the
+	// copy path promoted to main above) so a reopen's
+	// validateMetadataAgainstCatalog does not fail closed. A branch that
+	// bootstrapped the embedding column/vector index on its first write (SPEC
+	// R7 lazy bootstrap) promoted that vector state to main's catalog here, but
+	// main's schema.json (written at the original ApplySchema) still records
+	// VectorIndexes=false/VectorDimensions=0 for the type; without rewriting
+	// it, restart bricks startup with a catalog/metadata mismatch.
+	if err := db.persistMainVectorMetadataLocked(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// RehydrateMainFromFiles loads entities/edges from JSON files into main.
+// It holds db.mu for the entire wipe-and-load cycle so that concurrent reads
+// never observe partially reconstructed state. The load is atomic with respect
+// to the source: the entire file tree is validated into a throwaway database
+// before the DETACH DELETE below, so a corrupt source (e.g. a corrupt merged
+// JSON from the remote) fails with main untouched instead of wiping main first
+// and leaving it partially loaded.
+func (rh *rehydrator) RehydrateMainFromFiles(ctx context.Context, entitiesDir, edgesDir string) error {
+	db := rh.db
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	if db.closed || db.failed {
+		return store.ErrDatabaseNotReady
+	}
+
+	entDefs := make(map[string]*store.EntityTypeDef)
+	maps.Copy(entDefs, db.entityTypeDefs)
+	edgeDefs := make(map[string]*store.EdgeTypeDef)
+	maps.Copy(edgeDefs, db.edgeTypeDefs)
+
+	// Pre-flight: prove the entire file tree loads cleanly before main is
+	// touched. The wipe below precedes the loads, so without this a failure
+	// during the loads — the persistent case being a corrupt merged JSON pulled
+	// by the sync worker — leaves main.lbug partially wiped, and the caller's
+	// cycle returns with main serving a silently-incomplete graph (SPEC
+	// error-table row "Sync re-hydration failed" → INTERNAL; its R8
+	// "automatic recovery on next startup" escape hatch presupposes a
+	// consistent graph to serve, which a wiped main is not). The pre-flight
+	// runs the shared loaders against a throwaway in-memory database, so a
+	// corrupt source fails here with main untouched and the caller's recovery
+	// path (the worker's next-cycle retry, or R8 on the next startup) has the
+	// pre-existing graph to keep serving.
+	if err := db.validateRehydrateSource(entitiesDir, edgesDir); err != nil {
+		return err
+	}
+
+	// Wipe everything — use db.conn directly since we hold db.mu.
+	result, err := db.conn.Query("MATCH (n) DETACH DELETE n;")
+	if err != nil {
+		return fmt.Errorf("delete graph data: %w", err)
+	}
+	result.Close()
+
+	// Read entities from JSON files.
+	if err := db.loadEntitiesFromDirOnConn(db.conn, entitiesDir, entDefs); err != nil {
+		return err
+	}
+	// Fail if entities dir exists but edges dir does not (partial wipe).
+	if err := checkEdgesDirCompleteness(entitiesDir, edgesDir); err != nil {
+		return err
+	}
+	// Read edges from JSON files.
+	if err := db.loadEdgesFromDirOnConn(db.conn, edgesDir, edgeDefs); err != nil {
+		return err
+	}
+	// Promote the schema cache so any types inferred from the directory
+	// structure (SPEC R8) are visible to subsequent reads and writes via
+	// db.entityTypeDefs / db.edgeTypeDefs. The caches were loaded from a copy
+	// above, so this merge also carries the pre-existing compiled defs back.
+	db.entityTypeDefs = entDefs
+	db.edgeTypeDefs = edgeDefs
+	// Re-wire every cached structural handle (stale-structural-pointer rule,
+	// LEARNINGS): db.edgePairs is consumed by ReplicateSchemaToBranch to
+	// recreate branch rel tables with the same FROM/TO endpoints main's rel
+	// tables carry. Types inferred from the directory structure (SPEC R8) have
+	// no connection rules, so nothing but the catalog can rebuild this map —
+	// without it the next BeginTransaction replicates a `_untyped`-placeholder
+	// rel table to the branch (pairs := db.edgePairs[name] is nil) and every
+	// branch edge is silently dropped against the mismatched endpoints.
+	if err := db.rebuildEdgePairsLocked(); err != nil {
+		return err
+	}
+	// A re-hydrated tree that carries type definitions (applied, or inferred
+	// from the directory structure, SPEC R8) leaves main serving a complete
+	// schema: the vector state the file-load path promoted above is persisted (a
+	// reopen's validateMetadataAgainstCatalog must not fail closed with a
+	// catalog/metadata vector mismatch) and the schemaApplied flag is set. The
+	// flag set converges the both-lost recovery corner — corrupt main.lbug AND
+	// absent schema.json while the git repo has commits — where Open recovers a
+	// fresh database and restoreMainSchemaMetadataLocked finds no metadata to
+	// restore, leaving schemaApplied false; without it the store serves the
+	// recovered graph while Health() reports SchemaApplied=false indefinitely
+	// (only ApplySchema and restoreMainSchemaMetadataLocked set the flag
+	// elsewhere).
+	//
+	// An empty-tree re-hydration is the converse: after WipeGraph (SPEC R2),
+	// WipeSchema dropped every table, removed schema.json, and cleared the
+	// caches, so the startup rebuild of the wiped (empty) tree must neither
+	// persist a schema that no longer exists nor flip the flag — doing either
+	// reports the HealthCheck "schema applied" dimension (SPEC R2) true against
+	// a store with no schema and no tables until the operator's next
+	// ApplySchema.
+	if len(db.entityTypeDefs) > 0 || len(db.edgeTypeDefs) > 0 {
+		if err := db.persistMainVectorMetadataLocked(); err != nil {
+			return err
+		}
+		db.schemaApplied = true
+	}
+	return nil
+}
+
+// HydrateBranchFromFiles loads entities/edges from JSON files into a branch.
+func (rh *rehydrator) HydrateBranchFromFiles(ctx context.Context, txID, entitiesDir, edgesDir string) error {
+	db := rh.db
+	db.mu.Lock()
+	br, err := db.branchLocked(txID)
+	if err != nil {
+		db.mu.Unlock()
+		return err
+	}
+	br.mu.Lock()
+	db.mu.Unlock()
+	defer br.mu.Unlock()
+	if br.failed {
+		return store.ErrDatabaseNotReady
+	}
+
+	// Load from files into branch.
+	if err := db.loadEntitiesFromDirOnConn(br.conn, entitiesDir, br.entityTypeDefs); err != nil {
+		return err
+	}
+	// Fail if entities dir exists but edges dir does not (partial wipe) —
+	// mirrors RehydrateMainFromFiles' completeness guard. On a working tree
+	// where entities/ survived but edges/ was removed (SPEC R2 WipeGraph
+	// mid-wipe failure → INTERNAL), silently loading entities and skipping
+	// every edge would hydrate an incomplete graph with no signal.
+	if err := checkEdgesDirCompleteness(entitiesDir, edgesDir); err != nil {
+		return err
+	}
+	if err := db.loadEdgesFromDirOnConn(br.conn, edgesDir, br.edgeTypeDefs); err != nil {
+		return err
+	}
+	// Persist the branch schema metadata AFTER hydration. ReplicateSchemaToBranch
+	// writes branches/<txID>.schema.json before hydration runs, so any types and
+	// FROM/TO pairs inferred from the directory structure (SPEC R8) here are absent
+	// from that record. Without this rewrite, a crash + restart reopens the branch
+	// via branchLocked → restoreBranchSchemaMetadata, whose
+	// validateMetadataAgainstCatalog fails hard ("database entity type X is absent
+	// from schema metadata") on the inferred types, and RecoverOpenTransactions
+	// treats that non-ErrBranchNotFound error as a hard startup failure instead of
+	// rolling back the one affected branch. The pairs come from the branch rel
+	// tables' actual endpoints (mirroring RehydrateMainFromFiles'
+	// rebuildEdgePairsLocked), so rule-less inferred edge types round-trip the
+	// catalog comparison on reopen. The block runs only after every load succeeds:
+	// a failed hydration leaves the persisted record untouched.
+	if db.path != "" {
+		pairs, perr := connectionEdgePairs(br.conn, br.edgeTypeDefs)
+		if perr != nil {
+			br.failed = true
+			return fmt.Errorf("capture relationship endpoints: %w", perr)
+		}
+		metadata := metadataFromDefinitions(br.entityTypeDefs, br.edgeTypeDefs, pairs)
+		metadata, err = captureVectorState(br.conn, metadata)
+		if err != nil {
+			br.failed = true
+			return fmt.Errorf("capture branch vector state: %w", err)
+		}
+		if err := db.writeMetadata(db.branchMetadataPath(txID), metadata); err != nil {
+			br.failed = true
+			return fmt.Errorf("persist branch schema metadata: %w", err)
+		}
+	}
+	return nil
 }
