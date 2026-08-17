@@ -477,19 +477,18 @@ func TestIDTypeMap_EvictsOldestAtCapacity(t *testing.T) {
 }
 
 // TestIDTypeMap_TTLExpiry verifies the TTL bound (SPEC R3: "TTL-bounded"):
-// an entry older than the TTL resolves as unknown and is excluded from
-// snapshots, while re-storing an ID refreshes its TTL.
+// an entry older than the TTL no longer resolves (lazy expiry via resolve),
+// while re-storing an ID refreshes its TTL.
 func TestIDTypeMap_TTLExpiry(t *testing.T) {
 	m := newIDTypeMap()
 	m.ttl = 5 * time.Millisecond
 	m.store("id-1", "Component")
 	m.store("id-2", "Service")
 	time.Sleep(20 * time.Millisecond)
-	if _, ok := m.resolve("id-1"); ok {
-		t.Error("expected id-1 to expire after TTL")
-	}
-	if snap := m.snapshot(); len(snap) != 0 {
-		t.Errorf("expected empty snapshot after TTL expiry, got %v", snap)
+	for _, id := range []string{"id-1", "id-2"} {
+		if _, ok := m.resolve(id); ok {
+			t.Errorf("expected %s to expire after TTL", id)
+		}
 	}
 	// Re-storing refreshes the TTL.
 	m.store("id-1", componentType)

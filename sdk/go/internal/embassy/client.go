@@ -40,12 +40,37 @@ type EmbassyClient struct {
 	embassy flowv1.EmbassyServiceClient
 }
 
-// EmbassyExportStream wraps the Embassy export stream.
-type EmbassyExportStream struct {
-	ctx    context.Context
+// StreamHandle wraps a server-streaming gRPC stream with the cancel function
+// that terminates it. It is the shared backing type for the SDK's public
+// stream handles (GraphExportStream, EmbassyExportStream, LawUpdateWatcher,
+// PetitionOutcomeWatcher): Recv returns the next streamed element (io.EOF at
+// stream end) and Stop cancels the stream so subsequent Recv calls return a
+// context-cancelled error.
+type StreamHandle[T any] struct {
 	cancel context.CancelFunc
-	stream grpc.ServerStreamingClient[flowv1.PackageChunk]
+	stream grpc.ServerStreamingClient[T]
 }
+
+// NewStreamHandle wraps a server-streaming gRPC stream with its cancel
+// function.
+func NewStreamHandle[T any](cancel context.CancelFunc, stream grpc.ServerStreamingClient[T]) *StreamHandle[T] {
+	return &StreamHandle[T]{cancel: cancel, stream: stream}
+}
+
+// Recv returns the next streamed element. It returns io.EOF at the end of
+// the stream.
+func (s *StreamHandle[T]) Recv() (*T, error) {
+	return s.stream.Recv()
+}
+
+// Stop cancels the stream. Subsequent Recv calls return a context-cancelled
+// error.
+func (s *StreamHandle[T]) Stop() {
+	s.cancel()
+}
+
+// EmbassyExportStream wraps the Embassy export stream.
+type EmbassyExportStream = StreamHandle[flowv1.PackageChunk]
 
 // NewEmbassyClient connects to the Embassy service.
 func NewEmbassyClient(opts ...EmbassyOption) (*EmbassyClient, error) {
@@ -66,19 +91,28 @@ func NewEmbassyClientForTest(address string) (*EmbassyClient, error) {
 	return newEmbassyClient(address)
 }
 
-func newEmbassyClient(address string) (*EmbassyClient, error) {
+// dialClientConn opens an insecure gRPC connection to address, falling back
+// to defaultAddr when address is empty and wrapping any error with the given
+// service label. Shared by the Embassy and Federation client constructors.
+func dialClientConn(address, defaultAddr, label string) (*grpc.ClientConn, error) {
 	if address == "" {
-		address = DefaultEmbassyAddress
+		address = defaultAddr
 	}
-
 	conn, err := grpc.NewClient(
 		address,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("flow sdk: embassy client: failed to connect to embassy at %s: %w", address, err)
+		return nil, fmt.Errorf("flow sdk: %s client: failed to connect to %s at %s: %w", label, label, address, err)
 	}
+	return conn, nil
+}
 
+func newEmbassyClient(address string) (*EmbassyClient, error) {
+	conn, err := dialClientConn(address, DefaultEmbassyAddress, "embassy")
+	if err != nil {
+		return nil, err
+	}
 	return &EmbassyClient{
 		conn:    conn,
 		embassy: flowv1.NewEmbassyServiceClient(conn),
@@ -160,15 +194,5 @@ func (c *EmbassyClient) ExportPackage(
 		cancel()
 		return nil, fmt.Errorf("flow sdk: embassy client: export package failed: %w", err)
 	}
-	return &EmbassyExportStream{ctx: ctx, cancel: cancel, stream: stream}, nil
-}
-
-// Recv returns the next exported package chunk from the Embassy stream.
-func (s *EmbassyExportStream) Recv() (*flowv1.PackageChunk, error) {
-	return s.stream.Recv()
-}
-
-// Stop cancels the stream. Subsequent Recv calls return a context-cancelled error.
-func (s *EmbassyExportStream) Stop() {
-	s.cancel()
+	return NewStreamHandle(cancel, stream), nil
 }

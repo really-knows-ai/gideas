@@ -146,8 +146,3 @@ func NewFederationClient(opts ...FederationOption) (*FederationClient, error) {
 func NewFederationClientForTest(address string) (*FederationClient, error) {
 	return embassy.NewFederationClientForTest(address)
 }
-
-// WithFederationAddress overrides the default Federation gRPC address.
-func WithFederationAddress(addr string) FederationOption {
-	return embassy.WithFederationAddress(addr)
-}

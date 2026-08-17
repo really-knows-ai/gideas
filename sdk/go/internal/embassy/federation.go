@@ -7,7 +7,6 @@ import (
 
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 )
 
 const (
@@ -23,13 +22,6 @@ type FederationOption func(*federationConfig)
 
 type federationConfig struct {
 	address string
-}
-
-// WithFederationAddress overrides the default Federation gRPC address.
-func WithFederationAddress(addr string) FederationOption {
-	return func(c *federationConfig) {
-		c.address = addr
-	}
 }
 
 // PetitionTarget holds the authority Flow identity and Embassy endpoint
@@ -68,18 +60,10 @@ func NewFederationClientForTest(address string) (*FederationClient, error) {
 }
 
 func newFederationClient(address string) (*FederationClient, error) {
-	if address == "" {
-		address = DefaultFederationAddress
-	}
-
-	conn, err := grpc.NewClient(
-		address,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-	)
+	conn, err := dialClientConn(address, DefaultFederationAddress, "federation")
 	if err != nil {
-		return nil, fmt.Errorf("flow sdk: federation client: failed to connect to federation at %s: %w", address, err)
+		return nil, err
 	}
-
 	return &FederationClient{
 		conn:       conn,
 		federation: flowv1.NewFederationServiceClient(conn),
@@ -168,21 +152,7 @@ func (c *FederationClient) SubmitPublication(law *flowv1.Law, sourceFlowIdentity
 // ---------------------------------------------------------------------------
 
 // LawUpdateWatcher wraps the server-streaming subscription for law updates.
-type LawUpdateWatcher struct {
-	ctx    context.Context
-	cancel context.CancelFunc
-	stream grpc.ServerStreamingClient[flowv1.PublishedLawEvent]
-}
-
-// Recv returns the next published law event from the stream.
-func (w *LawUpdateWatcher) Recv() (*flowv1.PublishedLawEvent, error) {
-	return w.stream.Recv()
-}
-
-// Stop cancels the subscription. Subsequent Recv calls return a context-cancelled error.
-func (w *LawUpdateWatcher) Stop() {
-	w.cancel()
-}
+type LawUpdateWatcher = StreamHandle[flowv1.PublishedLawEvent]
 
 // SubscribeLawUpdates opens a server-streaming subscription for published
 // law distribution events. The caller should read from the returned watcher
@@ -200,26 +170,12 @@ func (c *FederationClient) SubscribeLawUpdates(subscriberFlowIdentity string) (*
 		cancel()
 		return nil, fmt.Errorf("flow sdk: federation client: subscribe law updates failed: %w", err)
 	}
-	return &LawUpdateWatcher{ctx: ctx, cancel: cancel, stream: stream}, nil
+	return NewStreamHandle(cancel, stream), nil
 }
 
 // PetitionOutcomeWatcher wraps the server-streaming subscription for petition
 // outcome events.
-type PetitionOutcomeWatcher struct {
-	ctx    context.Context
-	cancel context.CancelFunc
-	stream grpc.ServerStreamingClient[flowv1.PetitionOutcomeEvent]
-}
-
-// Recv returns the next petition outcome event from the stream.
-func (w *PetitionOutcomeWatcher) Recv() (*flowv1.PetitionOutcomeEvent, error) {
-	return w.stream.Recv()
-}
-
-// Stop cancels the subscription. Subsequent Recv calls return a context-cancelled error.
-func (w *PetitionOutcomeWatcher) Stop() {
-	w.cancel()
-}
+type PetitionOutcomeWatcher = StreamHandle[flowv1.PetitionOutcomeEvent]
 
 // SubscribePetitionOutcomes opens a server-streaming subscription for
 // petition outcome events (accepted/rejected). The caller should read from
@@ -237,5 +193,5 @@ func (c *FederationClient) SubscribePetitionOutcomes(subscriberFlowIdentity stri
 		cancel()
 		return nil, fmt.Errorf("flow sdk: federation client: subscribe petition outcomes failed: %w", err)
 	}
-	return &PetitionOutcomeWatcher{ctx: ctx, cancel: cancel, stream: stream}, nil
+	return NewStreamHandle(cancel, stream), nil
 }

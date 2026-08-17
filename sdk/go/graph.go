@@ -8,7 +8,7 @@ import (
 	"time"
 
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
-	"google.golang.org/grpc"
+	"github.com/foundry/flow/sdk/go/internal/embassy"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/structpb"
 )
@@ -75,11 +75,11 @@ const (
 //
 // ponytail: Eviction is a linear scan for the oldest entry on an
 // over-capacity store, and expired entries are only physically removed when
-// such an eviction scan runs (they are excluded from resolve/snapshot
-// earlier). Both are O(n) in the map size, which is bounded by
-// idTypeMapMaxSize (1000), so the cost is acceptable for a best-effort cache
-// populated from the SDK's own traffic. Upgrade path: a container/heap keyed
-// by insertion time if the cache grows.
+// such an eviction scan runs (they are excluded from resolve earlier). Both
+// are O(n) in the map size, which is bounded by idTypeMapMaxSize (1000), so
+// the cost is acceptable for a best-effort cache populated from the SDK's own
+// traffic. Upgrade path: a container/heap keyed by insertion time if the cache
+// grows.
 type idTypeMap struct {
 	mu      sync.RWMutex
 	entries map[string]idTypeEntry
@@ -164,21 +164,6 @@ func (m *idTypeMap) remove(id string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	delete(m.entries, id)
-}
-
-// snapshot returns a shallow copy of the live (non-expired) entries, safe for
-// reading without holding the lock. The caller is responsible for its own
-// synchronisation.
-func (m *idTypeMap) snapshot() map[string]string {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	snap := make(map[string]string, len(m.entries))
-	for id, e := range m.entries {
-		if time.Since(e.insertedAt) <= m.ttl {
-			snap[id] = e.entityType
-		}
-	}
-	return snap
 }
 
 // ---------------------------------------------------------------------------
@@ -321,22 +306,7 @@ func (g *Graph) Sync() error {
 // GraphExportStream is the server-streaming handle returned by
 // Graph.ExportGraph (SPEC R2). Recv returns the next chunk of the exported
 // graph; the stream ends with io.EOF.
-type GraphExportStream struct {
-	cancel context.CancelFunc
-	stream grpc.ServerStreamingClient[flowv1.ExportGraphResponse]
-}
-
-// Recv returns the next exported chunk. It returns io.EOF at the end of the
-// stream.
-func (s *GraphExportStream) Recv() (*flowv1.ExportGraphResponse, error) {
-	return s.stream.Recv()
-}
-
-// Stop cancels the export stream. Subsequent Recv calls return a
-// context-cancelled error.
-func (s *GraphExportStream) Stop() {
-	s.cancel()
-}
+type GraphExportStream = embassy.StreamHandle[flowv1.ExportGraphResponse]
 
 // ExportGraph exports the full graph in the requested format as a
 // server-streaming byte-chunk stream (SPEC R2). The session per-call timeout
@@ -353,7 +323,7 @@ func (g *Graph) ExportGraph(format string) (*GraphExportStream, error) {
 		cancel()
 		return nil, err
 	}
-	return &GraphExportStream{cancel: cancel, stream: stream}, nil
+	return embassy.NewStreamHandle(cancel, stream), nil
 }
 
 // ---------------------------------------------------------------------------
