@@ -21,7 +21,6 @@ permission:
     "/Users/jledrew/go/**": allow
   todowrite: allow
   apg_query: allow
-  ladybug_scan: allow
   task:
     "*": deny
     "implementer": allow
@@ -59,17 +58,16 @@ You are an orchestration subagent. You have read-only access to the codebase and
 
 ## Codebase graph
 
-You have access to the LadybugDB code graph (`apg_query` and `ladybug_scan`). Use it to understand the codebase before and while you delegate, so you partition work correctly and give subagents precise, verifiable targets.
+You have access to the LadybugDB code graph (`apg_query`). Use it to understand the codebase before and while you delegate, so you partition work correctly and give subagents precise, verifiable targets.
 
 - `apg_query` — read-only Cypher (MATCH/RETURN only) against the graph. Use it to find the packages, structs, functions, and call edges relevant to the work you are coordinating. This is your fastest way to see what code exists and how it is connected.
-- `ladybug_scan` — rebuilds the graph by re-scanning the project. Run it only if `apg_query` returns no data or you suspect the graph is stale after source files changed.
 
 Before relying on the graph, check it is populated:
 ```
 MATCH (s:Struct) RETURN count(*) as structs
 MATCH (f:Function) RETURN count(*) as functions
 ```
-If both are zero (or the query errors), run `ladybug_scan` first.
+If both are zero (or the query errors), the graph is empty or stale. Ask the user to run `apg scan` in the project root to rebuild `.apg/db.lbug` (per `.opencode/agents/codebase-navigator.md`), or fall back to the read/glob/grep tools.
 
 The full graph schema (node/edge labels, FQN conventions, common query patterns) is documented in `.opencode/agents/codebase-navigator.md` (the database lives at `.apg/db.lbug` — `apg_query` locates it automatically). Read that file for query patterns before writing Cypher, and follow its conventions: every FQN is fully qualified and module-prefixed (e.g. `github.com/foundry/flow/sidecar/internal/service.Server`), reserved words are backticked, and every query ends with `;`.
 

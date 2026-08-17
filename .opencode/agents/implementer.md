@@ -101,7 +101,6 @@ permission:
     "/tmp/**": allow
     "/Users/jledrew/go/**": allow
   apg_query: allow
-  ladybug_scan: allow
   bash:
     "*": deny
     "ls *": allow
@@ -152,17 +151,16 @@ You are an implementation subagent. Execute the assigned task directly, make the
 
 ## Codebase graph
 
-You have access to the LadybugDB code graph (`apg_query` and `ladybug_scan`). Use it to understand the code you are changing before you touch it, so your fix is smallest and lands in the right place.
+You have access to the LadybugDB code graph (`apg_query`). Use it to understand the code you are changing before you touch it, so your fix is smallest and lands in the right place.
 
 - `apg_query` — read-only Cypher (MATCH/RETURN only) against the code graph (it locates the database at `.apg/db.lbug` automatically). Use it to find the structs/functions involved, trace callers/callees, and confirm the package layout around your change.
-- `ladybug_scan` — rebuilds the graph by re-scanning the project. Run it only if `apg_query` returns no data or the graph is stale after you (or a sibling) changed source files.
 
 Before relying on the graph, check it is populated:
 ```
 MATCH (s:Struct) RETURN count(*) as structs
 MATCH (f:Function) RETURN count(*) as functions
 ```
-If both are zero (or the query errors), run `ladybug_scan` first.
+If both are zero (or the query errors), the graph is empty or stale — fall back to the read/glob/grep tools and note it; do not block on the graph.
 
 The full graph schema (node/edge labels, FQN conventions, common query patterns) is documented in `.opencode/agents/codebase-navigator.md`. Read it before writing Cypher, and follow its conventions: fully-qualified module-prefixed FQNs (e.g. `github.com/foundry/flow/sidecar/internal/service.Server`), backticked reserved words, and every query ends with `;`.
 

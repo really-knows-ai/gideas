@@ -136,10 +136,11 @@ clashing on the shared working tree.
 
 **Codebase graph (use it before and while you fix):**
 The LadybugDB code graph is available via `apg_query` (read-only Cypher; it
-locates the database at `.apg/db.lbug` automatically) and `ladybug_scan`
-(rebuilds the graph).  Before editing,
+locates the database at `.apg/db.lbug` automatically).  Before editing,
 check the graph is populated:
-`MATCH (s:Struct) RETURN count(*)` — if zero, run `ladybug_scan` first.
+`MATCH (s:Struct) RETURN count(*)` — if zero or the query errors, the graph
+is empty or stale: fall back to read/glob/grep and note it, do not block on
+the graph.
 Read `.opencode/agents/codebase-navigator.md` for the schema and query
 patterns (fully-qualified module-prefixed FQNs, backticked reserved words,
 `;`-terminated queries).  Use the graph to:
@@ -264,10 +265,11 @@ not tracked).
 
 **Codebase graph (use it before and while you fix):**
 The LadybugDB code graph is available via `apg_query` (read-only Cypher; it
-locates the database at `.apg/db.lbug` automatically) and `ladybug_scan`
-(rebuilds the graph).  Before editing,
+locates the database at `.apg/db.lbug` automatically).  Before editing,
 check the graph is populated:
-`MATCH (s:Struct) RETURN count(*)` — if zero, run `ladybug_scan` first.
+`MATCH (s:Struct) RETURN count(*)` — if zero or the query errors, the graph
+is empty or stale: fall back to read/glob/grep and note it, do not block on
+the graph.
 Read `.opencode/agents/codebase-navigator.md` for the schema and query
 patterns (fully-qualified module-prefixed FQNs, backticked reserved words,
 `;`-terminated queries).  Use the graph to:
