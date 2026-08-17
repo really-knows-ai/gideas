@@ -118,6 +118,18 @@ type SyncWorker struct {
 	// var, no SyncWorkerOption): the SPEC defines only the default, and the
 	// wiring surface is kept to what production uses.
 	gitOpTimeout time.Duration
+
+	// writeLock is the server's single main-LadybugDB write lock (the server's
+	// writeLock / lockMainStore, SPEC R5 "single write lock" and R10 "under the
+	// LadybugDB write lock"). The worker's post-pull re-hydration of main.lbug
+	// takes it as the inner lock beneath WithGitLock — the same git-outer /
+	// write-inner ordering every sibling main-store writer
+	// (CommitTransaction, GC, WipeGraph, RefreshTransaction) uses — so the
+	// SPEC's single-write-lock discipline is uniform across all main-store
+	// writers. Nil when a SyncWorker is constructed standalone (the tests do
+	// not go through WithSyncWorker, so they never wire the server lock);
+	// nil-guarded at the acquisition site in fetchAttempt.
+	writeLock *sync.Mutex
 }
 
 // SyncWorkerOption configures a SyncWorker.
@@ -514,11 +526,29 @@ func (w *SyncWorker) fetchAttempt() cycleResult {
 				return nil
 			}
 			entitiesDir, edgesDir := w.gitstore.HydrationDirs()
+			// Take the server's single main-LadybugDB write lock (writeLock /
+			// lockMainStore, SPEC R5 "single write lock", R10 "under the
+			// LadybugDB write lock") as the inner lock beneath WithGitLock,
+			// matching the git-outer / write-inner ordering every sibling
+			// main-store writer (CommitTransaction, GC, WipeGraph,
+			// RefreshTransaction) uses when it re-hydrates main.lbug. The
+			// store's own db.mu is acquired inside RehydrateMainFromFiles
+			// beneath this lock (writeLock → db.mu ordering is identical to
+			// the siblings, so no deadlock). Nil when the SyncWorker is
+			// constructed standalone (tests), in which case the git lock plus
+			// db.mu still provide mutual exclusion for this store I/O.
+			if w.writeLock != nil {
+				w.writeLock.Lock()
+			}
 			// RehydrateMainFromFiles holds the LadybugDB write lock (db.mu) for its
 			// entire wipe-and-load cycle.
-			if err := w.store.RehydrateMainFromFiles(ctx, entitiesDir, edgesDir); err != nil {
+			rehydrateErr := w.store.RehydrateMainFromFiles(ctx, entitiesDir, edgesDir)
+			if w.writeLock != nil {
+				w.writeLock.Unlock()
+			}
+			if rehydrateErr != nil {
 				w.hydrateFailed = true
-				hydrateErr = &hydrateError{err: fmt.Errorf("sync re-hydration failed: %w", err)}
+				hydrateErr = &hydrateError{err: fmt.Errorf("sync re-hydration failed: %w", rehydrateErr)}
 			} else {
 				w.hydrateFailed = false
 			}

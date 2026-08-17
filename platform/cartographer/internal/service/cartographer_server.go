@@ -106,8 +106,15 @@ func WithLadybugPath(path string) CartographerOption {
 }
 
 // WithSyncWorker sets the background sync worker for remote synchronisation.
+// It also hands the worker a reference to the server's single main-LadybugDB
+// write lock (writeLock / lockMainStore) so the worker's post-pull re-hydration
+// of main.lbug serialises through the same lock as every sibling main-store
+// writer (SPEC R5 "single write lock", R10 "under the LadybugDB write lock").
 func WithSyncWorker(sw *SyncWorker) CartographerOption {
-	return func(s *CartographerServer) { s.syncWorker = sw }
+	return func(s *CartographerServer) {
+		s.syncWorker = sw
+		sw.writeLock = &s.writeLock
+	}
 }
 
 // Verifier returns the capability verifier.
