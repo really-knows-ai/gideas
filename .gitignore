@@ -29,7 +29,10 @@ plans/
 appraisal
 appraiser
 arbiter
-codification
+# The "codification" entry above matches the compiled node binary at
+# nodes/codification/codification. Re-include the shared contract source
+# package, which is not a compiled binary.
+!nodes/internal/codification/
 codify-smt
 embassy
 facilitator

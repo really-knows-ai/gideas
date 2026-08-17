@@ -36,6 +36,7 @@ import (
 	"os"
 
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
+	codificationpkg "github.com/foundry/flow/nodes/internal/codification"
 	"github.com/foundry/flow/nodes/internal/nodeconfig"
 	"github.com/foundry/flow/nodes/internal/nodeutil"
 	petitionpkg "github.com/foundry/flow/nodes/internal/petition"
@@ -128,19 +129,13 @@ func needsCodification(c *petitionChange) bool {
 
 // codificationGoal is stored on each child workitem as the
 // "codification-goal" artefact. Matches the structure codify-smt expects.
-type codificationGoal struct {
-	Goal      string   `json:"goal"`
-	AppliesTo []string `json:"applies_to"`
-	Tier      int32    `json:"tier"`
-	Action    string   `json:"action"`
-}
+// Defined once in nodes/internal/codification so the parent/child wire
+// contract cannot silently diverge.
+type codificationGoal = codificationpkg.Goal
 
 // codificationResult is produced by codify-* children as the
 // "codification-result" artefact.
-type codificationResult struct {
-	Type    string `json:"type"`
-	Content string `json:"content"`
-}
+type codificationResult = codificationpkg.Result
 
 // ---------------------------------------------------------------------------
 // Entry Point
