@@ -416,6 +416,22 @@ func (m *Model) handleWatchEvent(event watch.Event) {
 // The workitem name snapshot is captured at creation time (Update handler main
 // goroutine) to avoid a data race on m.workitemList.Items from the Cmd goroutine.
 func (m *Model) debouncedChildCountRefresh() tea.Cmd {
+	// Bump the generation so any in-flight refresh is superseded; a stale
+	// waiter's message carries an older generation and is discarded by the
+	// Update handler before it can overwrite newer state.
+	m.childCountGeneration++
+	gen := m.childCountGeneration
+
+	// Release the previous arming's waiter (if any) by closing its wake
+	// channel. Otherwise multiple waiters would block on the shared timer
+	// channel, and a single timer fire would wake only one, stranding the rest
+	// (possibly for the whole session if refreshes stop).
+	if m.childCountWake != nil {
+		close(m.childCountWake)
+	}
+	wake := make(chan struct{})
+	m.childCountWake = wake
+
 	if m.childCountDebounce == nil {
 		m.childCountDebounce = time.NewTimer(200 * time.Millisecond)
 	} else {
@@ -433,7 +449,12 @@ func (m *Model) debouncedChildCountRefresh() tea.Cmd {
 		names[i] = item.Name
 	}
 	return func() tea.Msg {
-		<-m.childCountDebounce.C
+		select {
+		case <-wake:
+			// Superseded by a newer refresh — release without applying.
+			return nil
+		case <-m.childCountDebounce.C:
+		}
 
 		counts := make(map[string]int, len(names))
 		for _, name := range names {
@@ -446,7 +467,7 @@ func (m *Model) debouncedChildCountRefresh() tea.Cmd {
 			}
 			counts[name] = len(children)
 		}
-		return ChildCountsUpdatedMsg{Counts: counts}
+		return ChildCountsUpdatedMsg{Counts: counts, Generation: gen}
 	}
 }
 

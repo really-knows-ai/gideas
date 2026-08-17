@@ -55,7 +55,8 @@ type WorkitemDeletedMsg struct {
 
 // ChildCountsUpdatedMsg is sent when child counts are refreshed.
 type ChildCountsUpdatedMsg struct {
-	Counts map[string]int // workitem name -> child count
+	Counts     map[string]int // workitem name -> child count
+	Generation uint64         // debounce generation at which counts were computed
 }
 
 // WatchDisconnectedMsg is sent when the Kubernetes watch disconnects.

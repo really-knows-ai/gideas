@@ -119,6 +119,12 @@ func (m *Model) updateWorkitemList(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case ChildCountsUpdatedMsg:
+		// Re-arming the child-count debounce bumps m.childCountGeneration.
+		// Discard a message from an older (stale) snapshot so it can never
+		// overwrite counts computed for a newer workitem list.
+		if msg.Generation < m.childCountGeneration {
+			return m, nil
+		}
 		// Update child counts on the relevant items
 		for i, item := range m.workitemList.Items {
 			if count, ok := msg.Counts[item.Name]; ok {

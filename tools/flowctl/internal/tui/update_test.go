@@ -629,3 +629,63 @@ func TestUpdateWindowSizeMsg(t *testing.T) {
 		t.Error("expected nil command")
 	}
 }
+
+// TestDebouncedChildCountRefreshSecondArmReleasesPendingWaiter pins that a
+// second debounce re-arm while the first waiter is still pending releases the
+// first waiter (returns nil) instead of stranding it on the shared timer
+// channel. Without the wake-release, only one of the two waiters would be
+// woken by a single timer fire and the other would stay blocked for the
+// session.
+func TestDebouncedChildCountRefreshSecondArmReleasesPendingWaiter(t *testing.T) {
+	m := initialModel()
+	m.k8s = nil // avoid any real ListChildren call
+
+	first := m.debouncedChildCountRefresh() // gen 1, waiter on its wake channel
+	done := make(chan tea.Msg, 1)
+	go func() {
+		done <- first()
+	}()
+
+	// Re-arm while the first waiter is pending. This must close the first
+	// waiter's wake channel (releasing it) rather than stack a second waiter
+	// on the same timer channel.
+	second := m.debouncedChildCountRefresh() // gen 2
+	_ = second
+
+	select {
+	case msg := <-done:
+		if msg != nil {
+			t.Fatalf("expected released waiter to yield nil, got %T", msg)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("first debounce waiter was stranded: not released by second re-arm")
+	}
+}
+
+// TestChildCountsUpdatedMsgStaleGenerationDiscarded pins that a
+// ChildCountsUpdatedMsg computed from a stale (older-generation) snapshot is
+// discarded by the Update handler and can never overwrite counts for the
+// current workitem list.
+func TestChildCountsUpdatedMsgStaleGenerationDiscarded(t *testing.T) {
+	m := initialModel()
+	m.screen = ScreenWorkitemList
+	m.workitemList.Items = []api.WorkitemSummary{
+		{Name: "wi-001", State: "Running", ChildrenCount: 0},
+	}
+	// Simulate the debounce having been re-armed to generation 5.
+	m.childCountGeneration = 5
+
+	// A stale message (older generation) must not overwrite newer counts.
+	model, _ := m.Update(ChildCountsUpdatedMsg{Counts: map[string]int{"wi-001": 99}, Generation: 3})
+	m2 := model.(*Model)
+	if got := m2.workitemList.Items[0].ChildrenCount; got != 0 {
+		t.Fatalf("stale snapshot overwrote newer counts: got %d, want 0", got)
+	}
+
+	// The current-generation message is applied.
+	model, _ = m.Update(ChildCountsUpdatedMsg{Counts: map[string]int{"wi-001": 7}, Generation: 5})
+	m2 = model.(*Model)
+	if got := m2.workitemList.Items[0].ChildrenCount; got != 7 {
+		t.Fatalf("current-generation message not applied: got %d, want 7", got)
+	}
+}
