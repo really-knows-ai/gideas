@@ -41,32 +41,114 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 )
 
+// Defaults for the SPEC R5 environment-variable table. These constants are the
+// cartographer-side single source of truth for the binary's env-var fallbacks
+// (versioning.transactionTimeout "30m", CAPABILITY_STALENESS_WINDOW "30s");
+// the operator's rendered Deployment/CRD defaults are separate config surfaces.
+const (
+	defaultTransactionTimeout        = "30m"
+	defaultCapabilityStalenessWindow = "30s"
+)
+
 func main() {
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})))
 
-	// -----------------------------------------------------------------------
-	// 1. Read environment variables
-	// -----------------------------------------------------------------------
-	ladybugDBPath := getEnv("LADYBUG_DB_PATH", "/data")
-	cartographerPort := getEnv("CARTOGRAPHER_PORT", "50051")
-	remoteURL := os.Getenv("REMOTE_URL")
-	remoteAuthSecretRef := os.Getenv("REMOTE_AUTH_SECRET_REF")
+	// 1. Resolve and fail-fast validate every boot-path environment variable
+	// (SPEC R5 boot-path env parsing).
+	cfg := loadStartupConfig()
+
+	// 2-4. Open the main LadybugDB and the git store at the same PVC root,
+	// failing closed on an open failure (SPEC R8 corruption-only recovery) and
+	// re-hydrating main from the git working tree whenever the repo has commits.
+	dbStore, gs := openAndRecoverStores(cfg.ladybugDBPath)
+
+	// 5. Set up the Kubernetes Secret reader for remote auth (SPEC R1).
+	readSecretFn := newSecretReader(cfg.podNamespace)
+
+	// 5a. Configure remote auth on the git store when a remote is configured.
+	configureRemoteAuth(gs, cfg, readSecretFn)
+
+	// 6. Connect to the Event Bus for telemetry (audit tombstoning,
+	// remote-sync failures); nil publisher when no address is configured.
+	auditPub, eventBusCloser := connectEventBus(cfg.eventBusAddress)
+
+	// 7. Optional remote pull on init (SPEC R10 Init) plus the startup
+	// catch-up push decision, which is independent of pullOnInit.
+	initCatchUpPush := runPullOnInit(gs, cfg, readSecretFn, auditPub, dbStore)
+
+	// 8-11. Construct the CartographerServer — options, background sync worker,
+	// open-transaction recovery, and dbReady.
+	server, syncW := constructServer(dbStore, gs, cfg, readSecretFn, auditPub, initCatchUpPush)
+
+	// 12. Create the gRPC server with the health probe (SPEC R5: SERVING
+	// before the first ApplySchema), capability interceptor, and reflection.
+	healthSrv := newHealthServer()
+	grpcServer, lis := runGRPCServer(server, healthSrv, cfg.cartographerPort)
+
+	// 13. Start the GC goroutine.
+	server.StartGC()
+
+	// 14. Handle graceful shutdown on SIGTERM/SIGINT.
+	shutdownDone := watchShutdown(healthSrv, grpcServer, server, dbStore, gs, auditPub, eventBusCloser, syncW)
+
+	// 15. Serve. Serve returns nil (or ErrServerStopped) once the shutdown
+	// goroutine called GracefulStop/Stop. Join that goroutine's durability
+	// teardown (dbStore.Close, git RestoreMain/CleanUntracked, auditPub.Stop,
+	// event bus close) before main returns, so the process does not exit
+	// (terminating the goroutine) mid-cleanup and the
+	// terminationGracePeriodSeconds budget is honoured.
+	slog.Info("Cartographer ready")
+	if err := grpcServer.Serve(lis); isFatalServeError(err) {
+		slog.Error("gRPC serve error", "error", err)
+		os.Exit(1)
+	}
+	<-shutdownDone
+}
+
+// startupConfig carries every value main() resolves from the environment
+// (SPEC R5 boot-path env parsing) before any component is constructed. Each
+// field is either optional (empty/zero = absent) or fail-fast validated: an
+// unparseable boolean, an unparseable/non-positive duration, or a
+// missing/malformed verification key exits the process rather than silently
+// running with a wrong value.
+type startupConfig struct {
+	ladybugDBPath       string
+	cartographerPort    string
+	remoteURL           string
+	remoteAuthSecretRef string
+	remotePullOnInit    bool
+	podNamespace        string
+	eventBusAddress     string
+
+	transactionTimeout time.Duration
+	stalenessWindow    time.Duration
+	syncInterval       time.Duration
+
+	operatorKey ed25519.PublicKey
+	sidecarKey  ed25519.PublicKey
+}
+
+// loadStartupConfig reads and fail-fast validates every environment variable
+// the Cartographer boot path consumes (SPEC R5 environment-variable table).
+// All env fail-fast guards live here — so the individual parsers
+// (parseBoolEnv, parseDurationEnv, parseVerificationKey) stay unit-testable
+// without os.Exit and the wrappers (loadPullOnInit, loadDuration,
+// loadPositiveDuration, loadVerificationKey) own the process exit — keeping
+// main() a thin coordinator.
+func loadStartupConfig() startupConfig {
+	cfg := startupConfig{
+		ladybugDBPath:       getEnv("LADYBUG_DB_PATH", "/data"),
+		cartographerPort:    getEnv("CARTOGRAPHER_PORT", "50051"),
+		remoteURL:           os.Getenv("REMOTE_URL"),
+		remoteAuthSecretRef: os.Getenv("REMOTE_AUTH_SECRET_REF"),
+		podNamespace:        getEnv("POD_NAMESPACE", "default"),
+		eventBusAddress:     os.Getenv("EVENT_BUS_ADDRESS"),
+	}
 	// SPEC R5 fail-fast env guard: an unparseable boolean is fatal. The
 	// fail-fast decision (return an error) is factored into parseBoolEnv so it
 	// is unit-testable without os.Exit; loadPullOnInit owns the process exit,
 	// mirroring loadVerificationKey below.
-	remotePullOnInit := loadPullOnInit()
-	podNamespace := getEnv("POD_NAMESPACE", "default")
-	eventBusAddress := os.Getenv("EVENT_BUS_ADDRESS")
-
-	// SPEC R5 fail-fast env guard: an unparseable duration is fatal. The
-	// fail-fast decision (return an error) is factored into parseDurationEnv
-	// so it is unit-testable without os.Exit; the caller owns the process exit.
-	transactionTimeout, err := parseDurationEnv("TRANSACTION_TIMEOUT", "30m")
-	if err != nil {
-		slog.Error("invalid TRANSACTION_TIMEOUT", "error", err)
-		os.Exit(1)
-	}
+	cfg.remotePullOnInit = loadPullOnInit()
 	// SPEC R5 fail-fast guard: a non-positive TRANSACTION_TIMEOUT parses
 	// cleanly but makes every BeginTransaction fail at runtime with
 	// INVALID_ARGUMENT ("invalid transaction timeout duration: duration must be
@@ -74,18 +156,10 @@ func main() {
 	// errInvalidTransactionTimeoutDuration in the service errors.go), so it
 	// must fail startup just like an unparseable value. Mirrors the
 	// SYNC_INTERVAL positivity guard below.
-	if transactionTimeout <= 0 {
-		slog.Error("invalid TRANSACTION_TIMEOUT", "value", transactionTimeout.String(),
-			"error", "must be a positive duration")
-		os.Exit(1)
-	}
-
-	stalenessWindow, err := parseDurationEnv("CAPABILITY_STALENESS_WINDOW", "30s")
-	if err != nil {
-		slog.Error("invalid CAPABILITY_STALENESS_WINDOW", "error", err)
-		os.Exit(1)
-	}
-
+	cfg.transactionTimeout = loadPositiveDuration("TRANSACTION_TIMEOUT", defaultTransactionTimeout)
+	// SPEC R5: no positivity guard for the staleness window — a negative
+	// CAPABILITY_STALENESS_WINDOW disables the staleness check entirely.
+	cfg.stalenessWindow = loadDuration("CAPABILITY_STALENESS_WINDOW", defaultCapabilityStalenessWindow)
 	// SPEC R10 sync worker "wakes every minute (configurable)": the periodic
 	// interval is an env knob whose default is sourced from the worker's own
 	// DefaultSyncInterval constant, so the wiring default and the worker
@@ -93,29 +167,21 @@ func main() {
 	// non-positive values: time.NewTicker panics on a non-positive interval,
 	// so a bad SYNC_INTERVAL must fail startup with a clear message rather
 	// than crash the worker goroutine mid-run.
-	syncInterval, err := parseDurationEnv("SYNC_INTERVAL", service.DefaultSyncInterval.String())
-	if err != nil {
-		slog.Error("invalid SYNC_INTERVAL", "error", err)
-		os.Exit(1)
-	}
-	if syncInterval <= 0 {
-		slog.Error("invalid SYNC_INTERVAL", "value", syncInterval.String(),
-			"error", "must be a positive duration")
-		os.Exit(1)
-	}
-
+	cfg.syncInterval = loadPositiveDuration("SYNC_INTERVAL", service.DefaultSyncInterval.String())
 	// Validate and load verification keys early (fail-fast on missing keys).
-	operatorKey := loadVerificationKey("OPERATOR_VERIFICATION_KEY")
-	sidecarKey := loadVerificationKey("SIDECAR_VERIFICATION_KEY")
+	cfg.operatorKey = loadVerificationKey("OPERATOR_VERIFICATION_KEY")
+	cfg.sidecarKey = loadVerificationKey("SIDECAR_VERIFICATION_KEY")
+	return cfg
+}
 
-	// -----------------------------------------------------------------------
-	// 2. Open LadybugDB database at <path>/main.lbug
-	// -----------------------------------------------------------------------
+// openAndRecoverStores opens the main LadybugDB database at <path>/main.lbug
+// and initialises the git store at <path>/graph-repo/, failing startup on an
+// operational open failure (SPEC R8 corruption-only recovery), then runs the
+// startup re-hydration of main from the git working tree whenever the git
+// repository has commits.
+func openAndRecoverStores(ladybugDBPath string) (store.Store, gitstore.GitStore) {
 	dbStore, dbErr := ladybug.Open(ladybugDBPath)
 
-	// -----------------------------------------------------------------------
-	// 3. Initialise gitstore at <path>/graph-repo/
-	// -----------------------------------------------------------------------
 	gs, gsErr := gitstore.New(ladybugDBPath)
 	if gsErr != nil {
 		slog.Error("Failed to initialise gitstore", "error", gsErr)
@@ -123,9 +189,6 @@ func main() {
 	}
 	slog.Info("Git repository open", "path", filepath.Join(ladybugDBPath, "graph-repo"))
 
-	// -----------------------------------------------------------------------
-	// 4. Fail closed on main.lbug open failure (SPEC R8 corruption-only recovery)
-	// -----------------------------------------------------------------------
 	// SPEC R8 corruption recovery is scoped entirely to a genuinely corrupted
 	// main.lbug. ladybug.Open performs the destructive half of that recovery:
 	// on a readable-but-unparseable file (corruptionCandidates) it removes
@@ -185,12 +248,16 @@ func main() {
 	if err := rehydrateMainAfterRecovery(context.Background(), dbStore, gs); err != nil {
 		handleStartupRehydrateFailure(context.Background(), dbStore, err)
 	}
+	return dbStore, gs
+}
 
-	// -----------------------------------------------------------------------
-	// 5. Set up Kubernetes client for Secret reading
-	// -----------------------------------------------------------------------
-	var readSecretFn func(ctx context.Context, name string) (map[string]string, error)
-
+// newSecretReader sets up the Kubernetes client used for SPEC R1 Secret reads
+// and returns the shared readSecretFn consumed by the git auth resolver
+// (buildResolveAuthFn) and tryRemotePullOnInit's pre-flight check. Inside the
+// cluster the in-cluster config is used; the kubeconfig fallback covers local
+// runs. Every failure degrades to a reader that returns a descriptive error so
+// callers fail closed (never anonymous).
+func newSecretReader(podNamespace string) func(ctx context.Context, name string) (map[string]string, error) {
 	k8sConfig, inClusterErr := rest.InClusterConfig()
 	if inClusterErr != nil {
 		var kubeErr error
@@ -199,119 +266,131 @@ func main() {
 			slog.Warn("Kubeconfig fallback also failed (expected when running outside cluster)", "error", kubeErr)
 		}
 	}
-
-	if k8sConfig != nil {
-		clientset, kErr := kubernetes.NewForConfig(k8sConfig)
-		if kErr != nil {
-			slog.Warn("Failed to create Kubernetes clientset", "error", kErr)
-			readSecretFn = func(_ context.Context, _ string) (map[string]string, error) {
-				return nil, fmt.Errorf("kubernetes client unavailable: %w", kErr)
-			}
-		} else {
-			readSecretFn = newReadSecretFn(clientset, podNamespace)
-			slog.Info("Kubernetes client initialised", "namespace", podNamespace)
-		}
-	} else {
+	if k8sConfig == nil {
 		slog.Warn("Kubernetes client not configured — running outside cluster")
-		readSecretFn = func(ctx context.Context, name string) (map[string]string, error) {
+		return func(ctx context.Context, name string) (map[string]string, error) {
 			return nil, fmt.Errorf("kubernetes client not configured")
 		}
 	}
-
-	// -----------------------------------------------------------------------
-	// 5a. Configure remote auth on gitstore
-	// -----------------------------------------------------------------------
-	if remoteURL != "" {
-		resolveAuthFn := buildResolveAuthFn(remoteAuthSecretRef, readSecretFn, remoteURL)
-		if err := gs.SetRemote(context.Background(), remoteURL, resolveAuthFn); err != nil {
-			// SPEC error-table row 987 ("Unsupported remote URL scheme" →
-			// INVALID_ARGUMENT) and the R1 remote scheme set: a URL SetRemote
-			// rejects (unsupported scheme, parse failure, no host —
-			// validateRemoteURL, remote.go) is a deployment misconfiguration.
-			// The fail-startup clause is scoped to pullOnInit: true (SPEC.md:122:
-			// "An empty Secret or one missing the expected key causes the
-			// Cartographer to fail startup if pullOnInit is true" — the same
-			// clause tryRemotePullOnInit's pre-flight implements), and R10 Init
-			// (SPEC.md:636-641) logs clone/init failures and does not block
-			// startup. So: with pullOnInit=true a rejected remote aborts startup
-			// loudly (a misconfigured remote that the pod is supposed to clone on
-			// init is a deployment error worth surfacing immediately); with
-			// pullOnInit=false (the default) the remote is only used by the sync
-			// worker's runtime cycles, whose errors are logged and non-blocking —
-			// so a rejected URL degrades to that same logged, non-blocking class
-			// instead of crash-looping. In both cases the worker is still created
-			// (keyed on REMOTE_URL); with a rejected remote its first cycle
-			// surfaces ErrNoRemote, which classifySyncError classes
-			// non-recoverable (sync_worker.go): fetchAndRehydrate logs the
-			// failure loudly and emits a cartographer.push_failed Event Bus
-			// telemetry event on every woken or timer cycle before returning the
-			// error — and WithAck/Commit fail with FAILED_PRECONDITION "no
-			// remote configured" via mapGitError, the same runtime surface a
-			// pullOnInit=false misconfiguration produces today.
-			if remotePullOnInit {
-				slog.Error("Failed to configure remote; aborting startup", "url", remoteURL, "error", err)
-				os.Exit(1)
-			}
-			slog.Warn("Failed to configure remote (non-fatal: pullOnInit=false); remote sync degraded",
-				"url", remoteURL, "error", err)
-		} else {
-			slog.Info("Remote configured", "url", remoteURL)
+	clientset, kErr := kubernetes.NewForConfig(k8sConfig)
+	if kErr != nil {
+		slog.Warn("Failed to create Kubernetes clientset", "error", kErr)
+		return func(_ context.Context, _ string) (map[string]string, error) {
+			return nil, fmt.Errorf("kubernetes client unavailable: %w", kErr)
 		}
 	}
+	slog.Info("Kubernetes client initialised", "namespace", podNamespace)
+	return newReadSecretFn(clientset, podNamespace)
+}
 
-	// -----------------------------------------------------------------------
-	// 6. Connect to Event Bus
-	// -----------------------------------------------------------------------
-	var auditPub *eventbus.AsyncPublisher
-	var eventBusCloser func() error
-
-	if eventBusAddress != "" {
-		ebConn, cErr := grpc.NewClient(eventBusAddress, grpc.WithTransportCredentials(insecure.NewCredentials()))
-		if cErr != nil {
-			// ponytail: fail-fast on an unreachable Event Bus. grpc.NewClient is
-			// lazy — it only validates the target form and never dials, so cErr
-			// here is a malformed-address parse failure, not a down-bus. The
-			// rationale for failing closed on it: a misconfigured telemetry
-			// address is a deployment misconfiguration the operator wants to
-			// see immediately, and telemetry events published by mutations
-			// (audit tombstoning, remote-sync failures) would otherwise be
-			// silently dropped on every write. Ceiling: this treats a
-			// configuration typo as fatal even though the Event Bus is a
-			// non-blocking, fire-and-forget side channel — the durable graph
-			// service would run fine with telemetry off (as it does when
-			// EVENT_BUS_ADDRESS is unset). Upgrade path: dial lazily via a
-			// non-blocking reconnector so a bad address degrades to
-			// telemetry-disabled rather than failing startup; revisit if the
-			// Event Bus becomes a hard dependency.
-			slog.Error("Failed to connect to Event Bus", "address", eventBusAddress, "error", cErr)
+// configureRemoteAuth wires REMOTE_URL onto the git store with its Secret-backed
+// auth resolver (SPEC R1 secret data keys). A rejected remote URL (SetRemote
+// rejecting: unsupported scheme, parse failure, no host — validateRemoteURL,
+// remote.go) is a deployment misconfiguration: with pullOnInit=true the process
+// aborts startup loudly, with pullOnInit=false the failure degrades to the sync
+// worker's logged, non-blocking error class (SPEC error-table note at the
+// failure site below).
+func configureRemoteAuth(
+	gs gitstore.GitStore,
+	cfg startupConfig,
+	readSecretFn func(ctx context.Context, name string) (map[string]string, error),
+) {
+	if cfg.remoteURL == "" {
+		return
+	}
+	resolveAuthFn := buildResolveAuthFn(cfg.remoteAuthSecretRef, readSecretFn, cfg.remoteURL)
+	if err := gs.SetRemote(context.Background(), cfg.remoteURL, resolveAuthFn); err != nil {
+		// SPEC error-table row 987 ("Unsupported remote URL scheme" →
+		// INVALID_ARGUMENT) and the R1 remote scheme set: a URL SetRemote
+		// rejects (unsupported scheme, parse failure, no host —
+		// validateRemoteURL, remote.go) is a deployment misconfiguration.
+		// The fail-startup clause is scoped to pullOnInit: true (SPEC.md:122:
+		// "An empty Secret or one missing the expected key causes the
+		// Cartographer to fail startup if pullOnInit is true" — the same
+		// clause tryRemotePullOnInit's pre-flight implements), and R10 Init
+		// (SPEC.md:636-641) logs clone/init failures and does not block
+		// startup. So: with pullOnInit=true a rejected remote aborts startup
+		// loudly (a misconfigured remote that the pod is supposed to clone on
+		// init is a deployment error worth surfacing immediately); with
+		// pullOnInit=false (the default) the remote is only used by the sync
+		// worker's runtime cycles, whose errors are logged and non-blocking —
+		// so a rejected URL degrades to that same logged, non-blocking class
+		// instead of crash-looping. In both cases the worker is still created
+		// (keyed on REMOTE_URL); with a rejected remote its first cycle
+		// surfaces ErrNoRemote, which classifySyncError classes
+		// non-recoverable (sync_worker.go): fetchAndRehydrate logs the
+		// failure loudly and emits a cartographer.push_failed Event Bus
+		// telemetry event on every woken or timer cycle before returning the
+		// error — and WithAck/Commit fail with FAILED_PRECONDITION "no
+		// remote configured" via mapGitError, the same runtime surface a
+		// pullOnInit=false misconfiguration produces today.
+		if cfg.remotePullOnInit {
+			slog.Error("Failed to configure remote; aborting startup", "url", cfg.remoteURL, "error", err)
 			os.Exit(1)
 		}
-		eventBusCloser = ebConn.Close
-		ebClient := flowv1.NewFlowEventBusServiceClient(ebConn)
-		auditPub = eventbus.NewAsyncPublisher(ebClient)
-		slog.Info("Event Bus connected for telemetry", "address", eventBusAddress)
-	} else {
-		slog.Info("Event Bus not configured, telemetry publishing disabled")
+		slog.Warn("Failed to configure remote (non-fatal: pullOnInit=false); remote sync degraded",
+			"url", cfg.remoteURL, "error", err)
+		return
 	}
+	slog.Info("Remote configured", "url", cfg.remoteURL)
+}
 
-	// -----------------------------------------------------------------------
-	// 7. Optional remote pull on init + startup catch-up push decision
-	// -----------------------------------------------------------------------
-	// initCatchUpPush records whether R10 Init found locally-committed-but-
-	// unpushed data that the sync worker's first cycle must push (SPEC R10 Init,
-	// SPEC.md:640-641: "The sync worker pushes any locally-committed-but-
-	// unpushed data on its first cycle (startup catch-up push), including any
-	// unsent commits from a prior pod lifetime"). The decision is independent
-	// of pullOnInit: the pull is optional, but the startup catch-up push is
-	// not — a prior pod that terminated before its push completed left its
-	// commits in the local git repo (the push flag itself is in-memory and is
-	// lost on restart), and only the worker's first cycle can deliver them.
-	// The worker is constructed after this init path, so tryRemotePullOnInit /
-	// startupCatchUpPushNeeded report the decision and main wires it into the
-	// worker before the first cycle runs.
-	var initCatchUpPush bool
-	if remotePullOnInit && remoteURL != "" {
-		catchUpPush, err := tryRemotePullOnInit(gs, remoteURL, remoteAuthSecretRef, podNamespace, readSecretFn, auditPub,
+// connectEventBus dials the Event Bus when an address is configured, returning
+// the async telemetry publisher and the connection closer, or (nil, nil) when
+// telemetry is disabled.
+func connectEventBus(address string) (*eventbus.AsyncPublisher, func() error) {
+	if address == "" {
+		slog.Info("Event Bus not configured, telemetry publishing disabled")
+		return nil, nil
+	}
+	ebConn, cErr := grpc.NewClient(address, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if cErr != nil {
+		// ponytail: fail-fast on an unreachable Event Bus. grpc.NewClient is
+		// lazy — it only validates the target form and never dials, so cErr
+		// here is a malformed-address parse failure, not a down-bus. The
+		// rationale for failing closed on it: a misconfigured telemetry
+		// address is a deployment misconfiguration the operator wants to
+		// see immediately, and telemetry events published by mutations
+		// (audit tombstoning, remote-sync failures) would otherwise be
+		// silently dropped on every write. Ceiling: this treats a
+		// configuration typo as fatal even though the Event Bus is a
+		// non-blocking, fire-and-forget side channel — the durable graph
+		// service would run fine with telemetry off (as it does when
+		// EVENT_BUS_ADDRESS is unset). Upgrade path: dial lazily via a
+		// non-blocking reconnector so a bad address degrades to
+		// telemetry-disabled rather than failing startup; revisit if the
+		// Event Bus becomes a hard dependency.
+		slog.Error("Failed to connect to Event Bus", "address", address, "error", cErr)
+		os.Exit(1)
+	}
+	ebClient := flowv1.NewFlowEventBusServiceClient(ebConn)
+	auditPub := eventbus.NewAsyncPublisher(ebClient)
+	slog.Info("Event Bus connected for telemetry", "address", address)
+	return auditPub, ebConn.Close
+}
+
+// runPullOnInit performs the SPEC R10 Init pre-flight and returns the startup
+// catch-up push decision: whether the sync worker's first cycle must push
+// locally-committed-but-unpushed data (SPEC R10 Init, SPEC.md:640-641: "The
+// sync worker pushes any locally-committed-but-unpushed data on its first cycle
+// (startup catch-up push), including any unsent commits from a prior pod
+// lifetime"). The decision is independent of pullOnInit: the pull is optional,
+// but the startup catch-up push is not — a prior pod that terminated before its
+// push completed left its commits in the local git repo (the push flag itself
+// is in-memory and is lost on restart), and only the worker's first cycle can
+// deliver them. The worker is constructed after this init path, so this helper
+// only reports the decision and main wires it into the worker before the first
+// cycle runs.
+func runPullOnInit(
+	gs gitstore.GitStore,
+	cfg startupConfig,
+	readSecretFn func(ctx context.Context, name string) (map[string]string, error),
+	auditPub *eventbus.AsyncPublisher,
+	dbStore store.Store,
+) bool {
+	if cfg.remotePullOnInit && cfg.remoteURL != "" {
+		catchUpPush, err := tryRemotePullOnInit(
+			gs, cfg.remoteURL, cfg.remoteAuthSecretRef, cfg.podNamespace, readSecretFn, auditPub,
 			// SPEC R10 Init: after clone-on-init seeds the git working tree,
 			// re-hydrate main from the cloned file-per-element representation so
 			// the graph is not empty. With the transaction-only write model there
@@ -329,8 +408,9 @@ func main() {
 			slog.Error("Remote init failed; aborting startup", "error", err)
 			os.Exit(1)
 		}
-		initCatchUpPush = catchUpPush
-	} else if remoteURL != "" {
+		return catchUpPush
+	}
+	if cfg.remoteURL != "" {
 		// pullOnInit=false (the common default): no clone runs, but the
 		// startup catch-up push still applies — unsent commits from a prior pod
 		// lifetime must be delivered by the worker's first cycle (SPEC R10 Init:
@@ -339,23 +419,41 @@ func main() {
 		// lifetime").
 		// A repo-state check failure is logged and non-blocking, mirroring
 		// tryRemotePullOnInit's IsEmpty handling (SPEC R10 Init).
-		initCatchUpPush = startupCatchUpPushNeeded(context.Background(), gs)
+		return startupCatchUpPushNeeded(context.Background(), gs)
 	}
+	return false
+}
 
-	// -----------------------------------------------------------------------
-	// 8,9. Construct CartographerServer with options
-	// -----------------------------------------------------------------------
+// constructServer builds the CartographerServer — options (audit publisher,
+// ladybug path), the background sync worker, the per-transaction change-log
+// cap — then recovers open transactions, starts the worker goroutine, and
+// marks the database ready. The worker goroutine is started only after server
+// construction AND transaction recovery: Run() executes an immediate first
+// cycle (fetch → restore-main → clean → re-hydrate), which must not run
+// concurrently with the recovery path — recovery's main-file reads
+// (buildMainFileLookups, cartographer_server.go) happen outside the git lock
+// after ListBranches, so a concurrent first cycle could snapshot or re-hydrate
+// a stale or mid-recovery working tree in the crash-strand scenario.
+// SetPushNeeded (initCatchUpPush) is applied before the first cycle runs.
+func constructServer(
+	dbStore store.Store,
+	gs gitstore.GitStore,
+	cfg startupConfig,
+	readSecretFn func(ctx context.Context, name string) (map[string]string, error),
+	auditPub *eventbus.AsyncPublisher,
+	initCatchUpPush bool,
+) (*service.CartographerServer, *service.SyncWorker) {
 	var opts []service.CartographerOption
 	if auditPub != nil {
 		opts = append(opts, service.WithAuditPublisher(auditPub))
 	}
-	opts = append(opts, service.WithLadybugPath(ladybugDBPath))
+	opts = append(opts, service.WithLadybugPath(cfg.ladybugDBPath))
 
 	// Create the background sync worker if a remote URL is configured. Its
 	// goroutine is started only after server construction and transaction
-	// recovery (see the SPEC R10 note below).
+	// recovery (see the doc comment above).
 	var syncW *service.SyncWorker
-	if remoteURL != "" {
+	if cfg.remoteURL != "" {
 		// Permanent sync failures emit an operator-visible Event Bus telemetry
 		// event (SPEC R10 error classification "log loudly + telemetry"), so the
 		// worker shares the server's audit publisher when one is configured, and
@@ -365,9 +463,9 @@ func main() {
 		if auditPub != nil {
 			syncOpts = append(syncOpts, service.SyncWorkerWithAuditPublisher(auditPub))
 		}
-		syncOpts = append(syncOpts, service.SyncWorkerWithPodNamespace(podNamespace))
-		syncOpts = append(syncOpts, service.SyncWorkerWithSyncInterval(syncInterval))
-		syncW = service.NewSyncWorker(remoteURL, gs, dbStore, service.RealClock{}, syncOpts...)
+		syncOpts = append(syncOpts, service.SyncWorkerWithPodNamespace(cfg.podNamespace))
+		syncOpts = append(syncOpts, service.SyncWorkerWithSyncInterval(cfg.syncInterval))
+		syncW = service.NewSyncWorker(cfg.remoteURL, gs, dbStore, service.RealClock{}, syncOpts...)
 		opts = append(opts, service.WithSyncWorker(syncW))
 		// SPEC R10 Init / SPEC.md:640-641: when init found committed-but-
 		// unpushed data (non-empty repo booting with a remote configured —
@@ -397,49 +495,37 @@ func main() {
 	// literals); a future cap change must touch the store constant plus every
 	// service-test literal.
 	server := service.NewCartographerServer(
-		dbStore, gs, operatorKey, sidecarKey,
-		readSecretFn, remoteURL, stalenessWindow,
-		podNamespace, transactionTimeout, store.DefaultChangeLogCap,
+		dbStore, gs, cfg.operatorKey, cfg.sidecarKey,
+		readSecretFn, cfg.remoteURL, cfg.stalenessWindow,
+		cfg.podNamespace, cfg.transactionTimeout, store.DefaultChangeLogCap,
 		opts...,
 	)
 	slog.Info("Cartographer server constructed")
 
-	// -----------------------------------------------------------------------
-	// 10. Recover open transactions
-	// -----------------------------------------------------------------------
 	if err := server.RecoverOpenTransactions(context.Background()); err != nil {
 		slog.Error("Failed to recover open transactions", "error", err)
 		os.Exit(1)
 	}
 	slog.Info("Open transactions recovered")
 
-	// SPEC R10 background sync worker: the worker goroutine is started only
-	// after server construction AND transaction recovery. Run()
-	// executes an immediate first cycle (fetch → restore-main → clean →
-	// re-hydrate), which must not run concurrently with the recovery path:
-	// recovery's main-file reads (buildMainFileLookups, cartographer_server.go)
-	// happen outside the git lock after ListBranches, so a concurrent first
-	// cycle could snapshot or re-hydrate a stale or mid-recovery working tree
-	// in the crash-strand scenario. SetPushNeeded (above) is still applied
-	// before the first cycle runs.
 	if syncW != nil {
 		go syncW.Run()
 		slog.Info("Background sync worker started")
 	}
-
-	// -----------------------------------------------------------------------
-	// 11. Mark dbReady
-	// -----------------------------------------------------------------------
 	server.MarkDBReady()
+	return server, syncW
+}
 
-	// -----------------------------------------------------------------------
-	// 12. Create gRPC server with health probe, capability interceptor, reflection
-	// -----------------------------------------------------------------------
-	// SPEC R5: before the first ApplySchema, the standard health service
-	// reports SERVING. The setup is factored into newHealthServer so the
-	// startup health state is unit-testable without booting main.
-	healthSrv := newHealthServer()
-
+// runGRPCServer builds the gRPC server wired with the capability verification
+// interceptors, the SPEC R5 health service (SERVING before the first
+// ApplySchema — newHealthServer), and reflection, then binds the TCP listener
+// on the configured port. The shutdown path flips the health service to
+// NOT_SERVING.
+func runGRPCServer(
+	server *service.CartographerServer,
+	healthSrv *health.Server,
+	port string,
+) (*grpc.Server, net.Listener) {
 	grpcServer := grpc.NewServer(
 		grpc.ChainUnaryInterceptor(server.Verifier().VerifyInterceptor),
 		grpc.ChainStreamInterceptor(server.Verifier().VerifyStreamInterceptor),
@@ -449,42 +535,37 @@ func main() {
 	grpc_health_v1.RegisterHealthServer(grpcServer, healthSrv)
 	reflection.Register(grpcServer)
 
-	lis, lErr := net.Listen("tcp", ":"+cartographerPort)
+	lis, lErr := net.Listen("tcp", ":"+port)
 	if lErr != nil {
-		slog.Error("Failed to listen", "port", cartographerPort, "error", lErr)
+		slog.Error("Failed to listen", "port", port, "error", lErr)
 		os.Exit(1)
 	}
 	slog.Info("gRPC server listening", "address", lis.Addr().String())
+	return grpcServer, lis
+}
 
-	// -----------------------------------------------------------------------
-	// 13. Start GC goroutine
-	// -----------------------------------------------------------------------
-	server.StartGC()
-
-	// -----------------------------------------------------------------------
-	// 14. Handle graceful shutdown on SIGTERM/SIGINT
-	// -----------------------------------------------------------------------
+// watchShutdown registers SIGINT/SIGTERM and runs the graceful-shutdown
+// teardown (waitForShutdown) in a background goroutine. It returns the
+// shutdownDone channel main joins after Serve returns, so the durability
+// teardown (dbStore.Close, git RestoreMain/CleanUntracked, auditPub.Stop,
+// event bus close) completes before the process exits and the
+// terminationGracePeriodSeconds budget is honoured.
+func watchShutdown(
+	healthSrv *health.Server,
+	grpcServer *grpc.Server,
+	server *service.CartographerServer,
+	dbStore store.Store,
+	gs gitstore.GitStore,
+	auditPub *eventbus.AsyncPublisher,
+	eventBusCloser func() error,
+	syncW *service.SyncWorker,
+) <-chan struct{} {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
 	shutdownDone := make(chan struct{})
 	go waitForShutdown(shutdownDone, sigCh, healthSrv, grpcServer, server, dbStore, gs, auditPub, eventBusCloser, syncW)
-
-	// -----------------------------------------------------------------------
-	// 15. Serve
-	// -----------------------------------------------------------------------
-	slog.Info("Cartographer ready")
-	if err := grpcServer.Serve(lis); isFatalServeError(err) {
-		slog.Error("gRPC serve error", "error", err)
-		os.Exit(1)
-	}
-	// Serve returns nil (or ErrServerStopped) once the shutdown goroutine called
-	// GracefulStop/Stop. Wait for that goroutine to finish its durability teardown
-	// (dbStore.Close, git RestoreMain/CleanUntracked, auditPub.Stop, event bus
-	// close) before main returns, so the process does not exit (terminating the
-	// goroutine) mid-cleanup and the terminationGracePeriodSeconds budget is
-	// honoured.
-	<-shutdownDone
+	return shutdownDone
 }
 
 // rehydrateMainAfterRecovery re-synchronizes main LadybugDB from the git
@@ -1080,6 +1161,34 @@ func parseDurationEnv(key, defaultVal string) (time.Duration, error) {
 		return time.ParseDuration(defaultVal)
 	}
 	return time.ParseDuration(v)
+}
+
+// loadDuration parses a duration environment variable, failing startup fast on
+// an unparseable value (SPEC R5 fail-fast env guard). The fail-fast decision
+// (return an error) is factored into parseDurationEnv so it is unit-testable
+// without os.Exit; this wrapper owns the process exit, mirroring loadPullOnInit
+// and loadVerificationKey.
+func loadDuration(key, defaultVal string) time.Duration {
+	d, err := parseDurationEnv(key, defaultVal)
+	if err != nil {
+		slog.Error("invalid "+key, "error", err)
+		os.Exit(1)
+	}
+	return d
+}
+
+// loadPositiveDuration is loadDuration plus the SPEC R5 non-positive guard: a
+// non-positive duration parses cleanly but breaks the runtime at serve time
+// (time.NewTicker panics on a non-positive interval; a non-positive
+// TRANSACTION_TIMEOUT makes every BeginTransaction fail with INVALID_ARGUMENT),
+// so it must fail startup just like an unparseable value.
+func loadPositiveDuration(key, defaultVal string) time.Duration {
+	d := loadDuration(key, defaultVal)
+	if d <= 0 {
+		slog.Error("invalid "+key, "value", d.String(), "error", "must be a positive duration")
+		os.Exit(1)
+	}
+	return d
 }
 
 func loadVerificationKey(envVar string) ed25519.PublicKey {
