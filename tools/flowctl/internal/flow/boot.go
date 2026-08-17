@@ -165,18 +165,19 @@ func applyOperatorRBAC(ctx context.Context, client dynamic.Interface, stderr io.
 	return nil
 }
 
-// mutateAndApplyDeployment deserializes the embedded deployment.yaml, mutates the
-// container named "manager" to use the given image tag, and creates or updates
-// the Deployment.
-func mutateAndApplyDeployment(ctx context.Context, client dynamic.Interface, version string) error {
+// readAndMutateDeployment deserializes the embedded deployment.yaml, ensures the
+// foundry-system namespace, and mutates the container named "manager" to use the
+// given image tag. It is pure in-memory — the caller decides whether to apply it
+// to the cluster or print it (dry-run), and how to surface errors.
+func readAndMutateDeployment(version string) (*unstructured.Unstructured, error) {
 	data, err := manifestfs.Manifests.ReadFile("operator/deployment.yaml")
 	if err != nil {
-		return fmt.Errorf("failed to read embedded deployment: %w", err)
+		return nil, fmt.Errorf("failed to read embedded deployment: %w", err)
 	}
 
 	var m map[string]interface{}
 	if err := yaml.Unmarshal(data, &m); err != nil {
-		return fmt.Errorf("failed to parse deployment: %w", err)
+		return nil, fmt.Errorf("failed to parse deployment: %w", err)
 	}
 	deploy := &unstructured.Unstructured{Object: m}
 
@@ -186,7 +187,7 @@ func mutateAndApplyDeployment(ctx context.Context, client dynamic.Interface, ver
 	// Find container "manager" and mutate its image tag.
 	containers, found, err := unstructured.NestedSlice(deploy.Object, "spec", "template", "spec", "containers")
 	if err != nil || !found {
-		return fmt.Errorf("deployment has no spec.template.spec.containers")
+		return nil, fmt.Errorf("deployment has no spec.template.spec.containers")
 	}
 
 	mutated := false
@@ -201,7 +202,7 @@ func mutateAndApplyDeployment(ctx context.Context, client dynamic.Interface, ver
 		}
 		image, _ := cm["image"].(string)
 		if image == "" {
-			return fmt.Errorf("container %q has no image field", name)
+			return nil, fmt.Errorf("container %q has no image field", name)
 		}
 		cm["image"] = setImageTag(image, version)
 		containers[i] = cm
@@ -209,10 +210,20 @@ func mutateAndApplyDeployment(ctx context.Context, client dynamic.Interface, ver
 		break
 	}
 	if !mutated {
-		return fmt.Errorf("no container with name %q found in deployment", "manager")
+		return nil, fmt.Errorf("no container with name %q found in deployment", "manager")
 	}
 	if err := unstructured.SetNestedSlice(deploy.Object, containers, "spec", "template", "spec", "containers"); err != nil {
-		return fmt.Errorf("failed to set containers: %w", err)
+		return nil, fmt.Errorf("failed to set containers: %w", err)
+	}
+	return deploy, nil
+}
+
+// mutateAndApplyDeployment reads the embedded deployment, mutates the image tag,
+// and creates or updates the Deployment.
+func mutateAndApplyDeployment(ctx context.Context, client dynamic.Interface, version string) error {
+	deploy, err := readAndMutateDeployment(version)
+	if err != nil {
+		return err
 	}
 
 	// Create-or-update: try Get first, if found do Update, else Create.
@@ -507,31 +518,10 @@ func dryRunBootstrap(stdout io.Writer, version string) error {
 	}
 
 	// Deployment (with image tag mutation).
-	deployData, err := manifestfs.Manifests.ReadFile("operator/deployment.yaml")
+	deploy, err := readAndMutateDeployment(version)
 	if err != nil {
-		return fmt.Errorf("failed to read embedded deployment: %w", err)
+		return fmt.Errorf("failed to prepare deployment: %w", err)
 	}
-	var m map[string]interface{}
-	if err := yaml.Unmarshal(deployData, &m); err != nil {
-		return fmt.Errorf("failed to parse deployment: %w", err)
-	}
-	deploy := &unstructured.Unstructured{Object: m}
-	deploy.SetNamespace(operatorNamespace)
-	containers, _, _ := unstructured.NestedSlice(deploy.Object, "spec", "template", "spec", "containers")
-	for i, c := range containers {
-		cm, ok := c.(map[string]interface{})
-		if !ok {
-			continue
-		}
-		name, _ := cm["name"].(string)
-		if name == "manager" {
-			image, _ := cm["image"].(string)
-			cm["image"] = setImageTag(image, version)
-			containers[i] = cm
-			break
-		}
-	}
-	unstructured.SetNestedSlice(deploy.Object, containers, "spec", "template", "spec", "containers")
 	if !first {
 		fmt.Fprint(stdout, "---\n")
 	}
