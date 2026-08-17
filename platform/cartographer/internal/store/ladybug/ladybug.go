@@ -257,6 +257,28 @@ func newLadybugDB(path string, database *lbug.Database, conn *lbug.Connection) (
 	return ldb, nil
 }
 
+// OpenInMemory opens an in-memory LadybugDB store with no filesystem backing.
+// Its store.Store semantics are identical to Open (same schema, CRUD, branches,
+// rehydration), differing only in durability: nothing is persisted to disk, so
+// a reopened instance starts empty. It exists so cross-package callers (the
+// service test suite) can exercise full store semantics without the per-open
+// file-backed DDL and disk I/O cost; unit tests that do not assert persistence
+// need the isolation, not the durability.
+func OpenInMemory() (store.Store, error) {
+	database, err := lbug.OpenInMemoryDatabase(lbug.DefaultSystemConfig())
+	if err != nil {
+		return nil, fmt.Errorf("open in-memory database: %w", err)
+	}
+
+	conn, err := lbug.OpenConnection(database)
+	if err != nil {
+		database.Close()
+		return nil, fmt.Errorf("open connection: %w", err)
+	}
+
+	return newLadybugDB("", database, conn)
+}
+
 // Close releases the database connection and database handle.
 func (db *ladybugDB) Close() error {
 	db.mu.Lock()
