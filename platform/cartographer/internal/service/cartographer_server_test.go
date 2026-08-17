@@ -7136,6 +7136,107 @@ func TestCommitTransaction_CreateThenDeleteSameID_LeavesNoTrace(t *testing.T) {
 	}
 }
 
+// TestGetTransactionDiff_NetZeroElementNotBothAddedAndDeleted pins the SPEC R9
+// "Diff() reads the change log" wire consistency with the commit path's
+// final-state semantics (resolveSameIDSequences, conversions.go). The change
+// log is operation-based and keeps an ID that a transaction both creates and
+// deletes in both the added and deleted buckets; without the same same-ID
+// final-state reduction, GetTransactionDiff would report a net-zero element in
+// both added_entities and deleted_entities. It must appear in at most one
+// bucket: create-then-delete (absent final state) in deleted only,
+// delete-then-recreate (present final state) in added only.
+func TestGetTransactionDiff_NetZeroElementNotBothAddedAndDeleted(t *testing.T) {
+	base, err := openTestStore(t)
+	if err != nil {
+		t.Fatalf("openTestStore: %v", err)
+	}
+	t.Cleanup(func() { _ = base.Close() })
+	ladybugPath := t.TempDir()
+	gs, err := gitstore.New(ladybugPath)
+	if err != nil {
+		t.Fatalf("gitstore.New: %v", err)
+	}
+	opPub, _ := generateTestKey()
+	srv := NewCartographerServer(
+		base, gs, opPub, initTestKey(), nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000,
+		WithLadybugPath(ladybugPath),
+	)
+	srv.MarkDBReady()
+	ctx := testCtx()
+	applyTestSchema(ctx, t, base)
+	// Main holds an entity so the delete-then-recreate branch resolves present.
+	commitGitEntity(ctx, t, gs, testMutationEntityID, "original")
+
+	begin, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
+	if err != nil {
+		t.Fatalf("BeginTransaction: %v", err)
+	}
+	txID := begin.TransactionId
+
+	// Create-then-delete a fresh entity: net absent.
+	createdID := "11111111-2222-4333-8444-555555555555"
+	if _, err = srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
+		EntityType: "Component", Id: createdID, Properties: map[string]string{"name": "created"},
+		TransactionId: txID,
+	}); err != nil {
+		t.Fatalf("CreateEntity: %v", err)
+	}
+	if _, err = srv.DeleteEntity(ctx, &flowv1.DeleteEntityRequest{
+		Id: createdID, TransactionId: txID,
+	}); err != nil {
+		t.Fatalf("DeleteEntity: %v", err)
+	}
+
+	// Delete-then-recreate an existing entity: net present.
+	if _, err = srv.DeleteEntity(ctx, &flowv1.DeleteEntityRequest{
+		Id: testMutationEntityID, TransactionId: txID,
+	}); err != nil {
+		t.Fatalf("DeleteEntity: %v", err)
+	}
+	if _, err = srv.CreateEntity(ctx, &flowv1.CreateEntityRequest{
+		EntityType: "Component", Id: testMutationEntityID, Properties: map[string]string{"name": "recreated"},
+		TransactionId: txID,
+	}); err != nil {
+		t.Fatalf("recreate entity: %v", err)
+	}
+
+	diff, err := srv.GetTransactionDiff(ctx, &flowv1.GetTransactionDiffRequest{TransactionId: txID})
+	if err != nil {
+		t.Fatalf("GetTransactionDiff: %v", err)
+	}
+	added := make(map[string]bool, len(diff.AddedEntities))
+	for _, e := range diff.AddedEntities {
+		added[e.Id] = true
+	}
+	for _, e := range diff.DeletedEntities {
+		if added[e.Id] {
+			t.Fatalf("net-zero entity %q reported as both added and deleted", e.Id)
+		}
+	}
+	// Create-then-delete resolves to absent: reported deleted only.
+	var createdDeleted bool
+	for _, e := range diff.DeletedEntities {
+		if e.Id == createdID {
+			createdDeleted = true
+		}
+	}
+	if !createdDeleted {
+		t.Fatalf("expected create-then-delete entity %q in deleted_entities, added=%v", createdID, added)
+	}
+	if added[createdID] {
+		t.Fatalf("create-then-delete entity %q must not be in added_entities", createdID)
+	}
+	// Delete-then-recreate resolves to present: reported added only.
+	if !added[testMutationEntityID] {
+		t.Fatalf("expected delete-then-recreate entity %q in added_entities, added=%v", testMutationEntityID, added)
+	}
+	for _, e := range diff.DeletedEntities {
+		if e.Id == testMutationEntityID {
+			t.Fatalf("delete-then-recreate entity %q must not be in deleted_entities", testMutationEntityID)
+		}
+	}
+}
+
 func TestRecoveryDiffPropagatesSuspectedDeletions(t *testing.T) {
 	srv, _ := newTestServer(t)
 	ctx := testCtx()
