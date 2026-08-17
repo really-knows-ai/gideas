@@ -22,7 +22,7 @@ func newTestQueueManager(t *testing.T) *Manager {
 	if err != nil {
 		t.Fatalf("newQueueStore failed: %v", err)
 	}
-	mesh := newQueueMesh(store, "api-test-shard", &staticResolver{}, "50053", nil)
+	mesh := newQueueMesh(store, "api-test-shard", &staticResolver{}, "50053")
 	qm := &Manager{
 		store:   store,
 		mesh:    mesh,

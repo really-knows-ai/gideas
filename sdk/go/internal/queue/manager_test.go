@@ -23,7 +23,7 @@ func newTestManager(t *testing.T) *Manager {
 	if err != nil {
 		t.Fatalf("newQueueStore failed: %v", err)
 	}
-	mesh := newQueueMesh(store, "mgr-shard-0", &staticResolver{}, "50053", nil)
+	mesh := newQueueMesh(store, "mgr-shard-0", &staticResolver{}, "50053")
 	qm := &Manager{
 		store:   store,
 		mesh:    mesh,
@@ -59,9 +59,9 @@ func TestQueueManager_EnqueueAndList(t *testing.T) {
 		t.Fatalf("Enqueue failed: %v", err)
 	}
 
-	items, err := qm.GetLocalQueue(ctx, QueueFilter{})
+	items, _, err := qm.store.getLocal(ctx, QueueFilter{})
 	if err != nil {
-		t.Fatalf("GetLocalQueue failed: %v", err)
+		t.Fatalf("store.getLocal failed: %v", err)
 	}
 	if len(items) != 1 {
 		t.Fatalf("expected 1 item, got %d", len(items))
@@ -125,7 +125,7 @@ func TestQueueManager_GlobalQueue_MultiShard(t *testing.T) {
 	shard1 := newMeshTestShard(t, "mgr-1")
 	_ = shard1.store.enqueue(ctx, "wi-peer")
 
-	mesh0 := newQueueMesh(store0, "mgr-0", &staticResolver{}, "50053", nil)
+	mesh0 := newQueueMesh(store0, "mgr-0", &staticResolver{}, "50053")
 	mesh0.peers["mgr-1"] = connectToShard(t, shard1)
 
 	qm0 := &Manager{
@@ -142,99 +142,6 @@ func TestQueueManager_GlobalQueue_MultiShard(t *testing.T) {
 	// Should have items from local (wi-0) + peer shard.
 	if len(items) < 2 {
 		t.Fatalf("expected at least 2 items from global queue, got %d", len(items))
-	}
-}
-
-func TestQueueManager_Telemetry_Enqueue(t *testing.T) {
-	store, err := newQueueStore(":memory:", "tel-shard", "")
-	if err != nil {
-		t.Fatalf("store failed: %v", err)
-	}
-	t.Cleanup(func() { _ = store.close() })
-
-	tc := &telemetryCapture{}
-	mesh := newQueueMesh(store, "tel-shard", &staticResolver{}, "50053", tc.capture)
-	qm := &Manager{
-		store:   store,
-		mesh:    mesh,
-		shardID: "tel-shard",
-	}
-	// We don't set a Client, so RecordTelemetry is a no-op,
-	// but the mesh telemetry callback is wired directly.
-
-	// The manager emitTelemetry won't fire without a client, but we can
-	// test the mesh telemetry by manually calling.
-	tc.capture(context.Background(), "foundry.hitl.enqueued", map[string]any{
-		"workitemId": "wi-tel",
-		"nodeId":     "tel-shard",
-		"queueDepth": 1,
-	})
-
-	events := tc.getEvents()
-	if len(events) == 0 {
-		t.Fatal("expected at least one telemetry event")
-	}
-	if events[0].event != "foundry.hitl.enqueued" {
-		t.Fatalf("expected foundry.hitl.enqueued, got %s", events[0].event)
-	}
-	if events[0].payload["workitemId"] != "wi-tel" {
-		t.Fatalf("expected workitemId=wi-tel, got %v", events[0].payload["workitemId"])
-	}
-	_ = qm
-}
-
-func TestQueueManager_Telemetry_Claimed(t *testing.T) {
-	tc := &telemetryCapture{}
-	tc.capture(context.Background(), "foundry.hitl.claimed", map[string]any{
-		"workitemId": "wi-claim",
-		"waitTime":   "1s",
-	})
-
-	events := tc.getEvents()
-	if len(events) != 1 || events[0].event != "foundry.hitl.claimed" {
-		t.Fatal("expected foundry.hitl.claimed event")
-	}
-}
-
-func TestQueueManager_Telemetry_Decided(t *testing.T) {
-	tc := &telemetryCapture{}
-	tc.capture(context.Background(), "foundry.hitl.decided", map[string]any{
-		"workitemId":   "wi-decide",
-		"decisionTime": "5s",
-	})
-
-	events := tc.getEvents()
-	if len(events) != 1 || events[0].event != "foundry.hitl.decided" {
-		t.Fatal("expected foundry.hitl.decided event")
-	}
-}
-
-func TestQueueManager_GetPeers(t *testing.T) {
-	store, err := newQueueStore(":memory:", "peer-shard", "")
-	if err != nil {
-		t.Fatalf("store failed: %v", err)
-	}
-	t.Cleanup(func() { _ = store.close() })
-
-	mesh := newQueueMesh(store, "peer-shard", &staticResolver{}, "50053", nil)
-	// Manually add mock peer addresses.
-	mesh.mu.Lock()
-	mesh.peers["10.0.0.1:50053"] = nil
-	mesh.peers["10.0.0.2:50053"] = nil
-	mesh.mu.Unlock()
-
-	qm := &Manager{
-		store:   store,
-		mesh:    mesh,
-		shardID: "peer-shard",
-	}
-
-	peers, err := qm.GetPeers(context.Background())
-	if err != nil {
-		t.Fatalf("GetPeers failed: %v", err)
-	}
-	if len(peers) != 2 {
-		t.Fatalf("expected 2 peers, got %d", len(peers))
 	}
 }
 
@@ -343,6 +250,46 @@ func TestQueueManager_WaitForDecision_ContextCancelled(t *testing.T) {
 	}
 }
 
+func TestQueueManager_WaitForDecision_LateDecisionReachesSubsequentWaiter(t *testing.T) {
+	qm := newTestManager(t)
+	ctx := context.Background()
+
+	if err := qm.Enqueue(ctx, "wi-late"); err != nil {
+		t.Fatalf("Enqueue failed: %v", err)
+	}
+	if _, err := qm.Claim(ctx, "wi-late"); err != nil {
+		t.Fatalf("Claim failed: %v", err)
+	}
+
+	// A first waiter abandons the wait via context cancellation while the
+	// item is still pending in the store.
+	cancelCtx, cancel := context.WithCancel(ctx)
+	done := make(chan error, 1)
+	go func() {
+		_, err := qm.WaitForDecision(cancelCtx, "wi-late")
+		done <- err
+	}()
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	if err := <-done; err != context.Canceled {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+
+	// A late Decide after ctx.Done must still be captured and delivered to a
+	// subsequent waiter, not dropped because the first waiter gave up.
+	if err := qm.Decide(ctx, "wi-late", "late"); err != nil {
+		t.Fatalf("Decide failed: %v", err)
+	}
+
+	choice, err := qm.WaitForDecision(ctx, "wi-late")
+	if err != nil {
+		t.Fatalf("subsequent WaitForDecision failed: %v", err)
+	}
+	if choice != "late" {
+		t.Fatalf("expected late decision delivered to subsequent waiter, got %q", choice)
+	}
+}
+
 func TestQueueManager_WaitForDecision_UnknownWorkitem(t *testing.T) {
 	qm := newTestManager(t)
 	ctx := context.Background()
@@ -386,7 +333,7 @@ func TestQueueManager_WaitForDecision_CrossShard(t *testing.T) {
 	t.Cleanup(func() { srvA.GracefulStop() })
 
 	// Wire qmA's mesh (no peers from A's perspective — it's the local shard).
-	meshA := newQueueMesh(storeA, "shard-A", &staticResolver{}, "50053", nil)
+	meshA := newQueueMesh(storeA, "shard-A", &staticResolver{}, "50053")
 	qmA.mesh = meshA
 
 	// --- Pod B: the remote shard that receives the decide request. ---
@@ -397,7 +344,7 @@ func TestQueueManager_WaitForDecision_CrossShard(t *testing.T) {
 	t.Cleanup(func() { _ = storeB.close() })
 
 	// Pod B's mesh can reach Pod A via bufconn.
-	meshB := newQueueMesh(storeB, "shard-B", &staticResolver{}, "50053", nil)
+	meshB := newQueueMesh(storeB, "shard-B", &staticResolver{}, "50053")
 	connA, err := grpc.NewClient(
 		"passthrough:///shard-A",
 		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
@@ -543,9 +490,9 @@ func TestQueueManager_WithQueueName_Stored(t *testing.T) {
 		t.Fatalf("Enqueue failed: %v", err)
 	}
 
-	items, err := qm.GetLocalQueue(ctx, QueueFilter{})
+	items, _, err := qm.store.getLocal(ctx, QueueFilter{})
 	if err != nil {
-		t.Fatalf("GetLocalQueue failed: %v", err)
+		t.Fatalf("store.getLocal failed: %v", err)
 	}
 	if len(items) != 1 {
 		t.Fatalf("expected 1 item, got %d", len(items))
@@ -578,9 +525,9 @@ func TestQueueManager_QueueName_DefaultsToFLOW_NODE_ID(t *testing.T) {
 		t.Fatalf("Enqueue failed: %v", err)
 	}
 
-	items, err := qm.GetLocalQueue(ctx, QueueFilter{})
+	items, _, err := qm.store.getLocal(ctx, QueueFilter{})
 	if err != nil {
-		t.Fatalf("GetLocalQueue failed: %v", err)
+		t.Fatalf("store.getLocal failed: %v", err)
 	}
 	if len(items) != 1 {
 		t.Fatalf("expected 1 item, got %d", len(items))
@@ -630,9 +577,9 @@ func TestQueueManager_QueueName_EnqueueDecideWaitCycle(t *testing.T) {
 		t.Fatalf("WaitForDecision returned error: %v", err)
 	}
 
-	items, err := qm.GetLocalQueue(ctx, QueueFilter{})
+	items, _, err := qm.store.getLocal(ctx, QueueFilter{})
 	if err != nil {
-		t.Fatalf("GetLocalQueue failed: %v", err)
+		t.Fatalf("store.getLocal failed: %v", err)
 	}
 	for _, item := range items {
 		if item.QueueName != "test-queue" {

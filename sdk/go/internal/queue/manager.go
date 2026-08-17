@@ -2,7 +2,6 @@ package queue
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -21,12 +20,6 @@ const (
 	defaultPeerPort = "50053"
 )
 
-// TelemetryClient is the subset of the SDK Client the queue manager needs for
-// telemetry emission. The flow package's Client satisfies it.
-type TelemetryClient interface {
-	RecordTelemetry(eventType string, payload []byte) error
-}
-
 // Option configures NewManager.
 type Option func(*config)
 
@@ -36,7 +29,6 @@ type config struct {
 	queueName    string
 	serviceName  string
 	namespace    string
-	client       TelemetryClient
 	peerResolver PeerResolver
 	apiPort      string
 	peerPort     string
@@ -47,11 +39,6 @@ type config struct {
 // Defaults to FLOW_NODE_ID environment variable, then "default".
 func WithQueueName(name string) Option {
 	return func(c *config) { c.queueName = name }
-}
-
-// WithClient sets the SDK Client for telemetry emission.
-func WithClient(c TelemetryClient) Option {
-	return func(cfg *config) { cfg.client = c }
 }
 
 // WithCustomRoutes registers additional HTTP routes on the QueueManager's
@@ -66,7 +53,6 @@ func WithCustomRoutes(fn func(mux *http.ServeMux)) Option {
 type Manager struct {
 	store     *queueStore
 	mesh      *queueMesh
-	client    TelemetryClient
 	shardID   string
 	queueName string
 	apiPort   string
@@ -114,7 +100,6 @@ func NewManager(opts ...Option) (*Manager, error) {
 	}
 
 	return &Manager{
-		client:    cfg.client,
 		shardID:   cfg.shardID,
 		queueName: cfg.queueName,
 		apiPort:   cfg.apiPort,
@@ -190,7 +175,7 @@ func (qm *Manager) Start(ctx context.Context, opts ...Option) error {
 		}
 	}
 
-	qm.mesh = newQueueMesh(store, qm.shardID, resolver, cfg.peerPort, qm.emitTelemetry)
+	qm.mesh = newQueueMesh(store, qm.shardID, resolver, cfg.peerPort)
 	qm.peer = &queuePeerServer{
 		store: store,
 		onDecide: func(workitemID, choice string) {
@@ -273,12 +258,6 @@ func (qm *Manager) Enqueue(ctx context.Context, workitemID string) error {
 	}
 	// Create a decision channel so WaitForDecision can block.
 	qm.decisions.Store(workitemID, make(chan string, 1))
-	depth, _ := qm.store.countByStatus(ctx, nil)
-	qm.emitTelemetry(ctx, "foundry.hitl.enqueued", map[string]any{
-		"workitemId": workitemID,
-		"nodeId":     qm.shardID,
-		"queueDepth": depth,
-	})
 	return nil
 }
 
@@ -286,52 +265,19 @@ func (qm *Manager) GetGlobalQueue(ctx context.Context, filter QueueFilter) ([]Qu
 	return qm.mesh.getGlobalQueue(ctx, filter)
 }
 
-func (qm *Manager) GetLocalQueue(ctx context.Context, filter QueueFilter) ([]QueueItem, error) {
-	items, _, err := qm.store.getLocal(ctx, filter)
-	return items, err
-}
-
 func (qm *Manager) GetItem(ctx context.Context, workitemID string) (*QueueItem, error) {
 	return qm.mesh.routeGetItem(ctx, workitemID)
 }
 
 func (qm *Manager) Claim(ctx context.Context, workitemID string) (*QueueItem, error) {
-	item, err := qm.mesh.routeClaim(ctx, workitemID)
-	if err != nil {
-		return nil, err
-	}
-	waitTime := time.Duration(0)
-	if item.ClaimedAt != nil {
-		waitTime = item.ClaimedAt.Sub(item.EnqueuedAt)
-	}
-	qm.emitTelemetry(ctx, "foundry.hitl.claimed", map[string]any{
-		"workitemId": workitemID,
-		"waitTime":   waitTime.String(),
-	})
-	return item, nil
+	return qm.mesh.routeClaim(ctx, workitemID)
 }
 
 func (qm *Manager) Release(ctx context.Context, workitemID string) (*QueueItem, error) {
-	// Capture claimed_at before release for telemetry.
-	existing, _ := qm.mesh.routeGetItem(ctx, workitemID)
-	item, err := qm.mesh.routeRelease(ctx, workitemID)
-	if err != nil {
-		return nil, err
-	}
-	claimDuration := time.Duration(0)
-	if existing != nil && existing.ClaimedAt != nil {
-		claimDuration = time.Since(*existing.ClaimedAt)
-	}
-	qm.emitTelemetry(ctx, "foundry.hitl.released", map[string]any{
-		"workitemId":    workitemID,
-		"claimDuration": claimDuration.String(),
-	})
-	return item, nil
+	return qm.mesh.routeRelease(ctx, workitemID)
 }
 
 func (qm *Manager) Decide(ctx context.Context, workitemID, choice string) error {
-	// Capture enqueued_at before decide for telemetry.
-	existing, _ := qm.mesh.routeGetItem(ctx, workitemID)
 	if err := qm.mesh.routeDecide(ctx, workitemID, choice); err != nil {
 		return err
 	}
@@ -347,19 +293,7 @@ func (qm *Manager) Decide(ctx context.Context, workitemID, choice string) error 
 		default:
 		}
 	}
-	decisionTime := time.Duration(0)
-	if existing != nil {
-		decisionTime = time.Since(existing.EnqueuedAt)
-	}
-	qm.emitTelemetry(ctx, "foundry.hitl.decided", map[string]any{
-		"workitemId":   workitemID,
-		"decisionTime": decisionTime.String(),
-	})
 	return nil
-}
-
-func (qm *Manager) GetPeers(_ context.Context) ([]string, error) {
-	return qm.mesh.getPeers(), nil
 }
 
 func (qm *Manager) WaitForDecision(ctx context.Context, workitemID string) (string, error) {
@@ -373,25 +307,12 @@ func (qm *Manager) WaitForDecision(ctx context.Context, workitemID string) (stri
 		qm.decisions.Delete(workitemID)
 		return choice, nil
 	case <-ctx.Done():
-		// Clean up the orphaned channel so it doesn't leak in the map.
-		qm.decisions.Delete(workitemID)
+		// Keep the channel registered even when this waiter gives up. The
+		// item may still be pending in the store, so a late Decide (local
+		// REST /decide or a remote peer's DecideItem) must still be captured
+		// here and delivered to a subsequent waiter instead of being
+		// persisted and lost. Entries are removed on delivery or by Stop.
 		return "", ctx.Err()
-	}
-}
-
-// emitTelemetry sends a telemetry event via the client. Non-blocking — failures
-// are logged but not propagated.
-func (qm *Manager) emitTelemetry(ctx context.Context, event string, payload map[string]any) {
-	if qm.client == nil {
-		return
-	}
-	data, err := json.Marshal(payload)
-	if err != nil {
-		slog.Warn("flow hitl: telemetry marshal failed", "event", event, "error", err)
-		return
-	}
-	if err := qm.client.RecordTelemetry(event, data); err != nil {
-		slog.Warn("flow hitl: telemetry emission failed (non-blocking)", "event", event, "error", err)
 	}
 }
 

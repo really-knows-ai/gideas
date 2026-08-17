@@ -27,15 +27,14 @@ const peerTimeout = 5 * time.Second
 // queueMesh manages peer discovery, gRPC connections, scatter-gather reads,
 // and proxy writes for the Federated Queue Mesh.
 type queueMesh struct {
-	store     *queueStore
-	shardID   string
-	resolver  PeerResolver
-	peerPort  string
-	mu        sync.RWMutex
-	peers     map[string]flowv1.QueuePeerServiceClient
-	conns     map[string]*grpc.ClientConn
-	telemetry func(ctx context.Context, event string, payload map[string]any)
-	cancel    context.CancelFunc
+	store    *queueStore
+	shardID  string
+	resolver PeerResolver
+	peerPort string
+	mu       sync.RWMutex
+	peers    map[string]flowv1.QueuePeerServiceClient
+	conns    map[string]*grpc.ClientConn
+	cancel   context.CancelFunc
 }
 
 // newQueueMesh creates a new mesh instance. Call start() to begin discovery.
@@ -44,16 +43,14 @@ func newQueueMesh(
 	shardID string,
 	resolver PeerResolver,
 	peerPort string,
-	telemetry func(ctx context.Context, event string, payload map[string]any),
 ) *queueMesh {
 	return &queueMesh{
-		store:     store,
-		shardID:   shardID,
-		resolver:  resolver,
-		peerPort:  peerPort,
-		peers:     make(map[string]flowv1.QueuePeerServiceClient),
-		conns:     make(map[string]*grpc.ClientConn),
-		telemetry: telemetry,
+		store:    store,
+		shardID:  shardID,
+		resolver: resolver,
+		peerPort: peerPort,
+		peers:    make(map[string]flowv1.QueuePeerServiceClient),
+		conns:    make(map[string]*grpc.ClientConn),
 	}
 }
 
@@ -132,12 +129,6 @@ func (m *queueMesh) discover(ctx context.Context) {
 		m.conns[addr] = conn
 		m.peers[addr] = flowv1.NewQueuePeerServiceClient(conn)
 		slog.Info("flow hitl: peer joined", "addr", addr)
-		if m.telemetry != nil {
-			m.telemetry(ctx, "foundry.hitl.peer_joined", map[string]any{
-				"peerId":    addr,
-				"peerCount": len(m.peers),
-			})
-		}
 	}
 
 	// Remove stale peers.
@@ -149,25 +140,7 @@ func (m *queueMesh) discover(ctx context.Context) {
 		delete(m.conns, addr)
 		delete(m.peers, addr)
 		slog.Info("flow hitl: peer left", "addr", addr)
-		if m.telemetry != nil {
-			m.telemetry(ctx, "foundry.hitl.peer_left", map[string]any{
-				"peerId":    addr,
-				"peerCount": len(m.peers),
-				"reason":    "dns_removed",
-			})
-		}
 	}
-}
-
-// getPeers returns the addresses of currently connected peers.
-func (m *queueMesh) getPeers() []string {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	addrs := make([]string, 0, len(m.peers))
-	for addr := range m.peers {
-		addrs = append(addrs, addr)
-	}
-	return addrs
 }
 
 // getGlobalQueue scatter-gathers queue items from all peers + local store.

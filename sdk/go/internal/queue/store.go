@@ -223,22 +223,6 @@ func (s *queueStore) decide(ctx context.Context, workitemID string) error {
 	return nil
 }
 
-// countByStatus returns the count of items on this shard, optionally filtered.
-func (s *queueStore) countByStatus(ctx context.Context, status *QueueStatus) (int, error) {
-	query := "SELECT COUNT(*) FROM queue_items WHERE shard_id = ?"
-	args := []any{s.shardID}
-	if status != nil {
-		query += " AND status = ?"
-		args = append(args, string(*status))
-	}
-
-	var count int
-	if err := s.db.QueryRowContext(ctx, query, args...).Scan(&count); err != nil {
-		return 0, fmt.Errorf("count by status: %w", err)
-	}
-	return count, nil
-}
-
 // diagnoseClaimFailure determines the correct error for a failed claim.
 func (s *queueStore) diagnoseClaimFailure(ctx context.Context, workitemID string) error {
 	var status string
