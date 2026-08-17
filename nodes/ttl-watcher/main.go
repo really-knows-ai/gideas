@@ -168,7 +168,7 @@ func scanAndCreate(
 			"law_id", lawID, "tier", law.GetTier())
 
 		if _, err := entry.CreateWorkitem(map[string]string{
-			"law_id": lawID,
+			nodeutil.LawIDKey: lawID,
 		}); err != nil {
 			tracker.ClearPending(lawID)
 			slog.Warn("ttl-watcher: create workitem failed",

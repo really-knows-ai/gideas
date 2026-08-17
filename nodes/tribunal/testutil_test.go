@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
+	"github.com/foundry/flow/nodes/internal/nodeutil"
 	"github.com/foundry/flow/nodes/internal/tally"
 	flow "github.com/foundry/flow/sdk/go"
 	"google.golang.org/grpc"
@@ -65,7 +66,7 @@ type routedChild struct {
 func newTribunalSpy(tier flowv1.LawTier) *tribunalSpy {
 	return &tribunalSpy{
 		Artefacts: map[string][]byte{
-			artefactLawReference: []byte("law-under-review-001"),
+			nodeutil.LawReferenceArtefact: []byte("law-under-review-001"),
 		},
 		ChildArtefacts:       make(map[string][]byte),
 		ChildStoredArtefacts: make(map[string][]byte),

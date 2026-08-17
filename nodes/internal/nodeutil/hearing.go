@@ -9,6 +9,18 @@ import (
 	flow "github.com/foundry/flow/sdk/go"
 )
 
+// Judiciary wire-contract strings shared by the watcher trio (friction-watcher,
+// petition-watcher, ttl-watcher) and the tribunal. Defined once here and
+// imported so sibling modules cannot silently diverge.
+const (
+	// LawIDKey is the workitem-metadata key that carries the target law's ID.
+	LawIDKey = "law_id"
+
+	// LawReferenceArtefact is the artefacts ID where the hearing target law's
+	// ID is stored for the tribunal to read.
+	LawReferenceArtefact = "law-reference"
+)
+
 // HandleHearing is the shared hearing-workitem handler used by the judiciary
 // watcher nodes (friction-watcher, ttl-watcher). It sets up an SDK client and
 // delegates to ProcessHearing. name is the log/error prefix, e.g.
@@ -27,7 +39,7 @@ func HandleHearing(ctx context.Context, wctx *flowv1.WorkitemContext, name strin
 // metadata, heartbeat, store a law-reference artefact, and route to the
 // default output. name is the log/error prefix, e.g. "friction-watcher".
 func ProcessHearing(workitem *flow.Workitem, wctx *flowv1.WorkitemContext, name string) error {
-	lawID := wctx.GetMetadata()["law_id"]
+	lawID := wctx.GetMetadata()[LawIDKey]
 	if lawID == "" {
 		return fmt.Errorf("%s: handler: missing law_id in metadata", name)
 	}
@@ -43,7 +55,7 @@ func ProcessHearing(workitem *flow.Workitem, wctx *flowv1.WorkitemContext, name 
 	}
 
 	// Store law-reference artefact.
-	lawRef, err := workitem.GetArtefact("law-reference")
+	lawRef, err := workitem.GetArtefact(LawReferenceArtefact)
 	if err != nil {
 		return fmt.Errorf("%s: handler: get law-reference: %w", name, err)
 	}

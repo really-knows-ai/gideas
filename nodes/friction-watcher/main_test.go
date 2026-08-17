@@ -63,18 +63,19 @@ func TestExtractLawID_MultipleLabels(t *testing.T) {
 
 func TestNextBackoff(t *testing.T) {
 	// Should double.
-	if got := nodeutil.NextBackoff(1*time.Second, reconnectMaxDelay); got != 2*time.Second {
+	if got := nodeutil.NextBackoff(1*time.Second, nodeutil.ReconnectMaxDelay); got != 2*time.Second {
 		t.Fatalf("expected 2s, got %v", got)
 	}
 
 	// Should cap at max.
-	if got := nodeutil.NextBackoff(20*time.Second, reconnectMaxDelay); got != reconnectMaxDelay {
-		t.Fatalf("expected %v, got %v", reconnectMaxDelay, got)
+	if got := nodeutil.NextBackoff(20*time.Second, nodeutil.ReconnectMaxDelay); got != nodeutil.ReconnectMaxDelay {
+		t.Fatalf("expected %v, got %v", nodeutil.ReconnectMaxDelay, got)
 	}
 
 	// At max should stay at max.
-	if got := nodeutil.NextBackoff(reconnectMaxDelay, reconnectMaxDelay); got != reconnectMaxDelay {
-		t.Fatalf("expected %v, got %v", reconnectMaxDelay, got)
+	got := nodeutil.NextBackoff(nodeutil.ReconnectMaxDelay, nodeutil.ReconnectMaxDelay)
+	if got != nodeutil.ReconnectMaxDelay {
+		t.Fatalf("expected %v, got %v", nodeutil.ReconnectMaxDelay, got)
 	}
 }
 
