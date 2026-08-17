@@ -15,7 +15,18 @@ func (s *CartographerServer) HealthCheck(
 ) (*flowv1.HealthCheckResponse, error) {
 	health, err := s.store.Health(ctx)
 	if err != nil {
-		return nil, err
+		// No SPEC error-table row names a HealthCheck failure code (the only
+		// "before database ready" row is ApplySchema-specific, SPEC error table),
+		// so the store probe failure must not be surfaced under a fabricated
+		// named code. In particular, routing through mapStoreError would map the
+		// ErrDatabaseNotReady sentinel to FAILED_PRECONDITION — a code the table
+		// assigns only to ApplySchema, not HealthCheck. Surface the condition
+		// generically as INTERNAL (the code the table uses for unexpected
+		// service-side failures) instead of letting a raw non-status error cross
+		// the RPC boundary as gRPC Unknown. The not-ready state is reported via
+		// the response body by the store's own Health (LadybugOk=false), so a
+		// probe error here is an unexpected failure and still fails closed.
+		return nil, status.Error(codes.Internal, err.Error())
 	}
 	return &flowv1.HealthCheckResponse{
 		LadybugOk: health.LadybugOK, SchemaApplied: health.SchemaApplied, PvcWritable: health.PVCWritable,

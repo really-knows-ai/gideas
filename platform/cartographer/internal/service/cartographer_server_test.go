@@ -11792,6 +11792,14 @@ func TestHealthCheck_PropagatesStoreError(t *testing.T) {
 	if !strings.Contains(err.Error(), "pvc unreadable") {
 		t.Fatalf("expected store error message, got %v", err)
 	}
+	// The SPEC error table names no HealthCheck failure code, so the probe
+	// failure must surface as the generic INTERNAL code — never a raw
+	// non-status error crossing as gRPC Unknown, and never the
+	// ApplySchema-only FAILED_PRECONDITION that mapStoreError would assign to
+	// ErrDatabaseNotReady.
+	if got := status.Code(err); got != codes.Internal {
+		t.Fatalf("expected HealthCheck probe failure to surface as Internal, got %v", got)
+	}
 }
 
 // =========================================================================
