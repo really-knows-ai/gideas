@@ -24,7 +24,6 @@ import (
 	"io"
 	"log/slog"
 	"os"
-	"time"
 
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
 	"github.com/foundry/flow/nodes/internal"
@@ -42,13 +41,6 @@ const (
 	// envFlowIdentity is the environment variable that provides the
 	// subscribing Flow's identity to the Federation service.
 	envFlowIdentity = "FLOW_IDENTITY"
-
-	// reconnectBaseDelay is the initial backoff delay for reconnecting to
-	// the Federation after a stream error.
-	reconnectBaseDelay = 1 * time.Second
-
-	// reconnectMaxDelay caps the exponential backoff.
-	reconnectMaxDelay = 30 * time.Second
 )
 
 func main() {
@@ -90,36 +82,20 @@ func watchOutcomesWithClient(
 	entry *flow.EntryClient,
 ) error {
 	tracker := internal.NewPendingTracker()
-	delay := reconnectBaseDelay
+	var stream *flow.PetitionOutcomeWatcher
 
-	for {
-		if err := ctx.Err(); err != nil {
+	return nodeutil.ReconnectStream(ctx, "petition-watcher",
+		func() error {
+			var err error
+			stream, err = fedClient.SubscribePetitionOutcomes(flowIdentity)
 			return err
-		}
-
-		stream, err := fedClient.SubscribePetitionOutcomes(flowIdentity)
-		if err != nil {
-			slog.Warn("petition-watcher: subscribe failed, retrying",
-				"error", err, "delay", delay)
-			if !nodeutil.SleepCtx(ctx, delay) {
-				return ctx.Err()
-			}
-			delay = nodeutil.NextBackoff(delay, reconnectMaxDelay)
-			continue
-		}
-
-		// Reset backoff on successful subscribe.
-		delay = reconnectBaseDelay
-		slog.Info("petition-watcher: subscribed to Federation",
-			"flow_identity", flowIdentity)
-
-		// Consume events from the stream.
-		if err := consumeOutcomes(ctx, stream, tracker, entry); err != nil {
-			slog.Debug("petition-watcher: stream ended, reconnecting",
-				"error", err)
-			continue
-		}
-	}
+		},
+		func() error { return consumeOutcomes(ctx, stream, tracker, entry) },
+		func() {
+			slog.Info("petition-watcher: subscribed to Federation",
+				"flow_identity", flowIdentity)
+		},
+	)
 }
 
 // consumeOutcomes reads petition outcome events from the stream and

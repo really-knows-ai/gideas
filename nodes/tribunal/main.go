@@ -34,7 +34,6 @@ import (
 )
 
 const (
-	artefactLawReference   = "law-reference"
 	artefactVerdictContext = "verdict-context"
 )
 
@@ -78,7 +77,7 @@ func handler(ctx context.Context, wctx *flowv1.WorkitemContext) error {
 func handleTribunal(ctx context.Context, client *flow.Client, workitem *flow.Workitem, cfg *tribunalConfig) error {
 	_ = workitem.Heartbeat()
 
-	lawRef, err := workitem.GetArtefact(artefactLawReference)
+	lawRef, err := workitem.GetArtefact(nodeutil.LawReferenceArtefact)
 	if err != nil {
 		return fmt.Errorf("tribunal: get law-reference artefact: %w", err)
 	}

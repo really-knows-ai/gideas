@@ -21,7 +21,6 @@ import (
 	"io"
 	"log/slog"
 	"os"
-	"time"
 
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
 	"github.com/foundry/flow/nodes/internal"
@@ -39,13 +38,6 @@ const (
 
 	// eventType is the Event Bus event type filter.
 	eventType = "friction.threshold_crossed"
-
-	// reconnectBaseDelay is the initial backoff delay for reconnecting to the
-	// Event Bus after a stream error.
-	reconnectBaseDelay = 1 * time.Second
-
-	// reconnectMaxDelay caps the exponential backoff.
-	reconnectMaxDelay = 30 * time.Second
 )
 
 func main() {
@@ -64,36 +56,20 @@ func main() {
 // exponential backoff and creates hearing workitems for threshold events.
 func watchFriction(ctx context.Context, entry *flow.EntryClient) error {
 	tracker := internal.NewPendingTracker()
-	delay := reconnectBaseDelay
+	var events *flow.EventStream
 
-	for {
-		if err := ctx.Err(); err != nil {
+	return nodeutil.ReconnectStream(ctx, "friction-watcher",
+		func() error {
+			var err error
+			events, err = entry.Subscribe(channel, eventType)
 			return err
-		}
-
-		events, err := entry.Subscribe(channel, eventType)
-		if err != nil {
-			slog.Warn("friction-watcher: subscribe failed, retrying",
-				"error", err, "delay", delay)
-			if !nodeutil.SleepCtx(ctx, delay) {
-				return ctx.Err()
-			}
-			delay = nodeutil.NextBackoff(delay, reconnectMaxDelay)
-			continue
-		}
-
-		// Reset backoff on successful subscribe.
-		delay = reconnectBaseDelay
-		slog.Info("friction-watcher: subscribed to Event Bus",
-			"channel", channel, "event_type", eventType)
-
-		// Consume events from the stream.
-		if err := consumeEvents(ctx, entry, events, tracker); err != nil {
-			slog.Debug("friction-watcher: stream ended, reconnecting",
-				"error", err)
-			continue
-		}
-	}
+		},
+		func() error { return consumeEvents(ctx, entry, events, tracker) },
+		func() {
+			slog.Info("friction-watcher: subscribed to Event Bus",
+				"channel", channel, "event_type", eventType)
+		},
+	)
 }
 
 // consumeEvents reads events from the stream and creates workitems.
@@ -135,7 +111,7 @@ func consumeEvents(
 			"law_id", lawID, "event_id", evt.GetEventId())
 
 		if _, err := entry.CreateWorkitem(map[string]string{
-			"law_id": lawID,
+			nodeutil.LawIDKey: lawID,
 		}); err != nil {
 			tracker.ClearPending(lawID)
 			slog.Warn("friction-watcher: create workitem failed",

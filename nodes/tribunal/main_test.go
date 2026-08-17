@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
+	"github.com/foundry/flow/nodes/internal/nodeutil"
 	"github.com/foundry/flow/nodes/internal/tally"
 )
 
@@ -264,7 +265,7 @@ func TestTribunal_EvidenceAssemblyContainsLawFrictionAndRelatedLaws(t *testing.T
 
 func TestTribunal_Error_MissingLawReferenceArtefact(t *testing.T) {
 	spy := newTribunalSpy(flowv1.LawTier_LAW_TIER_FINDING)
-	delete(spy.Artefacts, artefactLawReference)
+	delete(spy.Artefacts, nodeutil.LawReferenceArtefact)
 
 	client, workitem := setupTribunalTest(t, spy)
 	err := handleTribunal(context.Background(), client, workitem, defaultTestConfig())
