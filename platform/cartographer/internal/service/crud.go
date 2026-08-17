@@ -198,8 +198,23 @@ func (s *CartographerServer) ListEntities(
 	ctx context.Context,
 	req *flowv1.ListEntitiesRequest,
 ) (*flowv1.ListEntitiesResponse, error) {
-	if err := s.checkEntityCap(ctx, "READ", req.EntityType); err != nil {
-		return nil, err
+	// SPEC R3 capability table defines only READ:graph/entity/<type> and
+	// READ:graph/entity/* — an empty entityType must never fabricate the
+	// undefined string "READ:graph/entity/". Mirror SearchNeighbors /
+	// FullTextSearch: gate the omitted-type case with the wildcard capability
+	// (so a denial names READ:graph/entity/*), then the structural check below
+	// (TableExists("") → unknown entity type → INVALID_ARGUMENT) enforces the
+	// SPEC ListEntities check-order "capability → structural". A caller with no
+	// READ capability surfaces PERMISSION_DENIED first; a wildcard holder
+	// reaches the structural unknown-type gate.
+	if req.EntityType == "" {
+		if err := s.checkWildcardEntityCap(ctx, "READ"); err != nil {
+			return nil, err
+		}
+	} else {
+		if err := s.checkEntityCap(ctx, "READ", req.EntityType); err != nil {
+			return nil, err
+		}
 	}
 	if !s.store.TableExists(req.EntityType) {
 		return nil, errUnknownEntityType(req.EntityType)
@@ -787,6 +802,18 @@ func (s *CartographerServer) WipeGraph(
 	}
 	s.lockMainStore()
 	if err := s.store.WipeSchema(ctx); err != nil {
+		// The git main is already wiped (wipe commit above), but main.lbug may
+		// still serve the pre-wipe graph. Converge the live store to the wiped
+		// git state within the RPC by re-hydrating main.lbug from the (now
+		// absent) git entities/edges dirs, which detaches every node and edge,
+		// so the store does not keep serving a pre-wipe graph while git main is
+		// wiped. This keeps the SPEC R2 "graph state may be partially
+		// cleaned… INTERNAL" contract (the failure below still returns INTERNAL)
+		// and R8 restart re-hydration as the final fallback if this too fails.
+		entitiesDir, edgesDir := s.gitstore.HydrationDirs()
+		if rehydrateErr := s.store.RehydrateMainFromFiles(ctx, entitiesDir, edgesDir); rehydrateErr != nil {
+			err = fmt.Errorf("%v (main.lbug re-hydration after wipe also failed: %v)", err, rehydrateErr)
+		}
 		s.writeLock.Unlock()
 		return nil, errWipeGraphMidWipe(err.Error())
 	}
