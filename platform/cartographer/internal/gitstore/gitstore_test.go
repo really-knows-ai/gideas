@@ -88,6 +88,19 @@ func configureAnonymousRemote(t *testing.T, gs *gitStore, remoteURL string) {
 // The SPEC R8 filesystem-error paths (disk full, permission denied, I/O
 // failures) are covered by the disk-backed ladybug store tests
 // (ladybug_test.go TestRehydrateFiles_IOErrorFailsLoudly).
+// wireGitStore links a directly-constructed *gitStore (tests bypass New() to
+// hand-build a store over an existing go-git repo, setting the shared git state
+// inline) to its four domain sub-structs, mirroring New()'s wireDomains call.
+// Without this, promoted method calls dispatch through nil sub-struct receivers
+// and panic.
+func wireGitStore(g *gitStore) *gitStore {
+	g.branchOps = &branchOps{g}
+	g.remoteOps = &remoteOps{g}
+	g.commitOps = &commitOps{g}
+	g.entityEdgeOps = &entityEdgeOps{g}
+	return g
+}
+
 func setupTestStore(t *testing.T) *gitStore {
 	t.Helper()
 	fs := memfs.New()
@@ -128,13 +141,13 @@ func setupTestStore(t *testing.T) *gitStore {
 		t.Fatalf("Commit init: %v", err)
 	}
 
-	gs := &gitStore{
+	gs := wireGitStore(&gitStore{
 		repo:     repo,
 		wt:       wt,
 		fs:       fs,
 		backend:  storer,
 		basePath: t.TempDir(),
-	}
+	})
 	return gs
 }
 
@@ -3488,6 +3501,123 @@ func TestPushRemoteAnonymous(t *testing.T) {
 	}
 }
 
+// TestPushMainOnlyScopeBoundary pins the SPEC R10 scope boundary: only main is
+// synced; transaction branches are local-only and never pushed. PushRemote
+// hardcodes the refspec refs/heads/main:refs/heads/main (remote.go), so a
+// transaction branch present locally must never appear in the remote's ref
+// list after a push. This test fails if the refspec is widened (e.g. to push
+// all heads) and a transaction branch leaks to the remote — TestPushRemoteWithAuth,
+// TestPushRemoteAnonymous and TestRemotePushPull only assert that refs/heads/main
+// advances, so none of them would catch a leak.
+func TestPushMainOnlyScopeBoundary(t *testing.T) {
+	tmpDir := t.TempDir()
+	bareDir := filepath.Join(tmpDir, "remote.git")
+
+	// Create a bare remote repo.
+	if _, err := git.PlainInitWithOptions(bareDir, &git.PlainInitOptions{
+		Bare: true,
+		InitOptions: git.InitOptions{
+			DefaultBranch: plumbing.ReferenceName("refs/heads/main"),
+		},
+	}); err != nil {
+		t.Fatalf("init bare remote: %v", err)
+	}
+
+	localDir := filepath.Join(tmpDir, "local")
+	store, err := New(localDir)
+	if err != nil {
+		t.Fatalf("New local: %v", err)
+	}
+	gs := store.(*gitStore)
+	txID := validUUID(t)
+
+	err = store.WithGitLock(func() error {
+		gs.remoteURL = "file://" + bareDir
+		gs.authFn = func() (transport.AuthMethod, error) {
+			return noopAuth{}, nil
+		}
+
+		if _, err := gs.repo.CreateRemote(&config.RemoteConfig{
+			Name: "origin",
+			URLs: []string{gs.remoteURL},
+		}); err != nil && !errors.Is(err, git.ErrRemoteExists) {
+			return fmt.Errorf("create remote: %w", err)
+		}
+
+		// Commit something on main so the push has content to send.
+		now := time.Now().UTC().Round(time.Millisecond)
+		if err := gs.WriteEntityFiles(ctx(), "Component", []Entity{
+			{ID: validUUID(t), Type: "Component", CreatedAt: now, UpdatedAt: now},
+		}); err != nil {
+			return err
+		}
+		if err := gs.AddAll(ctx(), "."); err != nil {
+			return err
+		}
+		if err := gs.Commit(ctx(), "transaction:scope-main"); err != nil {
+			return err
+		}
+
+		// Create a transaction branch from main, advance it with its own commit
+		// so it diverges from main and is present locally. Per SPEC R10 the
+		// transaction branch is local-only and must never be pushed.
+		if err := gs.CreateBranch(ctx(), txID); err != nil {
+			return err
+		}
+		if err := gs.Checkout(ctx(), txID); err != nil {
+			return err
+		}
+		if err := gs.WriteEntityFiles(ctx(), "Component", []Entity{
+			{ID: validUUID(t), Type: "Component", CreatedAt: now, UpdatedAt: now},
+		}); err != nil {
+			return err
+		}
+		if err := gs.AddAll(ctx(), "."); err != nil {
+			return err
+		}
+		if err := gs.Commit(ctx(), "transaction:"+txID); err != nil {
+			return err
+		}
+
+		// Push: only refs/heads/main is synced (the hardcoded refspec).
+		if err := gs.PushRemote(ctx()); err != nil {
+			return fmt.Errorf("push: %w", err)
+		}
+
+		// Enumerate the remote's ref list: the transaction branch must be
+		// absent. Listing every branch ref (not just querying main) is the
+		// assertion the existing push tests omit — it fails if the refspec is
+		// ever widened to carry transaction branches to the remote.
+		remoteRepo, err := git.PlainOpen(bareDir)
+		if err != nil {
+			return fmt.Errorf("open remote: %w", err)
+		}
+		refIter, err := remoteRepo.References()
+		if err != nil {
+			return fmt.Errorf("list remote refs: %w", err)
+		}
+		defer refIter.Close()
+		var remoteHeads []string
+		if err := refIter.ForEach(func(ref *plumbing.Reference) error {
+			if ref.Name().IsBranch() {
+				remoteHeads = append(remoteHeads, ref.Name().Short())
+			}
+			return nil
+		}); err != nil {
+			return fmt.Errorf("iterate remote refs: %w", err)
+		}
+		if len(remoteHeads) != 1 || remoteHeads[0] != "main" {
+			return fmt.Errorf(
+				"remote branches after push = %v, want exactly [main] "+
+					"(transaction branch %s must never be pushed)", remoteHeads, txID)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("TestPushMainOnlyScopeBoundary: %v", err)
+	}
+}
+
 func TestCloneSingleBranchNoAuth(t *testing.T) {
 	tmpDir := t.TempDir()
 	sourceDir := filepath.Join(tmpDir, "source")
@@ -4709,13 +4839,13 @@ func TestIsEmptyMainRefError(t *testing.T) {
 		t.Fatalf("Worktree: %v", err)
 	}
 
-	gs := &gitStore{
+	gs := wireGitStore(&gitStore{
 		repo:     repo,
 		wt:       wt,
 		fs:       fs,
 		backend:  storer,
 		basePath: t.TempDir(),
-	}
+	})
 
 	err = gs.WithGitLock(func() error {
 		// Delete the main ref to exercise the ErrReferenceNotFound path in
@@ -4926,13 +5056,13 @@ func TestPushAlreadyUpToDate(t *testing.T) {
 
 	// Open a gitStore on the work repo to test push via gitstore
 	// The work and bare repos already have the same content.
-	gs := &gitStore{
+	gs := wireGitStore(&gitStore{
 		repo:     workRepo,
 		wt:       workWT,
 		fs:       workWT.Filesystem,
 		backend:  workRepo.Storer,
 		basePath: t.TempDir(),
-	}
+	})
 
 	err = gs.WithGitLock(func() error {
 		gs.remoteURL = "file://" + bareDir
@@ -5003,13 +5133,13 @@ func cloneFromBare(t *testing.T, tmpDir, bareDir string) *gitStore {
 	if err != nil {
 		t.Fatalf("get worktree: %v", err)
 	}
-	return &gitStore{
+	return wireGitStore(&gitStore{
 		repo:     clonedRepo,
 		wt:       clonedWT,
 		fs:       clonedWT.Filesystem,
 		backend:  clonedRepo.Storer,
 		basePath: t.TempDir(),
-	}
+	})
 }
 
 // remoteHEAD returns the HEAD hash of a bare repository.
@@ -5729,13 +5859,13 @@ func TestFetchAndMerge_PullAfterWipe(t *testing.T) {
 	}
 	_ = stale.Close()
 
-	gs := &gitStore{
+	gs := wireGitStore(&gitStore{
 		repo:     localRepo,
 		wt:       localWT,
 		fs:       localWT.Filesystem,
 		backend:  localRepo.Storer,
 		basePath: t.TempDir(),
-	}
+	})
 
 	// Push a "wipe" commit to the remote that removes data.txt.
 	workDir := filepath.Join(tmpDir, "work")
@@ -5848,13 +5978,13 @@ func TestPullAlreadyUpToDate2(t *testing.T) {
 		t.Fatalf("get worktree: %v", err)
 	}
 
-	gs := &gitStore{
+	gs := wireGitStore(&gitStore{
 		repo:     clonedRepo,
 		wt:       clonedWT,
 		fs:       clonedWT.Filesystem,
 		backend:  clonedRepo.Storer,
 		basePath: t.TempDir(),
-	}
+	})
 
 	err = gs.WithGitLock(func() error {
 		gs.remoteURL = "file://" + bareDir

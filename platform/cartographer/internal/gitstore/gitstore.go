@@ -87,7 +87,21 @@ type GitStore interface {
 	WithGitLock(fn func() error) error
 }
 
+// mainBranchName is the name of the authoritative single synced branch (SPEC
+// R10: only main is synced; transaction branches are local-only). The spelling
+// is defined once so every refspec and branch-name comparison agrees.
+const mainBranchName = "main"
+
 // gitStore is the concrete implementation of GitStore.
+//
+// It is a composition of four domain sub-structs (branchOps, remoteOps,
+// commitOps, entityEdgeOps), one per file domain, so the store's ~40 methods
+// are grouped by cohesive responsibility instead of living as one flat god
+// struct. The shared git state (repo, worktree, filesystem, backend, remote
+// config) stays as direct fields on gitStore — every domain sub-struct embeds
+// a back-reference to the owning gitStore (*gitStore), so its methods read and
+// write that single shared state and are promoted onto gitStore, letting
+// gitStore satisfy the GitStore interface as a composition.
 type gitStore struct {
 	mu       sync.Mutex
 	repo     *git.Repository
@@ -98,6 +112,42 @@ type gitStore struct {
 
 	remoteURL string
 	authFn    func() (transport.AuthMethod, error)
+
+	*branchOps
+	*remoteOps
+	*commitOps
+	*entityEdgeOps
+}
+
+// branchOps owns the branch-lifecycle methods (branch.go): create/delete/lookup,
+// checkout, reset, restore and branch-ref manipulation. It embeds *gitStore so
+// it shares the store's single git state and its methods are promoted onto
+// gitStore.
+type branchOps struct{ *gitStore }
+
+// remoteOps owns the remote-sync methods (remote.go): remote config, push, pull
+// (fetch+merge), clone-on-init, and repo-emptiness.
+type remoteOps struct{ *gitStore }
+
+// commitOps owns the commit-serialisation methods (commit.go): staging, git rm,
+// commit, fast-forward merge, and log scanning.
+type commitOps struct{ *gitStore }
+
+// entityEdgeOps owns the file-per-element I/O (entity.go, edge.go): batch
+// writes/removes/reads and list-types for entities and edges, plus the shared
+// JSON file helpers.
+type entityEdgeOps struct{ *gitStore }
+
+// wireDomains links a gitStore to its four domain sub-structs. It must be
+// called once on every freshly built gitStore (see New) so that promoted
+// methods dispatch to non-nil receivers and the sub-structs share the store's
+// state.
+func wireDomains(g *gitStore) *gitStore {
+	g.branchOps = &branchOps{g}
+	g.remoteOps = &remoteOps{g}
+	g.commitOps = &commitOps{g}
+	g.entityEdgeOps = &entityEdgeOps{g}
+	return g
 }
 
 // initDir creates a directory with a .gitkeep file so go-git can stage it.
@@ -172,13 +222,13 @@ func New(basePath string) (GitStore, error) {
 		return nil, fmt.Errorf("create edges dir: %w", err)
 	}
 
-	gs := &gitStore{
+	gs := wireDomains(&gitStore{
 		repo:     repo,
 		wt:       wt,
 		fs:       fs,
 		basePath: basePath,
 		backend:  repo.Storer,
-	}
+	})
 
 	// The init commit is gated on the presence of refs/heads/main, not on
 	// whether .git was just created (the old isNew flag): a crash between

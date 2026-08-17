@@ -21,7 +21,7 @@ import (
 // so credentials can be refreshed on every call. A configured authFn returning
 // nil credentials explicitly selects anonymous access for clone, pull, and
 // push; a nil authFn means auth was not configured.
-func (g *gitStore) SetRemote(ctx context.Context, rawURL string, authFn func() (transport.AuthMethod, error)) error {
+func (g *remoteOps) SetRemote(ctx context.Context, rawURL string, authFn func() (transport.AuthMethod, error)) error {
 	if err := validateRemoteURL(rawURL); err != nil {
 		return err
 	}
@@ -165,7 +165,7 @@ func mapPushError(err error) error {
 // without this, stale untracked files from a previously wiped type would
 // persist after a pull-after-wipe fast-forward (matching HardResetToBranch's
 // cleanup pattern).
-func (g *gitStore) setLocalRefAndCheckout(branch string, hash plumbing.Hash) error {
+func (g *remoteOps) setLocalRefAndCheckout(branch string, hash plumbing.Hash) error {
 	newRef := plumbing.NewHashReference(
 		plumbing.ReferenceName("refs/heads/"+branch),
 		hash,
@@ -206,7 +206,7 @@ func (g *gitStore) setLocalRefAndCheckout(branch string, hash plumbing.Hash) err
 //
 // For any branch, the fetch refspec and the tracking-ref lookup both use the
 // given branch, so the parameter is honored for non-main branches too.
-func (g *gitStore) FetchAndMerge(ctx context.Context, remoteName, branch string) (plumbing.Hash, error) {
+func (g *remoteOps) FetchAndMerge(ctx context.Context, remoteName, branch string) (plumbing.Hash, error) {
 	if g.remoteURL == "" {
 		return plumbing.ZeroHash, ErrNoRemote
 	}
@@ -329,7 +329,7 @@ func (g *gitStore) FetchAndMerge(ctx context.Context, remoteName, branch string)
 // or an https:// URL embedding a user) with no authFn configured, and (b) an
 // authFn that errors (readSecretFn failure, invalid PEM, missing expected
 // key) — in both cases the push cannot be attempted.
-func (g *gitStore) PushRemote(ctx context.Context) error {
+func (g *remoteOps) PushRemote(ctx context.Context) error {
 	if g.remoteURL == "" {
 		return ErrNoRemote
 	}
@@ -386,7 +386,7 @@ func (g *gitStore) PushRemote(ctx context.Context) error {
 // wiring (cmd/main.go: SetRemote before tryRemotePullOnInit) does this, so
 // the stale-origin path is unreachable today; the dependency is documented
 // rather than left to silently produce a wrong result.
-func (g *gitStore) CloneSingleBranch(ctx context.Context, rawURL, branch string) error {
+func (g *remoteOps) CloneSingleBranch(ctx context.Context, rawURL, branch string) error {
 	if err := validateRemoteURL(rawURL); err != nil {
 		return err
 	}
@@ -528,7 +528,7 @@ func (g *gitStore) CloneSingleBranch(ctx context.Context, rawURL, branch string)
 // whose initial commit coincidentally uses the same message — without this,
 // a repo whose only commit is "init" from another remote would be misread
 // as empty, breaking the SPEC R10 clone-vs-pull decision.
-func (g *gitStore) IsEmpty(ctx context.Context) (bool, error) {
+func (g *remoteOps) IsEmpty(ctx context.Context) (bool, error) {
 	mainRef, err := g.repo.Reference(
 		plumbing.ReferenceName("refs/heads/main"), true)
 	if err != nil {
@@ -576,7 +576,7 @@ func isInitCommit(commit *object.Commit) bool {
 
 // ensureRemoteExists creates the "origin" remote if it does not already exist,
 // or updates its URL if it has changed.
-func (g *gitStore) ensureRemoteExists() error {
+func (g *remoteOps) ensureRemoteExists() error {
 	remote, err := g.repo.Remote("origin")
 	if err != nil {
 		if errors.Is(err, git.ErrRemoteNotFound) {
@@ -620,7 +620,7 @@ func (g *gitStore) ensureRemoteExists() error {
 // scheme) — means the git operation cannot be attempted, so all of them
 // surface as ErrAuthConfigMissing for mapGitError to return
 // FAILED_PRECONDITION (SPEC error-table row "Remote auth config missing").
-func (g *gitStore) resolveAuth() (transport.AuthMethod, error) {
+func (g *remoteOps) resolveAuth() (transport.AuthMethod, error) {
 	if g.authFn == nil {
 		return nil, nil
 	}
