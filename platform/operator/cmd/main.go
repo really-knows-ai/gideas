@@ -597,7 +597,8 @@ func resolveCartographerImage(flagValue string) string {
 
 // resolveCapabilityStalenessWindow resolves the capability attestation
 // staleness window: the --capability-staleness-window flag, else the
-// CAPABILITY_STALENESS_WINDOW env var, else the SPEC default "30s".
+// CAPABILITY_STALENESS_WINDOW env var, else the SPEC default "30s" (shared
+// controller.DefaultCapabilityStalenessWindow, the operator-side source of truth).
 func resolveCapabilityStalenessWindow(flagValue string) string {
-	return envDefault(flagValue, os.Getenv("CAPABILITY_STALENESS_WINDOW"), "30s")
+	return envDefault(flagValue, os.Getenv("CAPABILITY_STALENESS_WINDOW"), controller.DefaultCapabilityStalenessWindow)
 }

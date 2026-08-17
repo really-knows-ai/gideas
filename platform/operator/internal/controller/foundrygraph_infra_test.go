@@ -425,7 +425,7 @@ func TestDeploymentEnvVarsTransactionTimeout(t *testing.T) {
 		for _, e := range env {
 			envMap[e.Name] = e
 		}
-		if e, ok := envMap["TRANSACTION_TIMEOUT"]; !ok || e.Value != transactionTimeoutDefault {
+		if e, ok := envMap["TRANSACTION_TIMEOUT"]; !ok || e.Value != DefaultTransactionTimeout {
 			t.Errorf("expected TRANSACTION_TIMEOUT to fall back to the SPEC R5 default 30m, got %+v (present=%v)", e, ok)
 		}
 	})
