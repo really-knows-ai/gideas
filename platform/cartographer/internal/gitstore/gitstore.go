@@ -69,6 +69,11 @@ type GitStore interface {
 	Checkout(ctx context.Context, branch string) error
 	RestoreMain(ctx context.Context) error
 	GitLogOneline(ctx context.Context, prefix string) ([]string, error)
+	// CheckoutCommit checks out the given commit hash (detached HEAD) and
+	// updates the working tree to that commit's tree. Used by startup recovery
+	// to read main's file set as of a transaction's begin head
+	// (MainHeadAtLastSync); the caller restores main when done.
+	CheckoutCommit(ctx context.Context, hash string) error
 
 	// Remote operations
 	SetRemote(ctx context.Context, url string, authFn func() (transport.AuthMethod, error)) error

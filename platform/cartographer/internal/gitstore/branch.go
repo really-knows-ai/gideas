@@ -110,6 +110,29 @@ func (g *branchOps) RestoreMain(ctx context.Context) error {
 	return g.Checkout(ctx, mainBranchName)
 }
 
+// CheckoutCommit checks out the given commit hash (detached HEAD) and updates
+// the working tree to that commit's tree. It is used by startup recovery
+// (buildMainFileLookups) to read main's file set as of a transaction's begin
+// head (MainHeadAtLastSync), so the reconstructed change-log diff is computed
+// against the transaction's true baseline rather than current main. The
+// caller must restore main (RestoreMain) when done with the read; recovery
+// does so under the git lock before returning. Validates that hash is a
+// 40-character lowercase hex string.
+func (g *branchOps) CheckoutCommit(ctx context.Context, hash string) error {
+	if len(hash) != 40 {
+		return fmt.Errorf("%w: %q", ErrInvalidHash, hash)
+	}
+	for _, c := range hash {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return fmt.Errorf("%w: %q", ErrInvalidHash, hash)
+		}
+	}
+	if err := g.wt.Checkout(&git.CheckoutOptions{Hash: plumbing.NewHash(hash), Force: true}); err != nil {
+		return fmt.Errorf("checkout commit %s: %w", hash, err)
+	}
+	return nil
+}
+
 // BranchExists returns true if a branch with the given txID exists.
 func (g *branchOps) BranchExists(ctx context.Context, txID string) (bool, error) {
 	_, err := g.repo.Reference(plumbing.ReferenceName("refs/heads/"+txID), true)

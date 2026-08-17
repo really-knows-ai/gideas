@@ -111,7 +111,22 @@ func (s *CartographerServer) RecoverOpenTransactions(ctx context.Context) error 
 			return fmt.Errorf("read transaction branch DB %q: %w", txID, dumpErr)
 		}
 
-		mainEntities, mainEdges, _, err := s.buildMainFileLookups(ctx)
+		// The reconstruction diff must be computed against the branch DB's true
+		// hydration baseline, not current main. A branch that never refreshed
+		// (marker clear) was hydrated from main at MainHeadAtLastSync; diffing
+		// against current main would mis-report entities another transaction
+		// added to main after this branch began as this transaction's "suspected
+		// deletions" (a stale branch — SPEC R9 change-log recovery point 3),
+		// falsely wedging it into an unresolvable ABORTED refresh. A branch whose
+		// refresh-in-progress marker is set (mid-refresh swap or ABORTED-refresh
+		// crash) was re-hydrated from current main, so current main is the correct
+		// baseline there; falling back to current main when the marker is set
+		// preserves the pinned mid-refresh/rollback behavior.
+		baseline := ""
+		if !durableState.BranchRefreshInProgress && durableState.MainHeadAtLastSync != "" {
+			baseline = durableState.MainHeadAtLastSync
+		}
+		mainEntities, mainEdges, _, err := s.buildMainFileLookups(ctx, baseline)
 		if err != nil {
 			return fmt.Errorf("read main graph for transaction %q: %w", txID, err)
 		}
@@ -333,9 +348,23 @@ func branchKeyFromFile(name string) (string, bool) {
 	return "", false
 }
 
-// buildMainFileLookups reads all entity and edge files from main's git working
-// tree and returns lookup maps keyed by (entityType -> entityID -> file).
-func (s *CartographerServer) buildMainFileLookups(ctx context.Context) (
+// buildMainFileLookups reads all entity and edge files from main (at the
+// transaction's baseline head, baseline, when provided — otherwise current
+// main) and returns lookup maps keyed by (entityType -> entityID -> file).
+// The reconstruction diff (recoverEntityChanges/recoverEdgeChanges) must be
+// computed against the transaction's true baseline, not current main: for a
+// transaction whose branch predates a main advancement (stale branch), entities
+// added to main after the branch began are absent from the branch DB for
+// reasons unrelated to the transaction, and reporting them as "suspected
+// deletions" would falsely wedge the transaction into an unresolvable ABORTED
+// refresh. Reading main at the baseline excludes those post-begin additions
+// and yields the correct divergence. An absent/empty baseline (a state without
+// a persisted begin head) falls back to current main, matching pre-baseline
+// recovery behavior. The caller holds the git lock; this always restores the
+// working tree to main before returning.
+func (s *CartographerServer) buildMainFileLookups(
+	ctx context.Context, baseline string,
+) (
 	map[string]map[string]gitstore.EntityFile,
 	map[string]map[string]gitstore.EdgeFile,
 	string,
@@ -350,6 +379,11 @@ func (s *CartographerServer) buildMainFileLookups(ctx context.Context) (
 		}
 		if err := s.gitstore.CleanUntracked(ctx); err != nil {
 			return err
+		}
+		if baseline != "" {
+			if err := s.gitstore.CheckoutCommit(ctx, baseline); err != nil {
+				return err
+			}
 		}
 		var err error
 		mainHead, err = s.gitstore.BranchHEAD(ctx, "main")
@@ -386,7 +420,12 @@ func (s *CartographerServer) buildMainFileLookups(ctx context.Context) (
 			}
 			mainEdges[et] = byID
 		}
-		return nil
+		// The baseline checkout is a detached-HEAD read; always return the
+		// working tree to main so nothing after this read observes the stale
+		// tree (recovery cleanup and any subsequent buildMainFileLookups both
+		// start from RestoreMain, but leaving the tree on main is the
+		// invariant).
+		return s.gitstore.RestoreMain(ctx)
 	})
 	if err != nil {
 		return nil, nil, "", err
@@ -860,6 +899,25 @@ func (s *CartographerServer) resetBranchStoreFromWorkingTree(ctx context.Context
 // transaction changes applied). The durable state record is preserved — with
 // the refresh-in-progress marker still set — so recovery distinguishes this
 // mid-refresh state from an already-committed transaction.
+//
+// SPEC R9 refresh step 4's "On ABORTED, the transaction's change log is
+// preserved" promise is honoured in-process: RefreshTransaction (transaction.go)
+// keeps the in-memory change log intact and returns the ABORTED conflict, so the
+// node can call GetTransactionDiff and decide how to proceed (typically
+// Rollback). That preservation is deliberately in-memory only — the SPEC
+// declares the change log in-memory ("Transaction change log — the Cartographer
+// tracks ... in an in-memory log") and reconstructs it from the branch DB on
+// restart. In the crash window between an ABORTED refresh and the node's
+// rollback, the durable branch DB is this clean copy of main (no transaction
+// changes), so restart recovery cannot reconstruct the change log: the diff is
+// empty and, because the refresh-in-progress marker is still set on the durable
+// record (it is cleared only by the refresh's successful final persist), the
+// transaction is rolled back loudly — the SPEC R9 change-log recovery point 4
+// posture for an unusable branch — never silently reported as committed and
+// never deleting another transaction's data. The in-memory-only trade-off is
+// therefore consistent with the SPEC: the change log is inspectable while the
+// node is alive, and a crash in this window yields a loud rollback, not silent
+// loss.
 func (s *CartographerServer) restoreCleanBranchStore(ctx context.Context, txID string) error {
 	if err := s.store.CloseBranchDB(ctx, txID); err != nil {
 		return mapStoreError(err)
