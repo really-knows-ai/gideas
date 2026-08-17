@@ -77,6 +77,16 @@ type Model struct {
 	// Debounce timer for child-count recomputation on watch batches
 	childCountDebounce *time.Timer
 
+	// childCountGeneration is bumped on every debounce re-arm so that a stale
+	// in-flight refresh can be detected and its message discarded before being
+	// applied over newer state. Only touched from the Update loop goroutine.
+	childCountGeneration uint64
+	// childCountWake is the per-arming wake channel. Re-arming closes the
+	// previous channel to release a still-pending waiter rather than strand it
+	// on the shared timer channel (one fire would wake only one of many
+	// waiters). Only touched from the Update loop goroutine.
+	childCountWake chan struct{}
+
 	// Watch context and cancel for explicit K8s watch lifecycle management
 	watchCtx    context.Context
 	watchCancel context.CancelFunc
