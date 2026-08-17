@@ -88,17 +88,11 @@ func nodeCapabilities(ctx context.Context) []string {
 // entityTypeFromMetadata returns the first entity_type metadata value attached
 // by the SDK (SPEC R3: the SDK annotates the resolved entity type, or "*" when
 // the ID-to-type mapping is unknown or TTL-stale). Returns "" when no type is
-// resolvable.
+// resolvable. It delegates to the shared flowmeta.MetadataValue helper — the
+// single source of truth for the Sidecar-injected x-flow-* metadata lookup —
+// rather than re-implementing the FromIncomingContext/Get first-value read.
 func entityTypeFromMetadata(ctx context.Context) string {
-	md, ok := metadata.FromIncomingContext(ctx)
-	if !ok {
-		return ""
-	}
-	vals := md.Get(flowmeta.MetadataKeyEntityType)
-	if len(vals) == 0 {
-		return ""
-	}
-	return vals[0]
+	return flowmeta.MetadataValue(ctx, flowmeta.MetadataKeyEntityType)
 }
 
 // checkCapability gates a Cartographer RPC on the caller's attested
