@@ -188,7 +188,7 @@ func TestGetEnv(t *testing.T) {
 func TestParseDurationEnv(t *testing.T) {
 	t.Run("unset falls back to default", func(t *testing.T) {
 		t.Setenv("TRANSACTION_TIMEOUT", "")
-		got, err := parseDurationEnv("TRANSACTION_TIMEOUT", "30m")
+		got, err := parseDurationEnv("TRANSACTION_TIMEOUT", defaultTransactionTimeout)
 		if err != nil {
 			t.Fatalf("parseDurationEnv on unset var: %v", err)
 		}
@@ -198,7 +198,7 @@ func TestParseDurationEnv(t *testing.T) {
 	})
 	t.Run("valid env value wins", func(t *testing.T) {
 		t.Setenv("TRANSACTION_TIMEOUT", "45s")
-		got, err := parseDurationEnv("TRANSACTION_TIMEOUT", "30m")
+		got, err := parseDurationEnv("TRANSACTION_TIMEOUT", defaultTransactionTimeout)
 		if err != nil {
 			t.Fatalf("parseDurationEnv: %v", err)
 		}
@@ -208,7 +208,7 @@ func TestParseDurationEnv(t *testing.T) {
 	})
 	t.Run("invalid env value errors", func(t *testing.T) {
 		t.Setenv("CAPABILITY_STALENESS_WINDOW", "not-a-duration")
-		if _, err := parseDurationEnv("CAPABILITY_STALENESS_WINDOW", "30s"); err == nil {
+		if _, err := parseDurationEnv("CAPABILITY_STALENESS_WINDOW", defaultCapabilityStalenessWindow); err == nil {
 			t.Error("parseDurationEnv on invalid value = nil error, want error (fail-fast exit)")
 		}
 	})
