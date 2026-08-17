@@ -13,7 +13,8 @@ import (
 
 // GetEstablishedDimension returns the dimension of the FLOAT[n] embedding
 // column for the given entity type, or 0 if not established.
-func (db *ladybugDB) GetEstablishedDimension(_ context.Context, entityType, branch string) (int, error) {
+func (sm *schemaManager) GetEstablishedDimension(_ context.Context, entityType, branch string) (int, error) {
+	db := sm.db
 	conn, typeDefs, unlock, err := db.lockForRead(branch)
 	if err != nil {
 		return 0, err
@@ -35,7 +36,8 @@ func (db *ladybugDB) GetEstablishedDimension(_ context.Context, entityType, bran
 // WipeSchema drops all schema tables, indexes, and metadata, leaving the
 // database empty for a fresh ApplySchema. Used by WipeGraph before applying
 // a destructive schema change.
-func (db *ladybugDB) WipeSchema(ctx context.Context) error {
+func (sm *schemaManager) WipeSchema(ctx context.Context) error {
+	db := sm.db
 	db.mu.Lock()
 	defer db.mu.Unlock()
 

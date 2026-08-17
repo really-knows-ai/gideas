@@ -13,13 +13,22 @@ import (
 	"github.com/foundry/flow/cartographer/internal/store"
 )
 
+// queryEngine owns the query/search method group of ladybugDB: ExecuteCypher,
+// ExtractEntityTypes, SearchNeighbors, FullTextSearch, and ListEntities, plus
+// the statement-label extraction helpers. The shared store state lives on
+// ladybugDB; db is the owner pointer back to it.
+type queryEngine struct {
+	db *ladybugDB
+}
+
 // --------------------------------------------------------------------------
 // ExecuteCypher
 // --------------------------------------------------------------------------
 
-func (db *ladybugDB) ExecuteCypher(
+func (qe *queryEngine) ExecuteCypher(
 	ctx context.Context, cypher string, params map[string]any, branch string,
 ) ([]store.CypherRow, error) {
+	db := qe.db
 	if cypher == "" {
 		return nil, store.ErrEmptyQuery
 	}
@@ -108,7 +117,8 @@ func (db *ladybugDB) ExecuteCypher(
 // Extraction itself is best-effort and never an error: a parseable read-only
 // statement whose patterns yield no labels returns an empty slice and the
 // service falls back to the READ:graph/entity/* wildcard check (SPEC R3).
-func (db *ladybugDB) ExtractEntityTypes(ctx context.Context, cypher string) ([]string, error) {
+func (qe *queryEngine) ExtractEntityTypes(ctx context.Context, cypher string) ([]string, error) {
+	db := qe.db
 	if cypher == "" {
 		return nil, store.ErrEmptyQuery
 	}
@@ -528,9 +538,10 @@ func stripCommentsAndStrings(s string) string {
 // SearchNeighbors
 // --------------------------------------------------------------------------
 
-func (db *ladybugDB) SearchNeighbors(
+func (qe *queryEngine) SearchNeighbors(
 	ctx context.Context, embedding []float32, entityType string, topK int, branch string,
 ) ([]store.NeighborResult, error) {
+	db := qe.db
 	// Validate embedding. The SPEC error-table (line ~880) defines an empty
 	// embedding as INVALID_ARGUMENT; enforce it at this authoritative store
 	// boundary in addition to the service-layer gate so a direct store caller
@@ -634,7 +645,7 @@ func (db *ladybugDB) SearchNeighbors(
 // mismatch in a wildcard search (indexed==true, matched==false) — yields no
 // results and no error, letting the caller distinguish "no index yet" from
 // "established index but dimension mismatch" and aggregate the other types.
-func (db *ladybugDB) searchIndexedType(
+func (qe *queryEngine) searchIndexedType(
 	conn *lbug.Connection, t string, embedding []float32, topK int, entityType string, vectorIndexed bool,
 ) (indexed bool, matched bool, found []store.NeighborResult, err error) {
 	// Check if the index is bootstrapped.
@@ -730,9 +741,10 @@ func (db *ladybugDB) searchIndexedType(
 // FullTextSearch
 // --------------------------------------------------------------------------
 
-func (db *ladybugDB) FullTextSearch(
+func (qe *queryEngine) FullTextSearch(
 	ctx context.Context, query, entityType, branch string,
 ) ([]store.Entity, error) {
+	db := qe.db
 	if query == "" {
 		return nil, store.ErrEmptyQuery
 	}
@@ -823,9 +835,10 @@ func (db *ladybugDB) FullTextSearch(
 // ListEntities
 // --------------------------------------------------------------------------
 
-func (db *ladybugDB) ListEntities(
+func (qe *queryEngine) ListEntities(
 	ctx context.Context, entityType string, pageSize int, pageToken, branch string,
 ) ([]store.Entity, string, error) {
+	db := qe.db
 	// SPEC:960 check order for ListEntities: capability → structural (unknown
 	// entity type → pageSize → pageToken). The entity-type existence check
 	// requires the type defs from the branch lock, so the lock is acquired

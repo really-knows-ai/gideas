@@ -14,7 +14,26 @@ import (
 )
 
 // ladybugDB is the concrete LadybugDB-backed implementation of store.Store.
+//
+// Its method set is owned by five cohesive sub-structs — one per responsibility
+// — that ladybugDB embeds: schemaManager (schema application/DDL, metadata
+// persistence, and vector-state management: schema.go, metadata.go, vector.go),
+// crudAccessor (entity/edge CRUD and edge-rule validation: crud.go),
+// branchLifecycle (branch-DB lifecycle, schema replication to branches, and
+// branch transaction state: branch_lifecycle.go, branch_schema.go,
+// transaction_state.go), rehydrator (file-tree re-hydration and dump/scan:
+// rehydrate.go, dump.go), and queryEngine (Cypher/search/listing queries:
+// query.go). Each sub-struct reaches the shared state (locks, connections,
+// type-def caches, branch registries) through its db pointer back to this
+// struct; embedded promotion keeps ladybugDB implementing the full store.Store
+// interface with public behaviour unchanged.
 type ladybugDB struct {
+	*schemaManager
+	*crudAccessor
+	*branchLifecycle
+	*rehydrator
+	*queryEngine
+
 	mu     sync.Mutex
 	path   string
 	db     *lbug.Database
@@ -221,6 +240,12 @@ func newLadybugDB(path string, database *lbug.Database, conn *lbug.Connection) (
 		createVectorIndex: createVectorIndexOnConn,
 		readDir:           os.ReadDir,
 	}
+	// Wire the five cohesive method-group owners to the shared store state.
+	ldb.schemaManager = &schemaManager{db: ldb}
+	ldb.crudAccessor = &crudAccessor{db: ldb}
+	ldb.branchLifecycle = &branchLifecycle{db: ldb}
+	ldb.rehydrator = &rehydrator{db: ldb}
+	ldb.queryEngine = &queryEngine{db: ldb}
 	if err := loadExtensionsOnConn(ldb.conn, ""); err != nil {
 		_ = ldb.Close()
 		return nil, fmt.Errorf("load extensions: %w", err)

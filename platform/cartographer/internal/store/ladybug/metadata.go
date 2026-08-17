@@ -329,7 +329,8 @@ func applySchemaMetadata(
 	return entities, edges, rules, pairs
 }
 
-func (db *ladybugDB) mainMetadataPath() string {
+func (sm *schemaManager) mainMetadataPath() string {
+	db := sm.db
 	return filepath.Join(db.path, "schema.json")
 }
 
@@ -343,7 +344,8 @@ func (db *ladybugDB) mainMetadataPath() string {
 // record (VectorIndexes=false/VectorDimensions=0), which would otherwise cause
 // validateMetadataAgainstCatalog to brick the next Open. Callers must hold
 // db.mu and must already have merged the promoted defs into db.entityTypeDefs.
-func (db *ladybugDB) persistMainVectorMetadataLocked() error {
+func (sm *schemaManager) persistMainVectorMetadataLocked() error {
+	db := sm.db
 	if db.path == "" {
 		return nil
 	}
@@ -358,7 +360,8 @@ func (db *ladybugDB) persistMainVectorMetadataLocked() error {
 	return nil
 }
 
-func (db *ladybugDB) branchMetadataPath(txID string) string {
+func (sm *schemaManager) branchMetadataPath(txID string) string {
+	db := sm.db
 	return filepath.Join(db.path, "branches", txID+".schema.json")
 }
 
@@ -374,7 +377,8 @@ func (db *ladybugDB) branchMetadataPath(txID string) string {
 // fails loudly — the schema intent cannot be reconstructed from the catalog
 // (vector enablement for un-bootstrapped types, connection rules), so it is a
 // genuine state-loss event, not a repair. Caller must hold db.mu.
-func (db *ladybugDB) restoreMainSchemaMetadataLocked() error {
+func (sm *schemaManager) restoreMainSchemaMetadataLocked() error {
+	db := sm.db
 	if db.path == "" {
 		return nil
 	}
@@ -542,12 +546,13 @@ func reconcileVectorStateFromCatalog(
 // any DDL was issued, so the caller can refresh the schema cache before
 // validation. Caller must hold db.mu and pass the defs applySchemaMetadata
 // derived from the metadata.
-func (db *ladybugDB) repairCatalogAgainstMetadataLocked(
+func (sm *schemaManager) repairCatalogAgainstMetadataLocked(
 	metadata schemaMetadata,
 	entities map[string]*store.EntityTypeDef,
 	edges map[string]*store.EdgeTypeDef,
 	pairs map[string][]fromToPair,
 ) (bool, error) {
+	db := sm.db
 	changed := false
 	for _, name := range sortedKeys(entities) {
 		def := entities[name]
@@ -624,7 +629,8 @@ func (db *ladybugDB) repairCatalogAgainstMetadataLocked(
 // catalog table lacks, returning the names of any string columns added (for
 // the caller's FTS rebuild). Idempotent and DDL-free when the catalog already
 // matches the metadata.
-func (db *ladybugDB) addMissingColumnsLocked(table string, existing, wanted []store.PropertyDef) ([]string, error) {
+func (sm *schemaManager) addMissingColumnsLocked(table string, existing, wanted []store.PropertyDef) ([]string, error) {
+	db := sm.db
 	existingByName := make(map[string]bool, len(existing))
 	for _, p := range existing {
 		existingByName[p.Name] = true
