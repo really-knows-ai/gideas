@@ -861,7 +861,62 @@ func (s *CartographerServer) GetTransactionDiff(
 			resp.DeletedEdges = append(resp.DeletedEdges, de)
 		}
 	}
+
+	// The change log is operation-based (gitstore keeps an ID that is both
+	// created and deleted by a transaction in both the added and deleted
+	// buckets), but the commit path applies final-state semantics
+	// (resolveSameIDSequences). Without the same reduction here, a net-zero
+	// element would be reported in both added_entities and deleted_entities —
+	// a wire inconsistency a review node consuming the diff would observe. Apply
+	// the same final-state reduction so a net-zero element appears in at most
+	// one bucket, consistent with the committed tree.
+	tc := groupChanges(state.ChangeLog)
+	if err := s.resolveSameIDSequences(ctx, req.TransactionId, &tc); err != nil {
+		return nil, mapGitError(err)
+	}
+	addedIDs := make(map[string]bool)
+	for _, entries := range tc.addedEntities {
+		for _, e := range entries {
+			addedIDs[e.ID] = true
+		}
+	}
+	deletedIDs := make(map[string]bool)
+	for _, ids := range tc.deletedEntities {
+		for _, id := range ids {
+			deletedIDs[id] = true
+		}
+	}
+	// resolveSameIDSequences leaves edges untouched (CreateEdge always generates
+	// a fresh UUID, so a same-ID edge add+delete is necessarily create-then-delete
+	// with an absent final state). Drop the create from the added bucket so a
+	// net-zero edge is likewise not reported as both added and deleted.
+	for _, e := range resp.DeletedEdges {
+		deletedIDs[e.Id] = true
+	}
+	edgeAddedIDs := make(map[string]bool)
+	for _, e := range resp.AddedEdges {
+		if !deletedIDs[e.Id] {
+			edgeAddedIDs[e.Id] = true
+		}
+	}
+	resp.AddedEntities = keepDiffIDs(resp.AddedEntities, addedIDs)
+	resp.DeletedEntities = keepDiffIDs(resp.DeletedEntities, deletedIDs)
+	resp.AddedEdges = keepDiffIDs(resp.AddedEdges, edgeAddedIDs)
+	resp.DeletedEdges = keepDiffIDs(resp.DeletedEdges, deletedIDs)
 	return resp, nil
+}
+
+// keepDiffIDs returns entries whose IDs are present in keep, preserving order.
+// It is the presentation-side counterpart to the commit path's same-ID final
+// state reduction: entries that net out of a bucket are dropped.
+func keepDiffIDs(entries []*flowv1.DiffEntry, keep map[string]bool) []*flowv1.DiffEntry {
+	out := entries[:0]
+	for _, e := range entries {
+		if keep[e.Id] {
+			out = append(out, e)
+		}
+	}
+	return out
 }
 
 func (s *CartographerServer) ExtendTimeout(
