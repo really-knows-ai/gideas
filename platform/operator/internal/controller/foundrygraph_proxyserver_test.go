@@ -646,6 +646,71 @@ func TestExportGraphCannotStartStreamIsUnavailable(t *testing.T) {
 	}
 }
 
+// TestExportGraphStreamEstablishmentCallerContextStatusPassesThrough asserts that a
+// caller-context deadline/cancellation surfacing at stream establishment (the
+// cc.ExportGraph(ctx, req) call) is passed through verbatim as DEADLINE_EXCEEDED /
+// CANCELED rather than flattened to UNAVAILABLE — matching the Sidecar relay
+// (cartographer.go, which returns the establishment error verbatim). The SPEC error-table
+// row "ExportGraph stream-establishment failure" → UNAVAILABLE covers a "Cartographer could
+// not be reached" transport failure, not the caller's own timeout/cancel; flattening the
+// latter would make the two relays of the same row behave differently on the wire.
+func TestExportGraphStreamEstablishmentCallerContextStatusPassesThrough(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		code codes.Code
+	}{
+		{"deadline exceeded", codes.DeadlineExceeded},
+		{"canceled", codes.Canceled},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rt := NewProxyRoutingTable()
+			rt.Register("ns", "graph", "cartographer-graph.ns.svc.cluster.local:50051")
+
+			_, priv, err := ed25519.GenerateKey(rand.Reader)
+			if err != nil {
+				t.Fatalf("generate signing key: %v", err)
+			}
+
+			s := &ProxyServer{
+				routingTable: rt,
+				k8sClient:    authProxyClient(t, true, true),
+				authCache:    newAuthCache(30 * time.Second),
+				dialer: func(ctx context.Context, endpoint string) (CartographerClient, error) {
+					return &mockCartographerClient{
+						exportGraphFn: func(ctx context.Context, in *flowv1gen.ExportGraphRequest) (flowv1gen.CartographerService_ExportGraphClient, error) {
+							// The caller's context deadline/cancellation surfaces here, at
+							// establishment, as the caller-context status.
+							return nil, status.Error(tc.code, "caller context deadline/cancel during establishment")
+						},
+					}, nil
+				},
+				operatorSigningKey: priv,
+			}
+
+			stream := &mockExportStream{}
+			md := metadata.Pairs(
+				"x-flow-namespace", "ns",
+				"x-flow-graph-name", "graph",
+				"authorization", "Bearer valid",
+			)
+			stream.ctx = metadata.NewIncomingContext(context.Background(), md)
+
+			err = s.ExportGraph(&flowv1gen.ExportGraphRequest{Format: "json"}, stream)
+			if err == nil {
+				t.Fatal("expected an error when establishment fails with a caller-context status")
+			}
+			// The caller-context status must pass through verbatim, not be flattened to
+			// UNAVAILABLE (the Sidecar relay surfaces the establishment error verbatim).
+			if status.Code(err) != tc.code {
+				t.Errorf("expected %v to pass through verbatim, got %v", tc.code, status.Code(err))
+			}
+			if len(stream.sends) != 0 {
+				t.Error("expected no chunks forwarded for an establishment failure")
+			}
+		})
+	}
+}
+
 // TestExportGraphRawRecvErrorIsInternal exercises the raw (non-status) mid-stream Recv error
 // mapping (foundrygraph_proxyserver.go:296-303): a plain error from Recv — not a gRPC status —
 // falls through to the "export stream failed" INTERNAL branch. The existing tests only inject
@@ -948,15 +1013,20 @@ func TestSignCapabilitiesValidSignature(t *testing.T) {
 
 // TestSignCapabilitiesFailClosed (item 10) asserts signCapabilities returns an error when
 // the operator signing key has the wrong length, rather than forwarding an unsigned/empty
-// signature — fail closed, never fail open.
+// signature — fail closed, never fail open. The error must be a plain (non-status) error,
+// NOT a SPEC-attributed gRPC status: the SPEC error table names no row for a malformed
+// signing key, so surfacing a named status (previously codes.Internal) would fabricate a
+// table code for a local operator misconfiguration.
 func TestSignCapabilitiesFailClosed(t *testing.T) {
 	s := &ProxyServer{operatorSigningKey: []byte("too-short")} // 9 bytes ≠ 64
 	_, err := s.signCapabilities("READ:graph/entity/*")
 	if err == nil {
 		t.Fatal("expected error for wrong-length signing key (must fail closed)")
 	}
-	if status.Code(err) != codes.Internal {
-		t.Errorf("expected codes.Internal on key mismatch, got %v", status.Code(err))
+	// A plain error surfaces over gRPC as the generic codes.Unknown, not a named status the
+	// SPEC error table assigns to this (un-named) local misconfiguration condition.
+	if status.Code(err) != codes.Unknown {
+		t.Errorf("expected a plain (non-status) error surfacing as codes.Unknown, got %v", status.Code(err))
 	}
 }
 

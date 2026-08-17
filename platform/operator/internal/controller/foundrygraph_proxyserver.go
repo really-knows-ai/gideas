@@ -21,6 +21,7 @@ import (
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -182,7 +183,13 @@ type signedCapabilities struct {
 func (s *ProxyServer) signCapabilities(capabilities string) (*signedCapabilities, error) {
 	now := strconv.FormatInt(time.Now().Unix(), 10)
 	if len(s.operatorSigningKey) != ed25519.PrivateKeySize {
-		return nil, status.Error(codes.Internal, "operator signing key has wrong length; refusing to forward unsigned capabilities")
+		// The malformed operator signing key is a local operator misconfiguration, not a
+		// condition the SPEC error table names for ExportGraph (the table maps no row to
+		// INTERNAL/any code for a bad signing key). Returning a SPEC-attributed gRPC status
+		// here would fabricate a named status the table does not assign to this condition,
+		// so fail closed with a plain error (surfaced over gRPC as the generic Unknown)
+		// rather than a table-named code.
+		return nil, errors.New("operator signing key has wrong length; refusing to forward unsigned capabilities")
 	}
 	payload := capabilities + "|" + now
 	sig := ed25519.Sign(ed25519.PrivateKey(s.operatorSigningKey), []byte(payload))
@@ -304,6 +311,16 @@ func (s *ProxyServer) ExportGraph(req *flowv1gen.ExportGraphRequest, stream flow
 	// INTERNAL case, not a dial-timeout Unavailable.
 	clientStream, err := cc.ExportGraph(ctx, req)
 	if err != nil {
+		// A caller-context deadline/cancellation during establishment is the caller's own
+		// timeout/cancel, not a "Cartographer unreachable" transport failure — surface it
+		// verbatim exactly as the Sidecar relay (cartographer.go) does, so DEADLINE_EXCEEDED
+		// /CANCELED are not flattened into UNAVAILABLE and the two relays of the same SPEC
+		// row behave identically. Any other pre-stream establishment failure (connect/
+		// transport before any chunk) is the SPEC error-table row "ExportGraph
+		// stream-establishment failure" → UNAVAILABLE.
+		if st, ok := status.FromError(err); ok && (st.Code() == codes.DeadlineExceeded || st.Code() == codes.Canceled) {
+			return err
+		}
 		return status.Errorf(codes.Unavailable, "cannot start export stream: %v", err)
 	}
 
