@@ -26,6 +26,9 @@ import (
 // the authoritative resolved-type check; if a regression made the per-type
 // check pass or skip, these subtests fail.
 func TestWriteMethods_WrongEntityTypeCapabilityDenied(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: real git")
+	}
 	// seedComponentAndService creates one Component and one Service entity in
 	// the transaction branch, returning their IDs.
 	seedComponentAndService := func(t *testing.T, srv *CartographerServer, txID string) (componentID, serviceID string) {
