@@ -263,7 +263,13 @@ func runGraphExportWith(ctx context.Context, exporter graphExporter, params grap
 	// Look up the FoundryGraph CR as a validation gate.
 	if err := exporter.lookupFoundryGraph(ctx, params.namespace, params.graphName); err != nil {
 		if apierrors.IsNotFound(err) {
-			return fmt.Errorf("FAILED_PRECONDITION: no Cartographer endpoint available in namespace %q "+
+			// Local CLI gate, not an RPC status: the FoundryGraph lookup happens
+			// before any RPC is dialed, and the SPEC error table assigns no
+			// FAILED_PRECONDITION row to "FoundryGraph absent on export" (the
+			// only export-path rows are INVALID_ARGUMENT / RESOURCE_EXHAUSTED /
+			// UNAVAILABLE / INTERNAL / DEADLINE_EXCEEDED; keep the label free of
+			// a fabricated wire code so consumers don't misattribute it).
+			return fmt.Errorf("no Cartographer endpoint available in namespace %q "+
 				"(FoundryGraph %q not found)", params.namespace, params.graphName)
 		}
 		return fmt.Errorf("failed to look up FoundryGraph %q: %w", params.graphName, err)

@@ -245,7 +245,7 @@ func TestRunGraphExport_UnsupportedFormatRejected(t *testing.T) {
 
 // ─── FoundryGraph validation ───────────────────────────────────────────────
 
-func TestRunGraphExport_FoundryGraphNotFound_FailedPrecondition(t *testing.T) {
+func TestRunGraphExport_FoundryGraphNotFound(t *testing.T) {
 	e := successExporter()
 	e.lookupErr = apierrors.NewNotFound(
 		schema.GroupResource{Group: "flow.foundry.io", Resource: "foundrygraphs"}, "flow-graph",
@@ -254,10 +254,13 @@ func TestRunGraphExport_FoundryGraphNotFound_FailedPrecondition(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
-	for _, want := range []string{"FAILED_PRECONDITION", "flow-graph", "flow-system"} {
+	for _, want := range []string{"flow-graph", "flow-system"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("expected error to contain %q, got: %v", want, err)
 		}
+	}
+	if strings.Contains(err.Error(), "FAILED_PRECONDITION") {
+		t.Errorf("local FoundryGraph gate must not surface a fabricated FAILED_PRECONDITION wire code, got: %v", err)
 	}
 }
 
