@@ -22,10 +22,12 @@ type session struct {
 
 	timeout time.Duration
 
-	// Base context for Cartographer operations, cancelled on Close().
-	// ponytail: Cartographer operations use a session-scoped base context;
-	// non-Cartographer domain objects use per-call background contexts.
-	// A follow-up pass should unify all domain objects under this context.
+	// Session-scoped base context, cancelled on Close().
+	// ponytail: Cartographer operations (Graph, Transaction) and the
+	// Feedback domain object use this session-scoped base context; the
+	// remaining non-Cartographer domain objects (Artefact, Workitem, Child,
+	// LawGroup) still use per-call background contexts. A follow-up pass
+	// should unify all domain objects under this context.
 	ctx    context.Context
 	cancel context.CancelFunc
 
