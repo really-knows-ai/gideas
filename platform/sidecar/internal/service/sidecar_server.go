@@ -24,7 +24,6 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
-	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
 
@@ -457,21 +456,10 @@ func (s *SidecarServer) RecordTelemetry(
 }
 
 // ExtractIdentityFromMD extracts Sidecar-injected identity from incoming
-// gRPC metadata. The namespace field reads x-flow-namespace; workitem_id
-// and node_id are unchanged.
+// gRPC metadata via the shared flowmeta.MetadataValue helper. The namespace
+// field reads x-flow-namespace; workitem_id and node_id likewise.
 func ExtractIdentityFromMD(ctx context.Context) (namespace, workitemID, nodeID string) {
-	md, ok := metadata.FromIncomingContext(ctx)
-	if !ok {
-		return
-	}
-	if vals := md.Get(flowmeta.MetadataKeyNamespace); len(vals) > 0 {
-		namespace = vals[0]
-	}
-	if vals := md.Get(flowmeta.MetadataKeyWorkitemID); len(vals) > 0 {
-		workitemID = vals[0]
-	}
-	if vals := md.Get(flowmeta.MetadataKeyNodeID); len(vals) > 0 {
-		nodeID = vals[0]
-	}
-	return
+	return flowmeta.MetadataValue(ctx, flowmeta.MetadataKeyNamespace),
+		flowmeta.MetadataValue(ctx, flowmeta.MetadataKeyWorkitemID),
+		flowmeta.MetadataValue(ctx, flowmeta.MetadataKeyNodeID)
 }
