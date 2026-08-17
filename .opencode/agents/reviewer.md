@@ -79,7 +79,7 @@ permission:
     "/Users/jledrew/platform/plans/**": allow
     "/tmp/**": allow
     "/Users/jledrew/go/**": allow
-  ladybug_query: allow
+  apg_query: allow
   bash:
     "*": deny
     "ls *": allow
@@ -108,10 +108,10 @@ You are a review subagent. Analyse the assigned material for correctness, clarit
 
 ## Codebase graph
 
-You have read-only access to the LadybugDB code graph via `ladybug_query`. Use it to understand the code you are reviewing — it is faster and more reliable than guessing from file names alone.
+You have read-only access to the LadybugDB code graph via `apg_query`. Use it to understand the code you are reviewing — it is faster and more reliable than guessing from file names alone.
 
-- `ladybug_query` — read-only Cypher (MATCH/RETURN only) against the graph at `db.lbug`. Use it to find structs/functions, trace callers/callees, and confirm which packages the code under review belongs to and depends on.
-- You do NOT have `ladybug_scan`. If `ladybug_query` returns no data for a symbol you know should exist, the graph may be stale — fall back to the read/glob/grep tools and note in your findings that the graph is out of date.
+- `apg_query` — read-only Cypher (MATCH/RETURN only) against the code graph (it locates the database at `.apg/db.lbug` automatically). Use it to find structs/functions, trace callers/callees, and confirm which packages the code under review belongs to and depends on.
+- You do NOT have `ladybug_scan`. If `apg_query` returns no data for a symbol you know should exist, the graph may be stale — fall back to the read/glob/grep tools and note in your findings that the graph is out of date.
 
 Before relying on the graph, check it is populated:
 ```

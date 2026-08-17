@@ -20,7 +20,7 @@ permission:
     "/tmp/**": allow
     "/Users/jledrew/go/**": allow
   todowrite: allow
-  ladybug_query: allow
+  apg_query: allow
   ladybug_scan: allow
   task:
     "*": deny
@@ -59,10 +59,10 @@ You are an orchestration subagent. You have read-only access to the codebase and
 
 ## Codebase graph
 
-You have access to the LadybugDB code graph (`ladybug_query` and `ladybug_scan`). Use it to understand the codebase before and while you delegate, so you partition work correctly and give subagents precise, verifiable targets.
+You have access to the LadybugDB code graph (`apg_query` and `ladybug_scan`). Use it to understand the codebase before and while you delegate, so you partition work correctly and give subagents precise, verifiable targets.
 
-- `ladybug_query` — read-only Cypher (MATCH/RETURN only) against the graph at `db.lbug`. Use it to find the packages, structs, functions, and call edges relevant to the work you are coordinating. This is your fastest way to see what code exists and how it is connected.
-- `ladybug_scan` — rebuilds the graph by re-scanning the project. Run it only if `ladybug_query` returns no data or you suspect the graph is stale after source files changed.
+- `apg_query` — read-only Cypher (MATCH/RETURN only) against the graph. Use it to find the packages, structs, functions, and call edges relevant to the work you are coordinating. This is your fastest way to see what code exists and how it is connected.
+- `ladybug_scan` — rebuilds the graph by re-scanning the project. Run it only if `apg_query` returns no data or you suspect the graph is stale after source files changed.
 
 Before relying on the graph, check it is populated:
 ```
@@ -71,7 +71,7 @@ MATCH (f:Function) RETURN count(*) as functions
 ```
 If both are zero (or the query errors), run `ladybug_scan` first.
 
-The full graph schema (node/edge labels, FQN conventions, common query patterns) is documented in `.opencode/agents/codebase-navigator.md`. Read that file for query patterns before writing Cypher, and follow its conventions: every FQN is fully qualified and module-prefixed (e.g. `github.com/foundry/flow/sidecar/internal/service.Server`), reserved words are backticked, and every query ends with `;`.
+The full graph schema (node/edge labels, FQN conventions, common query patterns) is documented in `.opencode/agents/codebase-navigator.md` (the database lives at `.apg/db.lbug` — `apg_query` locates it automatically). Read that file for query patterns before writing Cypher, and follow its conventions: every FQN is fully qualified and module-prefixed (e.g. `github.com/foundry/flow/sidecar/internal/service.Server`), reserved words are backticked, and every query ends with `;`.
 
 Use the graph to:
 - Resolve which package/module an implementer's target file belongs to before dispatching, so you can group work that touches the same module and serialise those groups.

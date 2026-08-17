@@ -100,7 +100,7 @@ permission:
     "/Users/jledrew/platform/plans/**": allow
     "/tmp/**": allow
     "/Users/jledrew/go/**": allow
-  ladybug_query: allow
+  apg_query: allow
   ladybug_scan: allow
   bash:
     "*": deny
@@ -152,10 +152,10 @@ You are an implementation subagent. Execute the assigned task directly, make the
 
 ## Codebase graph
 
-You have access to the LadybugDB code graph (`ladybug_query` and `ladybug_scan`). Use it to understand the code you are changing before you touch it, so your fix is smallest and lands in the right place.
+You have access to the LadybugDB code graph (`apg_query` and `ladybug_scan`). Use it to understand the code you are changing before you touch it, so your fix is smallest and lands in the right place.
 
-- `ladybug_query` — read-only Cypher (MATCH/RETURN only) against the graph at `db.lbug`. Use it to find the structs/functions involved, trace callers/callees, and confirm the package layout around your change.
-- `ladybug_scan` — rebuilds the graph by re-scanning the project. Run it only if `ladybug_query` returns no data or the graph is stale after you (or a sibling) changed source files.
+- `apg_query` — read-only Cypher (MATCH/RETURN only) against the code graph (it locates the database at `.apg/db.lbug` automatically). Use it to find the structs/functions involved, trace callers/callees, and confirm the package layout around your change.
+- `ladybug_scan` — rebuilds the graph by re-scanning the project. Run it only if `apg_query` returns no data or the graph is stale after you (or a sibling) changed source files.
 
 Before relying on the graph, check it is populated:
 ```

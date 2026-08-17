@@ -119,8 +119,9 @@ current code.  This is not a fresh review of the whole file — you are only
 checking whether the specific claim(s) below remain valid.
 
 **Codebase graph (use it to locate and verify the code):**
-The LadybugDB code graph at `db.lbug` is available read-only via
-`ladybug_query`.  Check it is populated (`MATCH (s:Struct) RETURN count(*)`)
+The LadybugDB code graph is available read-only via `apg_query` (it locates
+the database at `.apg/db.lbug` automatically).  Check it is populated
+(`MATCH (s:Struct) RETURN count(*)`)
 and read `.opencode/agents/codebase-navigator.md` for the schema and query
 patterns.  Use it to locate the struct/function an item references by FQN,
 and to trace its callers/callees, so your verification checks the real code
@@ -318,8 +319,9 @@ a pre-limited subset):**
 [list of file paths]
 
 **Codebase graph (use it to understand and verify the code you review):**
-The LadybugDB code graph at `db.lbug` is available read-only via
-`ladybug_query`.  Check it is populated (`MATCH (s:Struct) RETURN count(*)`)
+The LadybugDB code graph is available read-only via `apg_query` (it locates
+the database at `.apg/db.lbug` automatically).  Check it is populated
+(`MATCH (s:Struct) RETURN count(*)`)
 and read `.opencode/agents/codebase-navigator.md` for the schema and query
 patterns (fully-qualified module-prefixed FQNs, backticked reserved words,
 `;`-terminated queries).  Use it to:

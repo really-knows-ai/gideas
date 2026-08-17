@@ -135,8 +135,9 @@ clashing on the shared working tree.
 <comma-separated list of secondary files referenced by items in this group>
 
 **Codebase graph (use it before and while you fix):**
-The LadybugDB code graph at `db.lbug` is available via `ladybug_query`
-(read-only Cypher) and `ladybug_scan` (rebuilds the graph).  Before editing,
+The LadybugDB code graph is available via `apg_query` (read-only Cypher; it
+locates the database at `.apg/db.lbug` automatically) and `ladybug_scan`
+(rebuilds the graph).  Before editing,
 check the graph is populated:
 `MATCH (s:Struct) RETURN count(*)` — if zero, run `ladybug_scan` first.
 Read `.opencode/agents/codebase-navigator.md` for the schema and query
@@ -262,8 +263,9 @@ not tracked).
 <comma-separated list of secondary files referenced by items in this group>
 
 **Codebase graph (use it before and while you fix):**
-The LadybugDB code graph at `db.lbug` is available via `ladybug_query`
-(read-only Cypher) and `ladybug_scan` (rebuilds the graph).  Before editing,
+The LadybugDB code graph is available via `apg_query` (read-only Cypher; it
+locates the database at `.apg/db.lbug` automatically) and `ladybug_scan`
+(rebuilds the graph).  Before editing,
 check the graph is populated:
 `MATCH (s:Struct) RETURN count(*)` — if zero, run `ladybug_scan` first.
 Read `.opencode/agents/codebase-navigator.md` for the schema and query
