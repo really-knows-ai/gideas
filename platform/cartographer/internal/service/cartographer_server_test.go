@@ -12942,6 +12942,229 @@ func TestRecoverOpenTransactionsMidRefreshEmptyDiffRollsBack(t *testing.T) {
 	}
 }
 
+// TestRecoverOpenTransactionsStaleBranchNoFalseDeletions pins SPEC R9
+// change-log recovery computing the reconstruction diff against the
+// transaction's true baseline (MainHeadAtLastSync) rather than current main: a
+// transaction whose branch predates a main advancement (stale branch) must not
+// report entities added to main after the branch began as "suspected deletions"
+// — it never deleted them, and doing so wedges the transaction into an
+// unresolvable ABORTED refresh. Recovery (recoverEntityChanges) only flags an
+// entity as a suspected deletion when it was present in main at the
+// transaction's begin head and is absent from the branch DB.
+func TestRecoverOpenTransactionsStaleBranchNoFalseDeletions(t *testing.T) {
+	ctx := testCtx()
+	dataPath := t.TempDir()
+	opPub, _ := generateTestKey()
+
+	st, err := ladybug.Open(dataPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	gs, err := gitstore.New(dataPath)
+	if err != nil {
+		t.Fatalf("open git store: %v", err)
+	}
+	srv := NewCartographerServer(
+		st, gs, opPub, initTestKey(), nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000,
+		WithLadybugPath(dataPath),
+	)
+	srv.MarkDBReady()
+	applyTestSchema(ctx, t, st)
+	// Entity A is present at the transaction's begin head.
+	mainA, err := st.CreateEntity(ctx, "Component", "", map[string]string{"name": "main"}, nil, "main")
+	if err != nil {
+		t.Fatalf("create main entity A: %v", err)
+	}
+	commitGitEntity(ctx, t, gs, mainA.Id, "main")
+	begin, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
+	if err != nil {
+		t.Fatalf("BeginTransaction: %v", err)
+	}
+	// The transaction legitimately modifies A.
+	if _, err := srv.UpdateEntity(ctx, &flowv1.UpdateEntityRequest{
+		Id: mainA.Id, Properties: map[string]string{"name": "tx"}, TransactionId: begin.TransactionId,
+	}); err != nil {
+		t.Fatalf("UpdateEntity in transaction: %v", err)
+	}
+	// Main advances past the transaction's begin head: a NEW entity B is
+	// committed to main after the branch began (stale branch).
+	commitGitEntity(ctx, t, gs, "99999999-9999-4999-8999-999999999999", "added-later")
+
+	if err := st.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+	reopened, err := ladybug.Open(dataPath)
+	if err != nil {
+		t.Fatalf("reopen store: %v", err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	reopenedGit, err := gitstore.New(dataPath)
+	if err != nil {
+		t.Fatalf("reopen git store: %v", err)
+	}
+	restarted := NewCartographerServer(
+		reopened, reopenedGit, opPub, initTestKey(), nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000,
+		WithLadybugPath(dataPath),
+	)
+	restarted.MarkDBReady()
+	if err := restarted.RecoverOpenTransactions(ctx); err != nil {
+		t.Fatalf("RecoverOpenTransactions: %v", err)
+	}
+	state, err := restarted.txManager.Lookup(begin.TransactionId)
+	if err != nil {
+		t.Fatalf("lookup recovered transaction: %v", err)
+	}
+	diff, err := restarted.GetTransactionDiff(ctx, &flowv1.GetTransactionDiffRequest{TransactionId: begin.TransactionId})
+	if err != nil {
+		t.Fatalf("GetTransactionDiff: %v", err)
+	}
+	// A is a genuine modification (present at the begin head, content changed).
+	if len(diff.ModifiedEntities) != 1 || diff.ModifiedEntities[0].Id != mainA.Id {
+		t.Fatalf("expected the transaction's own modification of A, got %+v", diff.ModifiedEntities)
+	}
+	// B was added to main after the branch began and must NOT be reported as a
+	// suspected deletion of this transaction.
+	if len(diff.DeletedEntities) != 0 {
+		t.Fatalf("stale branch produced false suspected deletions: %+v", diff.DeletedEntities)
+	}
+	if state.MainHeadAtLastSync == "" {
+		t.Fatal("recovered stale transaction has no begin-head baseline")
+	}
+	// The transaction is not falsely wedged: main advanced (B) while the tx only
+	// modified A, so a Refresh re-baselines cleanly (no conflicting UUID) instead
+	// of ABORTING on a false suspected deletion.
+	if _, err := restarted.RefreshTransaction(ctx, &flowv1.RefreshTransactionRequest{
+		TransactionId: begin.TransactionId,
+	}); err != nil {
+		t.Fatalf("recovered stale transaction failed to refresh (wedged): %v", err)
+	}
+}
+
+// TestRecoverOpenTransactionsAbortedRefreshRollsBackLoudly pins SPEC R9 refresh
+// step 4's "On ABORTED, the transaction's change log is preserved" guarantee
+// together with its crash-durability boundary (SPEC R9 change-log recovery
+// point 4): after a refresh returns ABORTED, the in-memory change log is still
+// inspectable via GetTransactionDiff (the node can decide how to proceed), but
+// it is in-memory only — the branch DB was restored to a clean copy of main. A
+// crash in the window before the node rolls back therefore loses the change
+// log: recovery reconstructs an empty diff and, because the refresh-in-progress
+// marker is still set on the durable record, rolls the transaction back loudly
+// — never silently reporting it as committed and never touching another
+// transaction's data.
+func TestRecoverOpenTransactionsAbortedRefreshRollsBackLoudly(t *testing.T) {
+	ctx := testCtx()
+	dataPath := t.TempDir()
+	opPub, _ := generateTestKey()
+
+	st, err := ladybug.Open(dataPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	gs, err := gitstore.New(dataPath)
+	if err != nil {
+		t.Fatalf("open git store: %v", err)
+	}
+	srv := NewCartographerServer(
+		st, gs, opPub, initTestKey(), nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000,
+		WithLadybugPath(dataPath),
+	)
+	srv.MarkDBReady()
+	applyTestSchema(ctx, t, st)
+	mainA, err := st.CreateEntity(ctx, "Component", "", map[string]string{"name": "main"}, nil, "main")
+	if err != nil {
+		t.Fatalf("create main entity A: %v", err)
+	}
+	commitGitEntity(ctx, t, gs, mainA.Id, "main")
+
+	begin, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
+	if err != nil {
+		t.Fatalf("BeginTransaction: %v", err)
+	}
+	// The transaction modifies A; main also modifies A, forcing an ABORTED
+	// refresh conflict.
+	if _, err := srv.UpdateEntity(ctx, &flowv1.UpdateEntityRequest{
+		Id: mainA.Id, Properties: map[string]string{"name": "tx"}, TransactionId: begin.TransactionId,
+	}); err != nil {
+		t.Fatalf("UpdateEntity in transaction: %v", err)
+	}
+	if err := gs.WithGitLock(func() error {
+		if err := gs.RestoreMain(ctx); err != nil {
+			return err
+		}
+		if err := gs.WriteEntityFiles(ctx, "Component", []gitstore.Entity{{
+			ID: mainA.Id, Type: "Component", Properties: map[string]string{"name": "main-v2"},
+		}}); err != nil {
+			return err
+		}
+		if err := gs.AddAll(ctx, "entities"); err != nil {
+			return err
+		}
+		return gs.Commit(ctx, "main advances")
+	}); err != nil {
+		t.Fatalf("advance main with conflicting change: %v", err)
+	}
+
+	// Refresh returns ABORTED (the transaction modified A while main also
+	// changed A).
+	if _, err := srv.RefreshTransaction(ctx, &flowv1.RefreshTransactionRequest{
+		TransactionId: begin.TransactionId,
+	}); status.Code(err) != codes.Aborted {
+		t.Fatalf("expected ABORTED refresh, got %v", err)
+	}
+
+	// SPEC step 4 (in-process): the change log is preserved after ABORTED — the
+	// node can still inspect the diff.
+	diff, err := srv.GetTransactionDiff(ctx, &flowv1.GetTransactionDiffRequest{TransactionId: begin.TransactionId})
+	if err != nil {
+		t.Fatalf("GetTransactionDiff after ABORTED: %v", err)
+	}
+	if len(diff.ModifiedEntities) != 1 || diff.ModifiedEntities[0].Id != mainA.Id {
+		t.Fatalf("expected the transaction's change preserved after ABORTED, got %+v", diff.ModifiedEntities)
+	}
+	durable, err := st.LoadBranchTransactionState(ctx, begin.TransactionId)
+	if err != nil {
+		t.Fatalf("load branch state: %v", err)
+	}
+	if !durable.BranchRefreshInProgress {
+		t.Fatal("expected refresh-in-progress marker set on the durable record after ABORTED")
+	}
+
+	oldLogger := slog.Default()
+	defer slog.SetDefault(oldLogger)
+	captured := &captureLogHandler{}
+	slog.SetDefault(slog.New(captured))
+
+	if err := st.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+	reopened, err := ladybug.Open(dataPath)
+	if err != nil {
+		t.Fatalf("reopen store: %v", err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	reopenedGit, err := gitstore.New(dataPath)
+	if err != nil {
+		t.Fatalf("reopen git store: %v", err)
+	}
+	restarted := NewCartographerServer(
+		reopened, reopenedGit, opPub, initTestKey(), nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000,
+		WithLadybugPath(dataPath),
+	)
+	restarted.MarkDBReady()
+	if err := restarted.RecoverOpenTransactions(ctx); err != nil {
+		t.Fatalf("RecoverOpenTransactions: %v", err)
+	}
+	// The transaction is rolled back loudly (empty reconstructed diff + marker),
+	// never recovered as active.
+	if _, err := restarted.txManager.Lookup(begin.TransactionId); err == nil {
+		t.Fatal("ABORTED-refresh-crash transaction was recovered as active despite an empty branch diff")
+	}
+	if !slices.Contains(captured.messages,
+		"RecoverOpenTransactions: rolled back transaction interrupted by a mid-refresh crash (never committed)") {
+		t.Fatalf("expected loud mid-refresh rollback log, got %v", captured.messages)
+	}
+}
+
 // TestCommitTransaction_MergeCompletedAckWaitsForPush pins the MergeCompleted
 // retry path's WithAck contract (SPEC R10, SPEC:630-634): an acked commit
 // retried after the merge landed must wake the sync worker and block until the
