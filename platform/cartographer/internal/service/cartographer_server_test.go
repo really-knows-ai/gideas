@@ -695,15 +695,28 @@ func initTestKey() ed25519.PublicKey {
 	return pub
 }
 
-// openTestStore is the service-test constructor for a real store. The exported
-// ladybug.OpenInMemory seam was removed as test-only dead production surface
-// (LEARNINGS: test-only callers do not justify a production surface), so
-// service tests open a temp-dir file-backed store instead.
+// openTestStore is the service-test constructor for a store. It returns an
+// in-memory store (ladybug.OpenInMemory): full store.Store semantics without the
+// per-test file-backed DDL and disk I/O. Callers only ever use the returned
+// handle within the test's process lifetime — they never receive the backing
+// path, so they cannot reopen/persist it — meaning the in-memory engine changes
+// no observable behaviour while removing the file-backed open cost for every
+// test. Tests that must survive a re-open (crash-window recovery, file
+// re-hydration) open their own file-backed store via ladybug.Open on an explicit
+// path and stay on that path (see the reopen/durability tests).
 func openTestStore(t *testing.T) (store.Store, error) {
-	return ladybug.Open(t.TempDir())
+	t.Helper()
+	return ladybug.OpenInMemory()
 }
 
-// newTestServer creates a CartographerServer with a temp-dir store and temp gitstore.
+// newTestServer creates a CartographerServer with an in-memory store and a temp
+// gitstore. In-memory (ladybug.OpenInMemory via openTestStore) is the unit-test
+// default: it gives full store.Store semantics (schema, CRUD, branches,
+// rehydration) without the per-test file-backed DDL and disk I/O that made the
+// service suite integration-flavoured and slow. Durability is not asserted
+// here; tests that must survive a re-open (crash-window recovery, file
+// re-hydration) build a file-backed store and gitstore directly (via
+// ladybug.Open) and stay on that path.
 func newTestServer(t *testing.T) (*CartographerServer, store.Store) {
 	t.Helper()
 	scPub := initTestKey()
