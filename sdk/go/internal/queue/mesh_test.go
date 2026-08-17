@@ -37,31 +37,6 @@ func (m *mockResolver) setAddrs(addrs []string) {
 	m.addrs = addrs
 }
 
-// telemetryCapture collects telemetry events for assertions.
-type telemetryCapture struct {
-	mu     sync.Mutex
-	events []telemetryEvent
-}
-
-type telemetryEvent struct {
-	event   string
-	payload map[string]any
-}
-
-func (tc *telemetryCapture) capture(_ context.Context, event string, payload map[string]any) {
-	tc.mu.Lock()
-	defer tc.mu.Unlock()
-	tc.events = append(tc.events, telemetryEvent{event: event, payload: payload})
-}
-
-func (tc *telemetryCapture) getEvents() []telemetryEvent {
-	tc.mu.Lock()
-	defer tc.mu.Unlock()
-	cp := make([]telemetryEvent, len(tc.events))
-	copy(cp, tc.events)
-	return cp
-}
-
 // meshTestShard sets up a bufconn-backed QueuePeerService server with an
 // in-memory store. Returns the store, server, and a dialer address.
 type meshTestShard struct {
@@ -135,8 +110,7 @@ func TestQueueMesh_ScatterGather(t *testing.T) {
 	_ = shard2.store.enqueue(ctx, "wi-2")
 
 	// Create a mesh with shard-0 as local, peer clients for shard-1 and shard-2.
-	tc := &telemetryCapture{}
-	mesh := newQueueMesh(shard0.store, "shard-0", &mockResolver{}, "50053", tc.capture)
+	mesh := newQueueMesh(shard0.store, "shard-0", &mockResolver{}, "50053")
 
 	// Manually inject peer clients (bypassing DNS discovery).
 	mesh.peers["shard-1"] = connectToShard(t, shard1)
@@ -176,8 +150,7 @@ func TestQueueMesh_ScatterGather_PartialFailure(t *testing.T) {
 	// Stop shard-2 to simulate partial failure.
 	shard2.srv.GracefulStop()
 
-	tc := &telemetryCapture{}
-	mesh := newQueueMesh(shard0.store, "shard-0", &mockResolver{}, "50053", tc.capture)
+	mesh := newQueueMesh(shard0.store, "shard-0", &mockResolver{}, "50053")
 	mesh.peers["shard-1"] = connectToShard(t, shard1)
 	mesh.peers["shard-2"] = connectToShard(t, shard2) // Will fail.
 
@@ -202,8 +175,7 @@ func TestQueueMesh_GetItem_Local(t *testing.T) {
 	shard0 := newMeshTestShard(t, "shard-0")
 	_ = shard0.store.enqueue(ctx, "wi-local")
 
-	tc := &telemetryCapture{}
-	mesh := newQueueMesh(shard0.store, "shard-0", &mockResolver{}, "50053", tc.capture)
+	mesh := newQueueMesh(shard0.store, "shard-0", &mockResolver{}, "50053")
 
 	item, err := mesh.routeGetItem(ctx, "wi-local")
 	if err != nil {
@@ -221,8 +193,7 @@ func TestQueueMesh_GetItem_Remote(t *testing.T) {
 	shard1 := newMeshTestShard(t, "shard-1")
 	_ = shard1.store.enqueue(ctx, "wi-remote")
 
-	tc := &telemetryCapture{}
-	mesh := newQueueMesh(shard0.store, "shard-0", &mockResolver{}, "50053", tc.capture)
+	mesh := newQueueMesh(shard0.store, "shard-0", &mockResolver{}, "50053")
 	mesh.peers["shard-1"] = connectToShard(t, shard1)
 
 	item, err := mesh.routeGetItem(ctx, "wi-remote")
@@ -240,8 +211,7 @@ func TestQueueMesh_GetItem_NotFound(t *testing.T) {
 	shard0 := newMeshTestShard(t, "shard-0")
 	shard1 := newMeshTestShard(t, "shard-1")
 
-	tc := &telemetryCapture{}
-	mesh := newQueueMesh(shard0.store, "shard-0", &mockResolver{}, "50053", tc.capture)
+	mesh := newQueueMesh(shard0.store, "shard-0", &mockResolver{}, "50053")
 	mesh.peers["shard-1"] = connectToShard(t, shard1)
 
 	_, err := mesh.routeGetItem(ctx, "nonexistent")
@@ -260,8 +230,7 @@ func TestQueueMesh_ProxyClaim_Local(t *testing.T) {
 	shard0 := newMeshTestShard(t, "shard-0")
 	_ = shard0.store.enqueue(ctx, "wi-local")
 
-	tc := &telemetryCapture{}
-	mesh := newQueueMesh(shard0.store, "shard-0", &mockResolver{}, "50053", tc.capture)
+	mesh := newQueueMesh(shard0.store, "shard-0", &mockResolver{}, "50053")
 
 	item, err := mesh.routeClaim(ctx, "wi-local")
 	if err != nil {
@@ -279,8 +248,7 @@ func TestQueueMesh_ProxyClaim_Remote(t *testing.T) {
 	shard1 := newMeshTestShard(t, "shard-1")
 	_ = shard1.store.enqueue(ctx, "wi-remote")
 
-	tc := &telemetryCapture{}
-	mesh := newQueueMesh(shard0.store, "shard-0", &mockResolver{}, "50053", tc.capture)
+	mesh := newQueueMesh(shard0.store, "shard-0", &mockResolver{}, "50053")
 	mesh.peers["shard-1"] = connectToShard(t, shard1)
 
 	item, err := mesh.routeClaim(ctx, "wi-remote")
@@ -297,8 +265,7 @@ func TestQueueMesh_ProxyClaim_ShardDown(t *testing.T) {
 
 	shard0 := newMeshTestShard(t, "shard-0")
 
-	tc := &telemetryCapture{}
-	mesh := newQueueMesh(shard0.store, "shard-0", &mockResolver{}, "50053", tc.capture)
+	mesh := newQueueMesh(shard0.store, "shard-0", &mockResolver{}, "50053")
 
 	// No peers and item not local.
 	_, err := mesh.routeClaim(ctx, "nonexistent")
@@ -315,8 +282,7 @@ func TestQueueMesh_ProxyRelease_Remote(t *testing.T) {
 	_ = shard1.store.enqueue(ctx, "wi-remote")
 	_, _ = shard1.store.claim(ctx, "wi-remote") // Claim it first.
 
-	tc := &telemetryCapture{}
-	mesh := newQueueMesh(shard0.store, "shard-0", &mockResolver{}, "50053", tc.capture)
+	mesh := newQueueMesh(shard0.store, "shard-0", &mockResolver{}, "50053")
 	mesh.peers["shard-1"] = connectToShard(t, shard1)
 
 	item, err := mesh.routeRelease(ctx, "wi-remote")
@@ -336,8 +302,7 @@ func TestQueueMesh_ProxyDecide_Remote(t *testing.T) {
 	_ = shard1.store.enqueue(ctx, "wi-remote")
 	_, _ = shard1.store.claim(ctx, "wi-remote")
 
-	tc := &telemetryCapture{}
-	mesh := newQueueMesh(shard0.store, "shard-0", &mockResolver{}, "50053", tc.capture)
+	mesh := newQueueMesh(shard0.store, "shard-0", &mockResolver{}, "50053")
 	mesh.peers["shard-1"] = connectToShard(t, shard1)
 
 	err := mesh.routeDecide(ctx, "wi-remote", "")
@@ -361,12 +326,14 @@ func TestQueueMesh_PeerDiscovery(t *testing.T) {
 
 	shard0 := newMeshTestShard(t, "shard-0")
 	resolver := &mockResolver{}
-	tc := &telemetryCapture{}
-	mesh := newQueueMesh(shard0.store, "shard-0", resolver, "50053", tc.capture)
+	mesh := newQueueMesh(shard0.store, "shard-0", resolver, "50053")
 
 	// Initially no peers.
-	if len(mesh.getPeers()) != 0 {
-		t.Fatalf("expected 0 peers initially, got %d", len(mesh.getPeers()))
+	mesh.mu.RLock()
+	initial := len(mesh.peers)
+	mesh.mu.RUnlock()
+	if initial != 0 {
+		t.Fatalf("expected 0 peers initially, got %d", initial)
 	}
 
 	// Simulate discovery finding a new peer (we can't use real addresses,
@@ -374,108 +341,10 @@ func TestQueueMesh_PeerDiscovery(t *testing.T) {
 	// For this test, we verify the resolver is called and peers are tracked.
 	resolver.setAddrs([]string{"10.0.0.1:50053"})
 
-	// Run a single discovery cycle.
+	// Run a single discovery cycle. grpc.NewClient is lazy, so the dial may
+	// succeed even without a real server behind the address; either way the
+	// discovery loop must run without panicking.
 	mesh.discover(ctx)
 
-	// The peer dial will fail (no real server), but the attempt should be made.
-	// We verify peer_joined telemetry is NOT emitted for failed connections.
-	// (The dial to a non-existent address may or may not fail immediately
-	// depending on grpc.NewClient behavior with lazy connections.)
-	peers := mesh.getPeers()
-	// grpc.NewClient is lazy so it may succeed even without a real server.
-	// Just verify the discovery loop ran without panicking.
-	_ = peers
-
 	_ = mesh.stop()
-}
-
-func TestQueueMesh_Telemetry_PeerJoin(t *testing.T) {
-	ctx := context.Background()
-
-	shard0 := newMeshTestShard(t, "shard-0")
-	shard1 := newMeshTestShard(t, "shard-1")
-
-	tc := &telemetryCapture{}
-	mesh := newQueueMesh(shard0.store, "shard-0", &mockResolver{}, "50053", tc.capture)
-
-	// Manually add a peer to trigger telemetry.
-	mesh.mu.Lock()
-	conn, err := grpc.NewClient(
-		"passthrough:///shard-1",
-		grpc.WithContextDialer(shard1.dialer),
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-	)
-	if err != nil {
-		t.Fatalf("failed to dial: %v", err)
-	}
-	mesh.conns["shard-1"] = conn
-	mesh.peers["shard-1"] = flowv1.NewQueuePeerServiceClient(conn)
-	mesh.mu.Unlock()
-
-	// Simulate discovery detecting the peer as new by removing and re-discovering.
-	mesh.mu.Lock()
-	delete(mesh.conns, "shard-1")
-	delete(mesh.peers, "shard-1")
-	mesh.mu.Unlock()
-	_ = conn.Close()
-
-	// Use a resolver that returns shard-1's address and use real dial.
-	resolver := &mockResolver{addrs: []string{"shard-1-addr"}}
-	mesh.resolver = resolver
-
-	// Since we can't easily use bufconn with the discover loop,
-	// test the telemetry callback directly.
-	tc2 := &telemetryCapture{}
-	tc2.capture(ctx, "foundry.hitl.peer_joined", map[string]any{
-		"peerId":    "shard-1",
-		"peerCount": 1,
-	})
-
-	events := tc2.getEvents()
-	found := false
-	for _, e := range events {
-		if e.event == "foundry.hitl.peer_joined" {
-			found = true
-			if e.payload["peerId"] != "shard-1" {
-				t.Errorf("expected peerId=shard-1, got %v", e.payload["peerId"])
-			}
-		}
-	}
-	if !found {
-		t.Fatal("expected foundry.hitl.peer_joined event")
-	}
-
-	_ = mesh.stop()
-}
-
-func TestQueueMesh_Telemetry_PeerLeave(t *testing.T) {
-	ctx := context.Background()
-
-	shard0 := newMeshTestShard(t, "shard-0")
-
-	tc := &telemetryCapture{}
-	tc.capture(ctx, "foundry.hitl.peer_left", map[string]any{
-		"peerId":    "shard-1",
-		"peerCount": 0,
-		"reason":    "dns_removed",
-	})
-
-	events := tc.getEvents()
-	found := false
-	for _, e := range events {
-		if e.event == "foundry.hitl.peer_left" {
-			found = true
-			if e.payload["peerId"] != "shard-1" {
-				t.Errorf("expected peerId=shard-1, got %v", e.payload["peerId"])
-			}
-			if e.payload["reason"] != "dns_removed" {
-				t.Errorf("expected reason=dns_removed, got %v", e.payload["reason"])
-			}
-		}
-	}
-	if !found {
-		t.Fatal("expected foundry.hitl.peer_left event")
-	}
-
-	_ = shard0 // ensure shard0 is used
 }

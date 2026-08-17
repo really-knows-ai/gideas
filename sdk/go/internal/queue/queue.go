@@ -51,9 +51,6 @@ type QueueManager interface {
 	// GetGlobalQueue scatter-gathers queue items from all mesh peers.
 	GetGlobalQueue(ctx context.Context, filter QueueFilter) ([]QueueItem, error)
 
-	// GetLocalQueue returns items from this shard's local store only.
-	GetLocalQueue(ctx context.Context, filter QueueFilter) ([]QueueItem, error)
-
 	// GetItem looks up a single item by Workitem ID (local first, then peers).
 	GetItem(ctx context.Context, workitemID string) (*QueueItem, error)
 
@@ -77,9 +74,6 @@ type QueueManager interface {
 	// this QueueManager instance.
 	// Returns ("", nil) when unblocked by Stop().
 	WaitForDecision(ctx context.Context, workitemID string) (string, error)
-
-	// GetPeers returns the addresses of currently connected mesh peers.
-	GetPeers(ctx context.Context) ([]string, error)
 }
 
 // PeerResolver discovers peer addresses for the Federated Queue Mesh.
