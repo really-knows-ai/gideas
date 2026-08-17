@@ -134,16 +134,18 @@ clashing on the shared working tree.
 **Read-only context files** (read for context, do not edit):
 <comma-separated list of secondary files referenced by items in this group>
 
-**Codebase graph (use it before and while you fix):**
-The LadybugDB code graph is available via `apg_query` (read-only Cypher; it
-locates the database at `.apg/db.lbug` automatically).  Before editing,
-check the graph is populated:
+**Codebase graph (start here, before reading files):**
+Start every exploration with the graph, not the files. `apg_query` is
+available read-only (it locates the database at `.apg/db.lbug`
+automatically).  Before editing, check the graph is populated:
 `MATCH (s:Struct) RETURN count(*)` — if zero or the query errors, the graph
 is empty or stale: fall back to read/glob/grep and note it, do not block on
-the graph.
+the graph (but only fall back if the graph is unavailable).
 Read `.opencode/agents/codebase-navigator.md` for the schema and query
 patterns (fully-qualified module-prefixed FQNs, backticked reserved words,
 `;`-terminated queries).  Use the graph to:
+- Locate the units in <FILE> — the structs/functions it contains and their
+  line ranges — before you open the file.
 - Find every caller of a function you touch
   (`MATCH (caller)-[:Calls]->(t {fqn: "..."}) RETURN caller.fqn`) so you fix
   the shared function once and catch sibling callers, not just the path the
@@ -151,7 +153,10 @@ patterns (fully-qualified module-prefixed FQNs, backticked reserved words,
 - Verify the file/line an item references actually names real code before
   you edit, so you do not fix a path the reviewer guessed wrong.
 - Trace callers/callees to confirm the scope of a change.
-The graph supplements read/glob/grep — use whichever is fastest.
+Only then read <FILE>, using the graph's `path` + `start_line`/`end_line`
+to jump straight to the relevant regions instead of reading whole files.
+The graph is where exploration begins; read/glob/grep read content once the
+unit is located.
 
 **Isolated worktree setup:**
 1. Create your worktree and branch off <BASE>:
@@ -263,16 +268,18 @@ not tracked).
 **Read-only context files** (read for context, do not edit):
 <comma-separated list of secondary files referenced by items in this group>
 
-**Codebase graph (use it before and while you fix):**
-The LadybugDB code graph is available via `apg_query` (read-only Cypher; it
-locates the database at `.apg/db.lbug` automatically).  Before editing,
-check the graph is populated:
+**Codebase graph (start here, before reading files):**
+Start every exploration with the graph, not the files. `apg_query` is
+available read-only (it locates the database at `.apg/db.lbug`
+automatically).  Before editing, check the graph is populated:
 `MATCH (s:Struct) RETURN count(*)` — if zero or the query errors, the graph
 is empty or stale: fall back to read/glob/grep and note it, do not block on
-the graph.
+the graph (but only fall back if the graph is unavailable).
 Read `.opencode/agents/codebase-navigator.md` for the schema and query
 patterns (fully-qualified module-prefixed FQNs, backticked reserved words,
 `;`-terminated queries).  Use the graph to:
+- Locate the units in <FILE> — the structs/functions it contains and their
+  line ranges — before you open the file.
 - Find every caller of a function you touch
   (`MATCH (caller)-[:Calls]->(t {fqn: "..."}) RETURN caller.fqn`) so you fix
   the shared function once and catch sibling callers, not just the path the
@@ -280,7 +287,10 @@ patterns (fully-qualified module-prefixed FQNs, backticked reserved words,
 - Verify the file/line an item references actually names real code before
   you edit, so you do not fix a path the reviewer guessed wrong.
 - Trace callers/callees to confirm the scope of a change.
-The graph supplements read/glob/grep — use whichever is fastest.
+Only then read <FILE>, using the graph's `path` + `start_line`/`end_line`
+to jump straight to the relevant regions instead of reading whole files.
+The graph is where exploration begins; read/glob/grep read content once the
+unit is located.
 
 **Handle these items in order:**
 

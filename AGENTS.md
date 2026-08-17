@@ -50,6 +50,16 @@ The "Walking Skeleton" and reference components.
 1. **The Contract** (`proto/`) — The wire protocol that binds the components.
 2. **Implementation** — The code in `platform/operator`, `platform/sidecar`, and `sdk`.
 
+## Exploring the Codebase
+
+**Start every exploration with `apg_query` (the LadybugDB code graph), not with the files.** The workflow is: **graph first to find the unit, then files to read it.**
+
+1. Query the graph to locate the unit you want — the package, file, struct, or function (fully-qualified, module-prefixed FQN) — and see how it connects: containing file, callers/callees, line ranges.
+2. Use the graph's `path` + `start_line`/`end_line` to jump straight to the relevant region of the file.
+3. Only then read the files. The read/glob/grep tools read content once the unit is located — they do not replace the graph for discovering what exists.
+
+Fall back to read/glob/grep only if the graph is empty or stale (rebuild with `apg scan` in the project root; schema and query patterns live in `.opencode/agents/codebase-navigator.md`).
+
 ## Hard Rule: The Repo Is Always Green
 
 `make verify` (tests → lint → build) **must pass with zero failures** before any commit. This is the only acceptable state of the repository. There is no such thing as a "pre-existing" or "unrelated" failure — if `make verify` fails, the work is incomplete, period.

@@ -118,15 +118,18 @@ Verify whether the following prior review item(s) still hold against the
 current code.  This is not a fresh review of the whole file — you are only
 checking whether the specific claim(s) below remain valid.
 
-**Codebase graph (use it to locate and verify the code):**
-The LadybugDB code graph is available read-only via `apg_query` (it locates
-the database at `.apg/db.lbug` automatically).  Check it is populated
+**Codebase graph (start here, before reading files):**
+Start every exploration with the graph, not the files. `apg_query` is
+available read-only (it locates the database at `.apg/db.lbug`
+automatically).  Check it is populated
 (`MATCH (s:Struct) RETURN count(*)`)
 and read `.opencode/agents/codebase-navigator.md` for the schema and query
-patterns.  Use it to locate the struct/function an item references by FQN,
-and to trace its callers/callees, so your verification checks the real code
-— not a guessed path.  If the graph is empty or stale, fall back to the
-read/glob/grep tools.
+patterns.  Locate the struct/function an item references by FQN, and trace
+its callers/callees, so your verification checks the real code — not a
+guessed path.  Only then read the target files below, using the graph's
+`path` + `start_line`/`end_line` to jump straight to the relevant lines.  If
+the graph is empty or stale, fall back to the read/glob/grep tools — but
+only then.
 
 **Target files to read:**
 [list of files referenced by the item(s)]
@@ -318,20 +321,26 @@ list.
 a pre-limited subset):**
 [list of file paths]
 
-**Codebase graph (use it to understand and verify the code you review):**
-The LadybugDB code graph is available read-only via `apg_query` (it locates
-the database at `.apg/db.lbug` automatically).  Check it is populated
+**Codebase graph (start here, before reading files):**
+Start every exploration with the graph, not the files. `apg_query` is
+available read-only (it locates the database at `.apg/db.lbug`
+automatically).  Check it is populated
 (`MATCH (s:Struct) RETURN count(*)`)
 and read `.opencode/agents/codebase-navigator.md` for the schema and query
 patterns (fully-qualified module-prefixed FQNs, backticked reserved words,
 `;`-terminated queries).  Use it to:
+- Locate the unit you are reviewing first — the file's structs/functions and
+  their line ranges — before you open the file.
 - Trace callers/callees of a function you flag
   (`MATCH (caller)-[:Calls]->(t {fqn: "..."}) RETURN caller.fqn`) so a
   finding about one call site does not miss its siblings.
 - Verify a finding's file/line reference names real code, and that the
   divergence is where you claim it is.
 - Confirm the package/dependency layout around the code under review.
-If the graph is empty or stale, fall back to read/glob/grep.
+Only then read the target files, using the graph's `path` +
+`start_line`/`end_line` to jump straight to the relevant regions instead of
+reading whole files.  If the graph is empty or stale, fall back to
+read/glob/grep — but only then.
 
 **Criteria document (read, do not inline):**
 [path, e.g. "plans/cartographer/SPEC.md"]
