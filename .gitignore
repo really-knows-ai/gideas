@@ -2,6 +2,7 @@ node_modules/
 go.work.sum
 bin/
 .cache/
+.apg/
 
 # Diagram images (scratch / whiteboard exports)
 *.png
@@ -51,7 +52,3 @@ ttl-watcher
 
 # Git worktrees for phased plan execution
 .worktrees/
-
-# Archived legacy documentation and specs
-_old/
-/cmd
