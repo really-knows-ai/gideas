@@ -25,7 +25,7 @@ import (
 // under entities/; a type name containing a path separator would escape the
 // tree. Non-existent files for entities missing from the provided slice are
 // NOT removed — the caller must separately call RemoveEntityFiles.
-func (g *gitStore) WriteEntityFiles(ctx context.Context, entityType string, entities []Entity) error {
+func (g *entityEdgeOps) WriteEntityFiles(ctx context.Context, entityType string, entities []Entity) error {
 	for _, ent := range entities {
 		if err := g.writeEntityFile(entityType, ent); err != nil {
 			return err
@@ -36,7 +36,7 @@ func (g *gitStore) WriteEntityFiles(ctx context.Context, entityType string, enti
 
 // RemoveEntityFiles batch-removes entity files for a single type by ID.
 // Non-existent files are silently skipped (no error).
-func (g *gitStore) RemoveEntityFiles(ctx context.Context, entityType string, ids []string) error {
+func (g *entityEdgeOps) RemoveEntityFiles(ctx context.Context, entityType string, ids []string) error {
 	for _, id := range ids {
 		if err := g.removeEntityFile(entityType, id); err != nil {
 			return err
@@ -51,7 +51,7 @@ func (g *gitStore) RemoveEntityFiles(ctx context.Context, entityType string, ids
 // PRECONDITION: entityType must match [a-zA-Z_][a-zA-Z0-9_]* (as enforced by
 // schema.Validate on ApplySchema) so the type directory stays under entities/;
 // a type name containing a path separator would escape the tree.
-func (g *gitStore) ReadAllEntityFiles(ctx context.Context, entityType string) ([]EntityFile, error) {
+func (g *entityEdgeOps) ReadAllEntityFiles(ctx context.Context, entityType string) ([]EntityFile, error) {
 	return readAllElementFiles(g, "entities", "entity", entityType,
 		func(elemType, name string, ej *EntityJSON) (uuid.UUID, error) {
 			// Guard against the embedded type conflicting with the directory it
@@ -87,7 +87,7 @@ func (g *gitStore) ReadAllEntityFiles(ctx context.Context, entityType string) ([
 // contain at least one .json file. Empty subdirectories are excluded.
 // Returns an empty slice when entities/ does not exist or contains only
 // empty subdirectories.
-func (g *gitStore) ListEntityTypes(ctx context.Context) ([]string, error) {
+func (g *entityEdgeOps) ListEntityTypes(ctx context.Context) ([]string, error) {
 	return listTypesWithJSON(g.fs, "entities")
 }
 
@@ -96,7 +96,7 @@ func (g *gitStore) ListEntityTypes(ctx context.Context) ([]string, error) {
 // uuid.Parse alone would accept — the ID is persisted verbatim as <id>.json),
 // and delegates the Create→Write→Close sequence to writeJSONFile. The
 // entityType must match [a-zA-Z_][a-zA-Z0-9_]* (see WriteEntityFiles).
-func (g *gitStore) writeEntityFile(entityType string, ent Entity) error {
+func (g *entityEdgeOps) writeEntityFile(entityType string, ent Entity) error {
 	if entityType != ent.Type {
 		return fmt.Errorf("%w: %q != %q", ErrEntityTypeMismatch, entityType, ent.Type)
 	}
@@ -133,7 +133,7 @@ func (g *gitStore) writeEntityFile(entityType string, ent Entity) error {
 
 // removeEntityFile deletes a single entity file. If the file does not
 // exist, it returns nil (idempotent).
-func (g *gitStore) removeEntityFile(entityType string, id string) error {
+func (g *entityEdgeOps) removeEntityFile(entityType string, id string) error {
 	return g.removeJSONFile("entities", "entity", entityType, id)
 }
 
@@ -195,7 +195,7 @@ func validUUIDv4(u uuid.UUID) bool {
 // and writes it with the Create→Write→Write("\n")→Close sequence shared by
 // entities and edges. kind names the element in error messages
 // ("entity"/"edge").
-func (g *gitStore) writeJSONFile(root, kind, elemType, id string, ej any) error {
+func (g *entityEdgeOps) writeJSONFile(root, kind, elemType, id string, ej any) error {
 	dir := filepath.Join(root, elemType)
 	if err := g.fs.MkdirAll(dir, 0755); err != nil {
 		return fmt.Errorf("mkdir %s dir %s: %w", kind, dir, err)
@@ -233,7 +233,7 @@ func (g *gitStore) writeJSONFile(root, kind, elemType, id string, ej any) error 
 // removeJSONFile deletes <root>/<elemType>/<id>.json. If the file does not
 // exist, it returns nil (idempotent). kind names the element in error
 // messages ("entity"/"edge").
-func (g *gitStore) removeJSONFile(root, kind, elemType, id string) error {
+func (g *entityEdgeOps) removeJSONFile(root, kind, elemType, id string) error {
 	path := filepath.Join(root, elemType, id+".json")
 	if err := g.fs.Remove(path); err != nil {
 		if os.IsNotExist(err) {
@@ -252,7 +252,7 @@ func (g *gitStore) removeJSONFile(root, kind, elemType, id string) error {
 // kind names the element in error messages ("entity"/"edge"). Returns an
 // empty slice (not nil) when the directory does not exist or is empty.
 func readAllElementFiles[J, F any](
-	g *gitStore,
+	g *entityEdgeOps,
 	root, kind, elemType string,
 	validate func(elemType, name string, ej *J) (uuid.UUID, error),
 	convert func(elemType, name, dir string, ej *J) (F, error),

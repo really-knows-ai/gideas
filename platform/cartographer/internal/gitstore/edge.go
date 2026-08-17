@@ -20,7 +20,7 @@ import (
 // separator would escape the tree. Non-existent files for edges absent from
 // the provided slice are NOT removed — the caller must separately call
 // RemoveEdgeFiles.
-func (g *gitStore) WriteEdgeFiles(ctx context.Context, edgeType string, edges []Edge) error {
+func (g *entityEdgeOps) WriteEdgeFiles(ctx context.Context, edgeType string, edges []Edge) error {
 	for _, edge := range edges {
 		if err := g.writeEdgeFile(edgeType, edge); err != nil {
 			return err
@@ -31,7 +31,7 @@ func (g *gitStore) WriteEdgeFiles(ctx context.Context, edgeType string, edges []
 
 // RemoveEdgeFiles batch-removes edge files for a single type by ID.
 // Non-existent files are silently skipped (no error).
-func (g *gitStore) RemoveEdgeFiles(ctx context.Context, edgeType string, ids []string) error {
+func (g *entityEdgeOps) RemoveEdgeFiles(ctx context.Context, edgeType string, ids []string) error {
 	for _, id := range ids {
 		if err := g.removeEdgeFile(edgeType, id); err != nil {
 			return err
@@ -46,7 +46,7 @@ func (g *gitStore) RemoveEdgeFiles(ctx context.Context, edgeType string, ids []s
 // PRECONDITION: edgeType must match [a-zA-Z_][a-zA-Z0-9_]* (as enforced by
 // schema.Validate on ApplySchema) so the type directory stays under edges/; a
 // type name containing a path separator would escape the tree.
-func (g *gitStore) ReadAllEdgeFiles(ctx context.Context, edgeType string) ([]EdgeFile, error) {
+func (g *entityEdgeOps) ReadAllEdgeFiles(ctx context.Context, edgeType string) ([]EdgeFile, error) {
 	return readAllElementFiles(g, "edges", "edge", edgeType,
 		func(elemType, name string, ej *EdgeJSON) (uuid.UUID, error) {
 			// Guard against the embedded type conflicting with the directory it
@@ -97,7 +97,7 @@ func (g *gitStore) ReadAllEdgeFiles(ctx context.Context, edgeType string) ([]Edg
 // at least one .json file. Empty subdirectories are excluded.
 // Returns an empty slice when edges/ does not exist or contains only
 // empty subdirectories.
-func (g *gitStore) ListEdgeTypes(ctx context.Context) ([]string, error) {
+func (g *entityEdgeOps) ListEdgeTypes(ctx context.Context) ([]string, error) {
 	return listTypesWithJSON(g.fs, "edges")
 }
 
@@ -107,7 +107,7 @@ func (g *gitStore) ListEdgeTypes(ctx context.Context) ([]string, error) {
 // persisted verbatim as <id>.json), and delegates the Create→Write→Close
 // sequence to writeJSONFile. The edgeType must match
 // [a-zA-Z_][a-zA-Z0-9_]* (see WriteEdgeFiles).
-func (g *gitStore) writeEdgeFile(edgeType string, edge Edge) error {
+func (g *entityEdgeOps) writeEdgeFile(edgeType string, edge Edge) error {
 	if edgeType != edge.Type {
 		return fmt.Errorf("%w: %q != %q", ErrEdgeTypeMismatch, edgeType, edge.Type)
 	}
@@ -146,6 +146,6 @@ func (g *gitStore) writeEdgeFile(edgeType string, edge Edge) error {
 
 // removeEdgeFile deletes a single edge file. If the file does not exist,
 // it returns nil (idempotent).
-func (g *gitStore) removeEdgeFile(edgeType string, id string) error {
+func (g *entityEdgeOps) removeEdgeFile(edgeType string, id string) error {
 	return g.removeJSONFile("edges", "edge", edgeType, id)
 }

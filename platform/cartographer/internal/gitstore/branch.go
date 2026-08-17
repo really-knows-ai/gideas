@@ -16,7 +16,7 @@ import (
 // "Invalid transaction ID format" — non-canonical spellings are rejected).
 // Returns ErrBranchAlreadyExists if the branch already exists, ErrInvalidUUID
 // if txID is not a valid canonical UUID v4.
-func (g *gitStore) CreateBranch(ctx context.Context, txID string) error {
+func (g *branchOps) CreateBranch(ctx context.Context, txID string) error {
 	// The same canonical-form gate the entity/edge write paths use
 	// (uuidutil.Validate): the txID is persisted as the branch name, so a
 	// non-canonical spelling of a valid UUID (uppercase hex, no-hyphen,
@@ -76,7 +76,7 @@ func (g *gitStore) CreateBranch(ctx context.Context, txID string) error {
 // ever checked out, so this path is never reached in production. RestoreMain
 // always checks out "main" which exists. Only tests exercise the create-on-missing
 // path.
-func (g *gitStore) Checkout(ctx context.Context, branch string) error {
+func (g *branchOps) Checkout(ctx context.Context, branch string) error {
 	ref := plumbing.ReferenceName("refs/heads/" + branch)
 	err := g.wt.Checkout(&git.CheckoutOptions{Branch: ref, Force: true})
 	if err != nil && err == plumbing.ErrReferenceNotFound {
@@ -91,7 +91,7 @@ func (g *gitStore) Checkout(ctx context.Context, branch string) error {
 // HardResetToBranch checks out the target branch, performs a hard reset,
 // and cleans untracked files. The checkout-before-reset ordering is
 // critical for correctness when SetBranchRef has moved the branch ref.
-func (g *gitStore) HardResetToBranch(ctx context.Context, branch string) error {
+func (g *branchOps) HardResetToBranch(ctx context.Context, branch string) error {
 	ref := plumbing.ReferenceName("refs/heads/" + branch)
 	if err := g.wt.Checkout(&git.CheckoutOptions{Branch: ref, Force: true}); err != nil {
 		return fmt.Errorf("hard reset checkout %s: %w", branch, err)
@@ -106,12 +106,12 @@ func (g *gitStore) HardResetToBranch(ctx context.Context, branch string) error {
 }
 
 // RestoreMain is a convenience method that checks out the main branch.
-func (g *gitStore) RestoreMain(ctx context.Context) error {
-	return g.Checkout(ctx, "main")
+func (g *branchOps) RestoreMain(ctx context.Context) error {
+	return g.Checkout(ctx, mainBranchName)
 }
 
 // BranchExists returns true if a branch with the given txID exists.
-func (g *gitStore) BranchExists(ctx context.Context, txID string) (bool, error) {
+func (g *branchOps) BranchExists(ctx context.Context, txID string) (bool, error) {
 	_, err := g.repo.Reference(plumbing.ReferenceName("refs/heads/"+txID), true)
 	if err != nil {
 		if err == plumbing.ErrReferenceNotFound {
@@ -131,7 +131,7 @@ func (g *gitStore) BranchExists(ctx context.Context, txID string) (bool, error) 
 // caller (transaction teardown) restores main first — RestoreMain — before
 // deleting the transaction branch (see cartographer_server.go
 // finishTransactionCleanup).
-func (g *gitStore) DeleteBranch(ctx context.Context, txID string) error {
+func (g *branchOps) DeleteBranch(ctx context.Context, txID string) error {
 	// Remove the branch reference from storage
 	refName := plumbing.ReferenceName("refs/heads/" + txID)
 	if err := g.backend.RemoveReference(refName); err != nil {
@@ -159,7 +159,7 @@ func (g *gitStore) DeleteBranch(ctx context.Context, txID string) error {
 // cancellation. Upgrade path: run the store's I/O on a ctx-cancellable
 // goroutine or wrap the filesystem in a deadline adapter, as documented on
 // GitStore.
-func (g *gitStore) CleanUntracked(ctx context.Context) error {
+func (g *branchOps) CleanUntracked(ctx context.Context) error {
 	if err := g.wt.Clean(&git.CleanOptions{Dir: true}); err != nil {
 		return fmt.Errorf("clean untracked: %w", err)
 	}
@@ -168,7 +168,7 @@ func (g *gitStore) CleanUntracked(ctx context.Context) error {
 
 // ListBranches returns all branch names (with "refs/heads/" prefix
 // stripped) except "main", which is always excluded.
-func (g *gitStore) ListBranches(ctx context.Context) ([]string, error) {
+func (g *branchOps) ListBranches(ctx context.Context) ([]string, error) {
 	refIter, err := g.repo.Branches()
 	if err != nil {
 		return nil, fmt.Errorf("list branches: %w", err)
@@ -182,7 +182,7 @@ func (g *gitStore) ListBranches(ctx context.Context) ([]string, error) {
 	var branches []string
 	if err := refIter.ForEach(func(ref *plumbing.Reference) error {
 		name := ref.Name().Short()
-		if name != "main" {
+		if name != mainBranchName {
 			branches = append(branches, name)
 		}
 		return nil
@@ -195,7 +195,7 @@ func (g *gitStore) ListBranches(ctx context.Context) ([]string, error) {
 
 // BranchHEAD returns the HEAD commit hash of the named branch as a string.
 // Returns ErrBranchNotFound if the branch does not exist.
-func (g *gitStore) BranchHEAD(ctx context.Context, branch string) (string, error) {
+func (g *branchOps) BranchHEAD(ctx context.Context, branch string) (string, error) {
 	ref, err := g.repo.Reference(plumbing.ReferenceName("refs/heads/"+branch), true)
 	if err != nil {
 		if err == plumbing.ErrReferenceNotFound {
@@ -208,7 +208,7 @@ func (g *gitStore) BranchHEAD(ctx context.Context, branch string) (string, error
 
 // SetBranchRef updates the named branch ref to point at the given commit
 // hash. Validates that the hash is a 40-character lowercase hex string.
-func (g *gitStore) SetBranchRef(ctx context.Context, branch string, hash string) error {
+func (g *branchOps) SetBranchRef(ctx context.Context, branch string, hash string) error {
 	if len(hash) != 40 {
 		return fmt.Errorf("%w: %q", ErrInvalidHash, hash)
 	}

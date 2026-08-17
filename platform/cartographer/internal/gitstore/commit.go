@@ -17,7 +17,7 @@ var errCommitFound = errors.New("transaction commit found")
 
 // AddAll stages all changes under the given path (equivalent to git add).
 // When path is ".", stages everything in the worktree.
-func (g *gitStore) AddAll(ctx context.Context, path string) error {
+func (g *commitOps) AddAll(ctx context.Context, path string) error {
 	if err := g.wt.AddWithOptions(&git.AddOptions{Path: path}); err != nil {
 		return fmt.Errorf("add %s: %w", path, err)
 	}
@@ -28,7 +28,7 @@ func (g *gitStore) AddAll(ctx context.Context, path string) error {
 // in the git index (analogous to git rm -r). If the path does not exist on
 // the working tree filesystem, it is a no-op (returns nil).
 // For directory paths, all files under it are removed recursively.
-func (g *gitStore) GitRm(ctx context.Context, path string) error {
+func (g *commitOps) GitRm(ctx context.Context, path string) error {
 	// Check if path exists
 	_, err := g.fs.Stat(path)
 	if err != nil {
@@ -47,7 +47,7 @@ func (g *gitStore) GitRm(ctx context.Context, path string) error {
 
 // removePathRecursive walks dir/file entries and removes them from the
 // worktree via wt.Remove, which stages the deletion.
-func (g *gitStore) removePathRecursive(path string) error {
+func (g *commitOps) removePathRecursive(path string) error {
 	fi, err := g.fs.Stat(path)
 	if err != nil {
 		return err
@@ -82,7 +82,7 @@ func (g *gitStore) removePathRecursive(path string) error {
 // Commit creates a commit on the current branch with the given message.
 // It does NOT call AddAll — the caller must stage changes first.
 // If there are no changes to commit (empty diff), it returns nil.
-func (g *gitStore) Commit(ctx context.Context, message string) error {
+func (g *commitOps) Commit(ctx context.Context, message string) error {
 	sig := &object.Signature{
 		Name:  "cartographer",
 		Email: "cartographer@foundry.flow",
@@ -110,7 +110,7 @@ func (g *gitStore) Commit(ctx context.Context, message string) error {
 // branch will not be visible and this method silently returns false (the
 // production caller, the Commit retry path, checks the transaction branch out
 // first — see cartographer_server.go).
-func (g *gitStore) CommitExistsOnBranch(ctx context.Context, txID string) (bool, error) {
+func (g *commitOps) CommitExistsOnBranch(ctx context.Context, txID string) (bool, error) {
 	message := "transaction:" + txID
 	found := false
 	if err := g.forEachLogCommit(func(_ string, firstLine string) error {
@@ -129,7 +129,7 @@ func (g *gitStore) CommitExistsOnBranch(ctx context.Context, txID string) (bool,
 // It checks that into is an ancestor of branch (divergence check) before
 // advancing the ref. After the merge, the working tree is on the into
 // branch. The source branch is NOT deleted by this method.
-func (g *gitStore) FastForwardMerge(ctx context.Context, branch, into string) error {
+func (g *commitOps) FastForwardMerge(ctx context.Context, branch, into string) error {
 	intoRef, err := g.repo.Reference(plumbing.ReferenceName("refs/heads/"+into), true)
 	if err != nil {
 		if err == plumbing.ErrReferenceNotFound {
@@ -195,7 +195,7 @@ func (g *gitStore) FastForwardMerge(ctx context.Context, branch, into string) er
 // --oneline semantics (per SPEC Commit retry, which inspects git log
 // --oneline for the transaction:<tx-id> prefix). Results are most recent
 // first.
-func (g *gitStore) GitLogOneline(ctx context.Context, prefix string) ([]string, error) {
+func (g *commitOps) GitLogOneline(ctx context.Context, prefix string) ([]string, error) {
 	var results []string
 	if err := g.forEachLogCommit(func(hash, firstLine string) error {
 		if strings.HasPrefix(firstLine, prefix) {
@@ -213,7 +213,7 @@ func (g *gitStore) GitLogOneline(ctx context.Context, prefix string) ([]string, 
 // behind CommitExistsOnBranch and GitLogOneline, so the two prefix scans map
 // log setup and iteration failures identically. A non-nil error from fn stops
 // iteration and is propagated (wrapped) to the caller.
-func (g *gitStore) forEachLogCommit(fn func(hash, firstLine string) error) error {
+func (g *commitOps) forEachLogCommit(fn func(hash, firstLine string) error) error {
 	log, err := g.repo.Log(&git.LogOptions{})
 	if err != nil {
 		return fmt.Errorf("log: %w", err)
