@@ -50,5 +50,10 @@ sort
 tribunal
 ttl-watcher
 
+# Re-include tracked node source that a node's compiled-binary name above
+# would otherwise shadow (the bare name matches the source directory too).
+# The compiled binary itself stays ignored (its bare name still matches).
+!nodes/appraisal/
+
 # Git worktrees for phased plan execution
 .worktrees/

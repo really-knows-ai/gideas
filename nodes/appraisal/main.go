@@ -56,25 +56,17 @@ import (
 // appraisalConfig holds the node's configuration, loaded from a
 // ConfigMap-mounted YAML file via nodeconfig.Load.
 type appraisalConfig struct {
-	InputArtefacts   []string                     `yaml:"inputArtefacts"`
-	ReviewArtefact   string                       `yaml:"reviewArtefact"`
-	GovernedArtefact string                       `yaml:"governedArtefact"`
-	ReviewerNode     string                       `yaml:"reviewerNode"`
-	Appraisers       []AppraiserPersonalityConfig `yaml:"appraisers"`
+	InputArtefacts   []string                              `yaml:"inputArtefacts"`
+	ReviewArtefact   string                                `yaml:"reviewArtefact"`
+	GovernedArtefact string                                `yaml:"governedArtefact"`
+	ReviewerNode     string                                `yaml:"reviewerNode"`
+	Appraisers       []handlers.AppraiserPersonalityConfig `yaml:"appraisers"`
 
 	// Optional ConfigMap prompt overrides. Empty strings use baked-in defaults.
 	EvalSystemPrompt     string `yaml:"evalSystemPrompt"`     // override eval agent system prompt template
 	EvalQueryTemplate    string `yaml:"evalQueryTemplate"`    // override eval agent query prompt template
 	FindingSystemPrompt  string `yaml:"findingSystemPrompt"`  // override finding agent system prompt template
 	FindingQueryTemplate string `yaml:"findingQueryTemplate"` // override finding agent query prompt template
-}
-
-// AppraiserPersonalityConfig defines a single appraiser persona.
-// ponytail: duplicated in nodes/internal/handlers/appraise.go;
-// promote to SDK if a third definition appears.
-type AppraiserPersonalityConfig struct {
-	ID          string `yaml:"id"`
-	Personality string `yaml:"personality"`
 }
 
 // ---------------------------------------------------------------------------
@@ -117,22 +109,13 @@ func handler(ctx context.Context, wctx *flowv1.WorkitemContext) error {
 		return fmt.Errorf("appraisal: create finding agent: %w", err)
 	}
 
-	// Build handler-level appraiser personality configs.
-	appraisers := make([]handlers.AppraiserPersonalityConfig, len(cfg.Appraisers))
-	for i, a := range cfg.Appraisers {
-		appraisers[i] = handlers.AppraiserPersonalityConfig{
-			ID:          a.ID,
-			Personality: a.Personality,
-		}
-	}
-
 	// Delegate to the shared handler with handler-level config.
 	handlerCfg := handlers.AppraisalConfig{
 		InputArtefacts:   cfg.InputArtefacts,
 		ReviewArtefact:   cfg.ReviewArtefact,
 		GovernedArtefact: cfg.GovernedArtefact,
 		ReviewerNode:     cfg.ReviewerNode,
-		Appraisers:       appraisers,
+		Appraisers:       cfg.Appraisers,
 	}
 
 	return handlers.HandleAppraisal(ctx, workitem, client, evalAgent, findingAgent, handlerCfg)
