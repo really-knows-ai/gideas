@@ -64,8 +64,6 @@ const (
 	// remoteAuthRoleName is the remote-auth Role/RoleBinding name rendered for the
 	// conventional flow-graph name ("cartographer-<fg-name>-remote-auth").
 	remoteAuthRoleName = "cartographer-flow-graph-remote-auth"
-	// transactionTimeoutDefault is the SPEC R5 TRANSACTION_TIMEOUT fallback ("30m").
-	transactionTimeoutDefault = "30m"
 )
 
 func TestFoundryGraphReconciler_CartographerServiceName(t *testing.T) {

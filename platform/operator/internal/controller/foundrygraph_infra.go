@@ -41,6 +41,19 @@ var DefaultCartographerImage = "flow-operator:latest"
 // cartographerStorageSize is the default PVC storage size for Cartographer.
 const cartographerStorageSize = "1Gi"
 
+// DefaultTransactionTimeout is the SPEC R5 TRANSACTION_TIMEOUT fallback rendered into the
+// Cartographer Deployment env (foundrygraph_infra.go) when versioning.transactionTimeout is
+// unset. It is the single operator-side source of truth for this default; the operator
+// module references it here rather than repeating the "30m" literal.
+const DefaultTransactionTimeout = "30m"
+
+// DefaultCapabilityStalenessWindow is the SPEC R5 CAPABILITY_STALENESS_WINDOW fallback
+// rendered into the Cartographer Deployment env (foundrygraph_infra.go) when the
+// operator's CapabilityStalenessWindow is empty, and used by cmd/main.go's
+// resolveCapabilityStalenessWindow. It is the single operator-side source of truth for this
+// default; the operator module references it here rather than repeating the "30s" literal.
+const DefaultCapabilityStalenessWindow = "30s"
+
 // cartographerTerminationGraceSecs is the Deployment's termination grace period. It must
 // exceed the in-process GracefulStop drain (~30s) so durability teardown completes before
 // kubelet SIGKILL; 100s matches the cartographer deployment.yaml reference template.
@@ -275,27 +288,28 @@ func (r *FoundryGraphReconciler) deploymentEnvVars(fg *flowv1.FoundryGraph) []co
 		},
 		{
 			Name: "TRANSACTION_TIMEOUT",
-			// ponytail: the "30m" fallback here is one of five copies of the
-			// transaction-timeout default that must stay in sync: (1) this
-			// Operator-rendered Deployment env fallback, (2) the cartographer
+			// ponytail: the operator-side copy of this default is hoisted to the shared
+			// DefaultTransactionTimeout constant, but the same "30m" default lives on in
+			// four other surfaces that must stay in sync with it: (1) the cartographer
 			// main.go getEnv("TRANSACTION_TIMEOUT", "30m") fallback
-			// (platform/cartographer/cmd/main.go), (3) the reference template
-			// platform/cartographer/deployment.yaml (TRANSACTION_TIMEOUT: "30m"),
-			// and (4) the SPEC R5 default `versioning.transactionTimeout: 30m`
-			// (plans/cartographer/SPEC.md); the CRD-level kubebuilder default on
-			// VersioningSpec.TransactionTimeout (foundrygraph_types.go, also "30m")
-			// is a fifth surface. Changing the default in any one place silently
-			// diverges the others: a deployment that omits this env falls back to
-			// main.go's hardcoded default, and a spec that omits transactionTimeout
-			// falls back here — if only one copy is edited, the rendered Deployment
-			// enforces a different timeout than documented. Ceiling: typed literals
-			// with no single source of truth or compile-time guard. Upgrade path:
-			// hoist the default to one shared constant read by all surfaces.
+			// (platform/cartographer/cmd/main.go), (2) the reference template
+			// platform/cartographer/deployment.yaml (TRANSACTION_TIMEOUT: "30m"), (3) the
+			// SPEC R5 default `versioning.transactionTimeout: 30m`
+			// (plans/cartographer/SPEC.md), and (4) the CRD-level kubebuilder default on
+			// VersioningSpec.TransactionTimeout (foundrygraph_types.go, also "30m").
+			// Changing the default in any one of those surfaces silently diverges the
+			// others: a deployment that omits this env falls back to main.go's hardcoded
+			// default, and a spec that omits transactionTimeout falls back here — if only
+			// one copy is edited, the rendered Deployment enforces a different timeout
+			// than documented. Ceiling: the cross-module/config copies have no single
+			// compile-time-backed source of truth. Upgrade path: hoist those remaining
+			// copies (cartographer main.go, deployment.yaml, CRD default) to one shared
+			// constant read by all surfaces.
 			Value: func() string {
 				if fg.Spec.Versioning != nil && fg.Spec.Versioning.TransactionTimeout != nil && fg.Spec.Versioning.TransactionTimeout.Duration > 0 {
 					return fg.Spec.Versioning.TransactionTimeout.Duration.String()
 				}
-				return "30m"
+				return DefaultTransactionTimeout
 			}(),
 		},
 		{
@@ -344,25 +358,25 @@ func (r *FoundryGraphReconciler) deploymentEnvVars(fg *flowv1.FoundryGraph) []co
 		env = append(env, corev1.EnvVar{Name: "EVENT_BUS_ADDRESS", Value: addr})
 	}
 	// CAPABILITY_STALENESS_WINDOW
-	// ponytail: the "30s" fallback here is one of five copies of the capability
-	// staleness-window default that must stay in sync: (1) this Operator-rendered
-	// Deployment env fallback, (2) the Operator binary's own default in cmd/main.go
-	// (`capabilityStalenessWindow = "30s"`), (3) the cartographer main.go
+	// ponytail: the operator-side copies of this default (this Deployment env fallback and
+	// cmd/main.go's resolveCapabilityStalenessWindow) are hoisted to the shared
+	// DefaultCapabilityStalenessWindow constant, but the same "30s" default lives on in
+	// three other surfaces that must stay in sync: (1) the cartographer main.go
 	// getEnv("CAPABILITY_STALENESS_WINDOW", "30s") fallback
-	// (platform/cartographer/cmd/main.go), and (4) the reference template
+	// (platform/cartographer/cmd/main.go), (2) the reference template
 	// platform/cartographer/deployment.yaml (commented-out CAPABILITY_STALENESS_WINDOW:
-	// "30s"); the SPEC R5 environment-variable table default `30s`
-	// (plans/cartographer/SPEC.md) is a fifth surface. Changing the default in any one
-	// place silently diverges the others: a Cartographer pod that omits this env falls
-	// back to its own main.go default, and the Operator's proxy anti-replay window
-	// (cmd/main.go) is validated independently — if only one copy is edited, the
-	// staleness window enforced at the Cartographer diverges from the operator's and
-	// from the SPEC's. Ceiling: typed literals with no single source of truth or
-	// compile-time guard. Upgrade path: hoist the default to one shared constant read
-	// by all surfaces.
+	// "30s"), and (3) the SPEC R5 environment-variable table default `30s`
+	// (plans/cartographer/SPEC.md). Changing the default in any one place silently diverges
+	// the others: a Cartographer pod that omits this env falls back to its own main.go
+	// default, and the Operator's proxy anti-replay window (cmd/main.go) is validated
+	// independently — if only one copy is edited, the staleness window enforced at the
+	// Cartographer diverges from the operator's and from the SPEC's. Ceiling: the
+	// cross-module/config copies have no single compile-time-backed source of truth. Upgrade
+	// path: hoist those remaining copies (cartographer main.go, deployment.yaml, SPEC) to
+	// one shared constant read by all surfaces.
 	staleness := r.CapabilityStalenessWindow
 	if staleness == "" {
-		staleness = "30s"
+		staleness = DefaultCapabilityStalenessWindow
 	}
 	env = append(env, corev1.EnvVar{Name: "CAPABILITY_STALENESS_WINDOW", Value: staleness})
 	return env
