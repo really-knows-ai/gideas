@@ -33,6 +33,7 @@ import (
 	"text/template"
 
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
+	codificationpkg "github.com/foundry/flow/nodes/internal/codification"
 	"github.com/foundry/flow/nodes/internal/nodeconfig"
 	"github.com/foundry/flow/nodes/internal/nodeutil"
 	flow "github.com/foundry/flow/sdk/go"
@@ -138,20 +139,13 @@ type queryData struct {
 // ---------------------------------------------------------------------------
 
 // codificationGoal is the JSON structure of the "codification-goal" artefact
-// written by the Clerk.
-type codificationGoal struct {
-	Goal      string   `json:"goal"`
-	AppliesTo []string `json:"applies_to"`
-	Tier      int32    `json:"tier"`
-	Action    string   `json:"action"`
-}
+// written by the Clerk. Defined once in nodes/internal/codification so the
+// parent/child wire contract cannot silently diverge.
+type codificationGoal = codificationpkg.Goal
 
 // codificationResult is the JSON structure of the "codification-result"
 // artefact expected by the Clerk.
-type codificationResult struct {
-	Type    string `json:"type"`
-	Content string `json:"content"`
-}
+type codificationResult = codificationpkg.Result
 
 // agentOutput is the JSON structure the LLM is expected to produce.
 type agentOutput struct {
