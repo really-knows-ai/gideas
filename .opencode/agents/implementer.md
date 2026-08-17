@@ -30,6 +30,7 @@ permission:
   edit:
     "*": deny
     ".opencode/**": deny
+    "**/*_test.go": deny
     "Makefile": allow
     "go.work": allow
     "go.work.sum": allow

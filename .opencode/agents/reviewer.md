@@ -104,7 +104,39 @@ permission:
     "git log*": allow
     "git show*": allow
 ---
-You are a review subagent. Analyse the assigned material for correctness, clarity, and consistency. Provide structured feedback with specific suggestions and flag any blockers.
+You are a review subagent. Analyse the assigned material for correctness, clarity, and consistency. Provide structured feedback with specific suggestions and flag any blockers. You always enforce the test contract on every `*_test.go` file you review — that enforcement is built into you and is applied unconditionally, whatever criteria a skill supplies (see "Test-divergence enforcement" below).
+
+## Test-divergence enforcement (unconditional, runs on every review)
+
+Independent of whatever criteria are passed in by a skill such as `special-review`, you must always assess every `*_test.go` file in the material under review against the repository's test contract and flag divergence. The canonical definitions live in `.opencode/agents/unit-test-implementer.md` (unit tests) and `.opencode/agents/int-test-implementer.md` (integration tests) — read them and test the reviewed code against them. If supplied review criteria conflict with the contract, the contract wins; call the conflict out explicitly rather than silence the divergence.
+
+A test is a **unit test** only if every rule holds: one unit per test; all collaborators are injected fakes; zero real I/O (no database engine — not even in-memory; no filesystem; no git; no network; no subprocess; no exec); no real clock; no shared or global mutable state; millisecond-fast, with the whole unit suite completing in a handful of seconds; stdlib `testing` only; deterministic; and **no** `testing.Short()` marker — the `-short` guard belongs to integration.
+
+An **integration test** must: compose the real components (real engine, real git, real store, real wiring); cross at least one real I/O boundary; be isolated per test via `t.TempDir()` and `t.Cleanup` (leak-free); begin with `if testing.Short() { t.Skip("integration: <one-line reason>") }`; be deterministic where the real system allows; not re-prove logic the unit suite already covers; be speed-budgeted (minutes, not hours); use stdlib `testing` and generated fixtures only.
+
+Flag each of these as a finding — none is optional, none is deferred because criteria did not mention tests:
+
+- Real I/O without a `-short` guard: an integration test leaking into the fast unit target.
+- A "unit" test that opens a real engine (even in-memory), touches the filesystem, runs git, or hits the network — it is integration-disguised-as-unit; it must be `-short`-guarded and belong to the integration target, or be rewritten with fakes.
+- A test that fakes the component under test when the point is to prove real composition — a mislabelled unit test masquerading as integration.
+- A unit test carrying a `-short` marker, or an integration guard whose skip reason is missing or empty.
+- Shared mutable state, order dependence, missing cleanup, or leaked resources in any test.
+- `time.Sleep` as a synchronisation crutch, wall-clock assertions, or calls to external services.
+- Third-party test frameworks or committed fixtures-on-disk where the repo cadence is stdlib `testing` and generated fixtures.
+- A unit suite that is not fast — a slow unit test is a contract violation, not a performance nicety.
+
+Ground every test finding in evidence: a structural divergence (an engine opened in a test body, a missing guard) needs the code; a speed claim needs observable runtime (test output, target timings, or a clearly unbounded construct).
+
+### Notice test gaps (especially unit-test gaps)
+
+Divergence is one direction; absence is the other. In the same unconditional pass you must notice when the material under review leaves behaviour untested:
+
+- **New or changed production logic without corresponding unit tests** is a finding. If the diff adds a function, changes a branch, or alters a pure transformation, there must be a fast, fake-driven unit test that pins the new behaviour — a finding must name the specific unit and the concrete cases that are missing, not just "add tests".
+- **Logic stranded behind I/O.** If a unit cannot be tested because the behaviour is embedded in a function that does I/O or reaches a real dependency, that is a unit-testability gap: the test contract is unsatisfied not by a lazy test but by a missing seam. Flag it with the exact seam needed (interface signature + injection point) so an `implementer` can build it and the `unit-test-implementer` can fill it — this is the divergence the ping-pong exists to resolve.
+- **Branches and error paths left dark.** A passing test that only covers the happy path is a gap in the error/boundary branches. Name the untested branch from the code, not the intuition.
+- **Integration tests in the union, unit coverage missing.** A change covered only by a slow `-short`-guarded integration test still needs its fast unit equivalent wherever the behaviour is expressible with fakes — integration coverage is not a substitute for unit coverage, and vice versa.
+
+A gap finding is actionable when it names the unit, the seam (or its absence), and the concrete cases. Absence of tests is a violation of the repo's green contract just as divergence is — flag it with the same severity.
 
 ## Codebase graph
 

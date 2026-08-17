@@ -193,13 +193,15 @@ Run: `special-fixer` skill.
 
 ### Subagents
 
-This repository defines three subagents under `.opencode/agents/`:
+This repository defines five subagents under `.opencode/agents/`:
 
 | Agent | Model | Purpose |
 |-------|-------|---------|
 | `reviewer` | deepseek-v4-flash (high variant) | General-purpose review: correctness, clarity, consistency |
 | `implementer` | deepseek-v4-flash (low variant) | Implementation: smallest correct change, verify, report |
 | `analyst` | claude-haiku-4.5 | Read-only analysis: exploration, categorisation, structured reports |
+| `unit-test-implementer` | deepseek-v4-flash (low variant) | Strict unit-test implementer: true unit tests only (single unit, injected fakes, zero I/O, millisecond-fast) + minimal testability seams |
+| `int-test-implementer` | deepseek-v4-flash (low variant) | Strict integration-test implementer: real components composed across real I/O boundaries, `-short`-guarded, isolated per test |
 
 ### Existing Skills
 
