@@ -1,0 +1,148 @@
+package proxy
+
+import (
+	"context"
+	"crypto/sha256"
+	"fmt"
+	"testing"
+
+	flowv1 "github.com/foundry/flow/gen/flow/v1"
+	"google.golang.org/grpc/metadata"
+)
+
+func TestArchivistProxy_StoreArtefact_ComputesHash(t *testing.T) {
+	proxy, capture := setupArchivistProxy(t)
+
+	content := []byte("Hello from Step 1")
+	expectedHash := fmt.Sprintf("%x", sha256.Sum256(content))
+
+	resp, err := proxy.StoreArtefact(context.Background(), &flowv1.StoreArtefactRequest{
+		WorkitemId:       "wi-1",
+		ArtefactId:       "greeting",
+		GovernedArtefact: "txt",
+		Content:          content,
+		ContentHash:      "node-supplied-hash-should-be-ignored",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify the proxy computed the hash and forwarded it, ignoring node's hash.
+	if capture.lastStoreReq.GetContentHash() != expectedHash {
+		t.Fatalf("expected Sidecar-computed hash %q, got %q",
+			expectedHash, capture.lastStoreReq.GetContentHash())
+	}
+
+	if resp.GetVersionHash() != expectedHash {
+		t.Fatalf("expected version_hash=%q, got %q", expectedHash, resp.GetVersionHash())
+	}
+}
+
+func TestArchivistProxy_StoreArtefact_ForwardsFields(t *testing.T) {
+	proxy, capture := setupArchivistProxy(t)
+
+	content := []byte("data")
+	_, err := proxy.StoreArtefact(context.Background(), &flowv1.StoreArtefactRequest{
+		WorkitemId:       "wi-2",
+		ArtefactId:       "report",
+		GovernedArtefact: "json",
+		Content:          content,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if capture.lastStoreReq.GetWorkitemId() != "wi-2" {
+		t.Fatalf("expected workitem_id=wi-2, got %q", capture.lastStoreReq.GetWorkitemId())
+	}
+	if capture.lastStoreReq.GetArtefactId() != "report" {
+		t.Fatalf("expected artefact_id=report, got %q", capture.lastStoreReq.GetArtefactId())
+	}
+	if capture.lastStoreReq.GetGovernedArtefact() != "json" {
+		t.Fatalf("expected governed_artefact=json, got %q", capture.lastStoreReq.GetGovernedArtefact())
+	}
+	if string(capture.lastStoreReq.GetContent()) != "data" {
+		t.Fatalf("expected content=data, got %q", string(capture.lastStoreReq.GetContent()))
+	}
+}
+
+func TestArchivistProxy_GetArtefact_Passthrough(t *testing.T) {
+	proxy, capture := setupArchivistProxy(t)
+
+	resp, err := proxy.GetArtefact(context.Background(), &flowv1.GetArtefactRequest{
+		WorkitemId: "wi-1",
+		ArtefactId: "greeting",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if capture.lastGetReq.GetWorkitemId() != "wi-1" {
+		t.Fatal("expected workitem_id to be forwarded")
+	}
+	if string(resp.GetContent()) != testContentStr {
+		t.Fatalf("expected passthrough content, got %q", string(resp.GetContent()))
+	}
+}
+
+func TestArchivistProxy_PropagatesMetadata(t *testing.T) {
+	proxy, capture := setupArchivistProxy(t)
+
+	md := metadata.Pairs("x-flow-workitem-id", "wi-meta-test")
+	ctx := metadata.NewIncomingContext(context.Background(), md)
+
+	_, err := proxy.GetArtefact(ctx, &flowv1.GetArtefactRequest{
+		WorkitemId: "wi-1",
+		ArtefactId: "greeting",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	vals := capture.capturedMD.Get("x-flow-workitem-id")
+	if len(vals) != 1 || vals[0] != "wi-meta-test" {
+		t.Fatalf("expected metadata propagation, got %v", vals)
+	}
+}
+
+func TestArchivistProxy_LinkRuling_Passthrough(t *testing.T) {
+	proxy, _ := setupArchivistProxy(t)
+
+	resp, err := proxy.LinkRuling(context.Background(), &flowv1.LinkRulingRequest{
+		WorkitemId: "wi-1",
+		FeedbackId: "fb-1",
+		LawId:      "law-001",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	item := resp.GetUpdatedItem()
+	if item.GetId() != "fb-1" {
+		t.Fatalf("expected id=fb-1 in response, got %q", item.GetId())
+	}
+	if item.GetLinkedRuling() != "law-001" {
+		t.Fatalf("expected linked_ruling=law-001, got %q", item.GetLinkedRuling())
+	}
+}
+
+func TestArchivistProxy_LinkRuling_PropagatesMetadata(t *testing.T) {
+	proxy, capture := setupArchivistProxy(t)
+
+	md := metadata.Pairs("x-flow-workitem-id", "wi-ruling-test")
+	ctx := metadata.NewIncomingContext(context.Background(), md)
+
+	_, err := proxy.LinkRuling(ctx, &flowv1.LinkRulingRequest{
+		WorkitemId: "wi-1",
+		FeedbackId: "fb-1",
+		LawId:      "law-001",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	vals := capture.capturedMD.Get("x-flow-workitem-id")
+	if len(vals) != 1 || vals[0] != "wi-ruling-test" {
+		t.Fatalf("expected metadata propagation, got %v", vals)
+	}
+}
