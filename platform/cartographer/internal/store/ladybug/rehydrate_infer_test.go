@@ -117,6 +117,7 @@ func TestReplicateSchemaToBranch_RealInferredPairsAfterBothLostRehydration(t *te
 			got.FromEntityID, got.ToEntityID, fromID, toID)
 	}
 }
+
 // TestRehydrateMainFromFiles_InferredEdgeTypeSurvivesFileBackedReopen pins the
 // both-lost write-and-reopen cycle for an inferred EDGE type (SPEC R8): the
 // schema metadata persisted by the re-hydration path must carry the edge type's
@@ -233,6 +234,7 @@ func TestRehydrateMainFromFiles_InferredEdgeTypeSurvivesFileBackedReopen(t *test
 		t.Fatalf("persisted branch metadata failed branch reopen validation: %v", err)
 	}
 }
+
 func TestRehydrateMainFromFiles_BothMissing_NoError(t *testing.T) {
 	if testing.Short() {
 		t.Skip("integration: file-backed rehydration from working tree")
@@ -253,6 +255,7 @@ func TestRehydrateMainFromFiles_BothMissing_NoError(t *testing.T) {
 		t.Fatalf("expected no error for both missing, got %v", err)
 	}
 }
+
 // TestRehydrateMainFromFiles_InferredTypeWithProperties verifies SPEC R8: when
 // re-hydrating with an empty applied schema, the entity type is inferred from
 // the directory structure AND its property columns are created so that
@@ -308,6 +311,7 @@ func TestRehydrateMainFromFiles_InferredTypeWithProperties(t *testing.T) {
 		t.Fatal("expected Document table to be inferred")
 	}
 }
+
 // TestRehydrateMainFromFiles_InferredEdgeTypeWithProperties verifies SPEC R8's
 // directory-inference scope covers edge types as well as entity types: when
 // re-hydrating with an empty applied schema (the corrupt main.lbug / lost
@@ -372,6 +376,7 @@ func TestRehydrateMainFromFiles_InferredEdgeTypeWithProperties(t *testing.T) {
 		t.Fatal("expected DependsOn edge type to be inferred")
 	}
 }
+
 // TestHydrateBranchFromFiles_InferredEdgeTypeWithProperties pins the same SPEC
 // R8 directory-inference scope on the branch hydration path: an edge type
 // absent from the applied schema must have its rel table inferred so the
