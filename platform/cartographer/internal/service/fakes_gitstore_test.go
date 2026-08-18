@@ -207,16 +207,33 @@ func newRecoveryFailingGitStore(gs gitstore.GitStore, fail string) *fakeGitStore
 	}
 }
 
-// gitAttemptHook returns a WithGitLock hook that closes the armed attempt
-// channel (if any) each time the git lock is entered, then delegates to gs.
-// The test arms the channel (*attempted = make(chan struct{})) strictly before
-// starting the goroutine that enters the lock, so the shared state is
-// race-free; the hook clears the channel after closing so re-arming is safe.
-func gitAttemptHook(gs gitstore.GitStore, attempted *chan struct{}) func(func() error) error {
+// gitAttemptTracker guards the armed attempt channel with a mutex so the test
+// goroutine's arming write (arm) and the WithGitLock hook's close-and-nil are
+// synchronized — the same protection the former gitAttemptStore struct gave
+// its setAttempted/WithGitLock methods. The hook clears the channel after
+// closing so re-arming is safe.
+type gitAttemptTracker struct {
+	mu        sync.Mutex
+	attempted chan struct{}
+}
+
+// arm records the channel the next WithGitLock entry should close.
+func (t *gitAttemptTracker) arm(attempted chan struct{}) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.attempted = attempted
+}
+
+// hook returns a WithGitLock hook that closes the armed attempt channel (if
+// any) each time the git lock is entered, then delegates to gs.
+func (t *gitAttemptTracker) hook(gs gitstore.GitStore) func(func() error) error {
 	return func(fn func() error) error {
-		if *attempted != nil {
-			close(*attempted)
-			*attempted = nil
+		t.mu.Lock()
+		attempted := t.attempted
+		t.attempted = nil
+		t.mu.Unlock()
+		if attempted != nil {
+			close(attempted)
 		}
 		return gs.WithGitLock(fn)
 	}

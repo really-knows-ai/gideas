@@ -113,9 +113,9 @@ func TestRollbackTransaction_WaitsForUnrelatedGitActivity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BeginTransaction: %v", err)
 	}
-	var attempted chan struct{}
 	origGit := srv.gitstore
-	attempting := &fakeGitStore{GitStore: origGit, onWithGitLock: gitAttemptHook(origGit, &attempted)}
+	tracker := &gitAttemptTracker{}
+	attempting := &fakeGitStore{GitStore: origGit, onWithGitLock: tracker.hook(origGit)}
 	srv.gitstore = attempting
 	gitHeld := make(chan struct{})
 	releaseGit := make(chan struct{})
@@ -128,7 +128,8 @@ func TestRollbackTransaction_WaitsForUnrelatedGitActivity(t *testing.T) {
 		})
 	}()
 	<-gitHeld
-	attempted = make(chan struct{})
+	attempted := make(chan struct{})
+	tracker.arm(attempted)
 	rollbackDone := make(chan error, 1)
 	go func() {
 		_, rollbackErr := srv.RollbackTransaction(ctx, &flowv1.RollbackTransactionRequest{
