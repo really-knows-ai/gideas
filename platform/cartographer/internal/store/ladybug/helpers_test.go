@@ -9,8 +9,8 @@ import (
 	"testing"
 
 	lbug "github.com/LadybugDB/go-ladybug"
-	flowv1 "github.com/foundry/flow/cartographer/gen/flow/v1"
-	store "github.com/foundry/flow/cartographer/internal/store"
+	"github.com/foundry/flow/cartographer/internal/store"
+	flowv1 "github.com/foundry/flow/gen/flow/v1"
 )
 
 // strengthValue is the test value for the DependsOn edge's strength property,
