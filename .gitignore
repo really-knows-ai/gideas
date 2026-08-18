@@ -25,38 +25,5 @@ plans/
 # OpenCode local state
 .opencode/package-lock.json
 
-# Node binary artifacts (compiled by go build in nodes/*/)
-appraisal
-appraiser
-arbiter
-# The "codification" entry above matches the compiled node binary at
-# nodes/codification/codification. Re-include the shared contract source
-# package, which is not a compiled binary.
-!nodes/internal/codification/
-codify-smt
-embassy
-facilitator
-forge
-friction-watcher
-haiku-quench
-hitl
-hitl-appraise
-hitl-sort
-juror
-law-applicator
-null-node
-petition-watcher
-refine
-reviewer
-rule-router
-sort
-tribunal
-ttl-watcher
-
-# Re-include tracked node source that a node's compiled-binary name above
-# would otherwise shadow (the bare name matches the source directory too).
-# The compiled binary itself stays ignored (its bare name still matches).
-!nodes/appraisal/
-
 # Git worktrees for phased plan execution
 .worktrees/
