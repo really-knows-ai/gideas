@@ -289,7 +289,7 @@ func TestEmptyTransaction_CommitWaitsForMutationCompletion(t *testing.T) {
 
 func TestEmptyTransaction_CommitCleanupFailureRemainsRetryable(t *testing.T) {
 	srv, base := newTestServer(t)
-	wrapped := &dropFailingStore{Store: base, failDrop: true}
+	wrapped := failOnceDropBranchDB(base)
 	srv.store = wrapped
 	ctx := testCtx()
 	begin, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})

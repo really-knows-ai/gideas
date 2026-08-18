@@ -5,53 +5,238 @@ import (
 	"errors"
 	"fmt"
 	"sync"
-	"sync/atomic"
 
 	"github.com/foundry/flow/cartographer/internal/gitstore"
 	"github.com/go-git/go-git/v5/plumbing"
 )
 
-// wipeFailingGitStore fails a configurable git operation to exercise the
-// git-side mid-wipe error paths of WipeGraph (git rm, wipe commit, clean).
-type wipeFailingGitStore struct {
+// fakeGitStore wraps a gitstore.GitStore, overriding selected methods with
+// per-method test hooks. A nil hook delegates to the embedded GitStore, so a
+// failure-injection seam is a one-field literal:
+//
+//	fakeGitStore{GitStore: gs, onCommit: func(context.Context, string) error { return errCommit }}
+type fakeGitStore struct {
 	gitstore.GitStore
-	failGitRm  bool
-	failCommit bool
-	failClean  bool
+	onGitRm              func(context.Context, string) error
+	onCommit             func(context.Context, string) error
+	onCleanUntracked     func(context.Context) error
+	onFastForwardMerge   func(context.Context, string, string) error
+	onRestoreMain        func(context.Context) error
+	onCreateBranch       func(context.Context, string) error
+	onHardResetToBranch  func(context.Context, string) error
+	onDeleteBranch       func(context.Context, string) error
+	onWithGitLock        func(func() error) error
+	onListEntityTypes    func(context.Context) ([]string, error)
+	onReadAllEntityFiles func(context.Context, string) ([]gitstore.EntityFile, error)
+	onListEdgeTypes      func(context.Context) ([]string, error)
+	onReadAllEdgeFiles   func(context.Context, string) ([]gitstore.EdgeFile, error)
 }
 
-func (g *wipeFailingGitStore) GitRm(ctx context.Context, path string) error {
-	if g.failGitRm {
-		return fmt.Errorf("simulated GitRm failure")
+func (f *fakeGitStore) GitRm(ctx context.Context, path string) error {
+	if f.onGitRm != nil {
+		return f.onGitRm(ctx, path)
 	}
-	return g.GitStore.GitRm(ctx, path)
+	return f.GitStore.GitRm(ctx, path)
 }
 
-func (g *wipeFailingGitStore) Commit(ctx context.Context, message string) error {
-	if g.failCommit {
-		return fmt.Errorf("simulated wipe commit failure")
+func (f *fakeGitStore) Commit(ctx context.Context, message string) error {
+	if f.onCommit != nil {
+		return f.onCommit(ctx, message)
 	}
-	return g.GitStore.Commit(ctx, message)
+	return f.GitStore.Commit(ctx, message)
 }
 
-func (g *wipeFailingGitStore) CleanUntracked(ctx context.Context) error {
-	if g.failClean {
-		return fmt.Errorf("simulated clean untracked failure")
+func (f *fakeGitStore) CleanUntracked(ctx context.Context) error {
+	if f.onCleanUntracked != nil {
+		return f.onCleanUntracked(ctx)
 	}
-	return g.GitStore.CleanUntracked(ctx)
+	return f.GitStore.CleanUntracked(ctx)
 }
 
-type mergeFailingGitStore struct {
-	gitstore.GitStore
-	failMerge bool
-}
-
-func (s *mergeFailingGitStore) FastForwardMerge(ctx context.Context, branch, into string) error {
-	if s.failMerge {
-		s.failMerge = false
-		return fmt.Errorf("simulated merge failure")
+func (f *fakeGitStore) FastForwardMerge(ctx context.Context, branch, into string) error {
+	if f.onFastForwardMerge != nil {
+		return f.onFastForwardMerge(ctx, branch, into)
 	}
-	return s.GitStore.FastForwardMerge(ctx, branch, into)
+	return f.GitStore.FastForwardMerge(ctx, branch, into)
+}
+
+func (f *fakeGitStore) RestoreMain(ctx context.Context) error {
+	if f.onRestoreMain != nil {
+		return f.onRestoreMain(ctx)
+	}
+	return f.GitStore.RestoreMain(ctx)
+}
+
+func (f *fakeGitStore) CreateBranch(ctx context.Context, txID string) error {
+	if f.onCreateBranch != nil {
+		return f.onCreateBranch(ctx, txID)
+	}
+	return f.GitStore.CreateBranch(ctx, txID)
+}
+
+func (f *fakeGitStore) HardResetToBranch(ctx context.Context, branch string) error {
+	if f.onHardResetToBranch != nil {
+		return f.onHardResetToBranch(ctx, branch)
+	}
+	return f.GitStore.HardResetToBranch(ctx, branch)
+}
+
+func (f *fakeGitStore) DeleteBranch(ctx context.Context, txID string) error {
+	if f.onDeleteBranch != nil {
+		return f.onDeleteBranch(ctx, txID)
+	}
+	return f.GitStore.DeleteBranch(ctx, txID)
+}
+
+func (f *fakeGitStore) WithGitLock(fn func() error) error {
+	if f.onWithGitLock != nil {
+		return f.onWithGitLock(fn)
+	}
+	return f.GitStore.WithGitLock(fn)
+}
+
+func (f *fakeGitStore) ListEntityTypes(ctx context.Context) ([]string, error) {
+	if f.onListEntityTypes != nil {
+		return f.onListEntityTypes(ctx)
+	}
+	return f.GitStore.ListEntityTypes(ctx)
+}
+
+func (f *fakeGitStore) ReadAllEntityFiles(ctx context.Context, entityType string) ([]gitstore.EntityFile, error) {
+	if f.onReadAllEntityFiles != nil {
+		return f.onReadAllEntityFiles(ctx, entityType)
+	}
+	return f.GitStore.ReadAllEntityFiles(ctx, entityType)
+}
+
+func (f *fakeGitStore) ListEdgeTypes(ctx context.Context) ([]string, error) {
+	if f.onListEdgeTypes != nil {
+		return f.onListEdgeTypes(ctx)
+	}
+	return f.GitStore.ListEdgeTypes(ctx)
+}
+
+func (f *fakeGitStore) ReadAllEdgeFiles(ctx context.Context, edgeType string) ([]gitstore.EdgeFile, error) {
+	if f.onReadAllEdgeFiles != nil {
+		return f.onReadAllEdgeFiles(ctx, edgeType)
+	}
+	return f.GitStore.ReadAllEdgeFiles(ctx, edgeType)
+}
+
+// failOnceMerge returns a fakeGitStore whose first FastForwardMerge call fails,
+// delegating later calls to gs.
+func failOnceMerge(gs gitstore.GitStore) *fakeGitStore {
+	var failed bool
+	return &fakeGitStore{GitStore: gs, onFastForwardMerge: func(ctx context.Context, branch, into string) error {
+		if !failed {
+			failed = true
+			return fmt.Errorf("simulated merge failure")
+		}
+		return gs.FastForwardMerge(ctx, branch, into)
+	}}
+}
+
+// newRecoveryFailingGitStore returns a fakeGitStore that fails the named git
+// operation once, delegating every other call to gs. fail=="" arms no failure.
+// The "lookup lock" operation fails on the second WithGitLock call, matching
+// the recovery flow's lock-then-lookup sequence.
+func newRecoveryFailingGitStore(gs gitstore.GitStore, fail string) *fakeGitStore {
+	lockCalls := 0
+	failOnce := func(op, errMsg string) error {
+		if fail == op {
+			fail = ""
+			return fmt.Errorf("%s", errMsg)
+		}
+		return nil
+	}
+	return &fakeGitStore{
+		GitStore: gs,
+		onWithGitLock: func(fn func() error) error {
+			lockCalls++
+			if fail == "lookup lock" && lockCalls == 2 {
+				fail = ""
+				return errors.New("simulated lookup lock failure")
+			}
+			if err := failOnce("lock", "simulated lock failure"); err != nil {
+				return err
+			}
+			return gs.WithGitLock(fn)
+		},
+		onRestoreMain: func(ctx context.Context) error {
+			if err := failOnce("restore", "simulated restore failure"); err != nil {
+				return err
+			}
+			return gs.RestoreMain(ctx)
+		},
+		onCleanUntracked: func(ctx context.Context) error {
+			if err := failOnce("clean", "simulated clean failure"); err != nil {
+				return err
+			}
+			return gs.CleanUntracked(ctx)
+		},
+		onDeleteBranch: func(ctx context.Context, txID string) error {
+			if err := failOnce("delete", "simulated delete failure"); err != nil {
+				return err
+			}
+			return gs.DeleteBranch(ctx, txID)
+		},
+		onListEntityTypes: func(ctx context.Context) ([]string, error) {
+			if err := failOnce("list entities", "simulated list entities failure"); err != nil {
+				return nil, err
+			}
+			return gs.ListEntityTypes(ctx)
+		},
+		onReadAllEntityFiles: func(ctx context.Context, entityType string) ([]gitstore.EntityFile, error) {
+			if err := failOnce("read entities", "simulated read entities failure"); err != nil {
+				return nil, err
+			}
+			return gs.ReadAllEntityFiles(ctx, entityType)
+		},
+		onListEdgeTypes: func(ctx context.Context) ([]string, error) {
+			if err := failOnce("list edges", "simulated list edges failure"); err != nil {
+				return nil, err
+			}
+			return gs.ListEdgeTypes(ctx)
+		},
+		onReadAllEdgeFiles: func(ctx context.Context, edgeType string) ([]gitstore.EdgeFile, error) {
+			if err := failOnce("read edges", "simulated read edges failure"); err != nil {
+				return nil, err
+			}
+			return gs.ReadAllEdgeFiles(ctx, edgeType)
+		},
+	}
+}
+
+// gitAttemptTracker guards the armed attempt channel with a mutex so the test
+// goroutine's arming write (arm) and the WithGitLock hook's close-and-nil are
+// synchronized — the same protection the former gitAttemptStore struct gave
+// its setAttempted/WithGitLock methods. The hook clears the channel after
+// closing so re-arming is safe.
+type gitAttemptTracker struct {
+	mu        sync.Mutex
+	attempted chan struct{}
+}
+
+// arm records the channel the next WithGitLock entry should close.
+func (t *gitAttemptTracker) arm(attempted chan struct{}) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.attempted = attempted
+}
+
+// hook returns a WithGitLock hook that closes the armed attempt channel (if
+// any) each time the git lock is entered, then delegates to gs.
+func (t *gitAttemptTracker) hook(gs gitstore.GitStore) func(func() error) error {
+	return func(fn func() error) error {
+		t.mu.Lock()
+		attempted := t.attempted
+		t.attempted = nil
+		t.mu.Unlock()
+		if attempted != nil {
+			close(attempted)
+		}
+		return gs.WithGitLock(fn)
+	}
 }
 
 type commitCountingGitStore struct {
@@ -62,171 +247,6 @@ type commitCountingGitStore struct {
 func (s *commitCountingGitStore) Commit(ctx context.Context, message string) error {
 	s.commits++
 	return s.GitStore.Commit(ctx, message)
-}
-
-type commitErrorGitStore struct {
-	gitstore.GitStore
-	failBefore bool
-	failAfter  bool
-	commits    int
-}
-
-func (s *commitErrorGitStore) Commit(ctx context.Context, message string) error {
-	s.commits++
-	if s.failBefore {
-		s.failBefore = false
-		return errors.New("simulated commit failure")
-	}
-	if err := s.GitStore.Commit(ctx, message); err != nil {
-		return err
-	}
-	if s.failAfter {
-		s.failAfter = false
-		return errors.New("simulated error after commit")
-	}
-	return nil
-}
-
-type cleanupAfterMergeFailingGitStore struct {
-	gitstore.GitStore
-	failRestore bool
-	commits     int
-	merges      int
-}
-
-func (s *cleanupAfterMergeFailingGitStore) Commit(ctx context.Context, message string) error {
-	s.commits++
-	return s.GitStore.Commit(ctx, message)
-}
-
-func (s *cleanupAfterMergeFailingGitStore) FastForwardMerge(ctx context.Context, branch, into string) error {
-	s.merges++
-	return s.GitStore.FastForwardMerge(ctx, branch, into)
-}
-
-func (s *cleanupAfterMergeFailingGitStore) RestoreMain(ctx context.Context) error {
-	if s.failRestore {
-		s.failRestore = false
-		return fmt.Errorf("simulated post-merge restore failure")
-	}
-	return s.GitStore.RestoreMain(ctx)
-}
-
-type recoveryFailingGitStore struct {
-	gitstore.GitStore
-	fail      string
-	lockCalls int
-}
-
-func (s *recoveryFailingGitStore) failOnce(operation string) error {
-	if s.fail == operation {
-		s.fail = ""
-		return fmt.Errorf("simulated %s failure", operation)
-	}
-	return nil
-}
-
-func (s *recoveryFailingGitStore) WithGitLock(fn func() error) error {
-	s.lockCalls++
-	if s.fail == "lookup lock" && s.lockCalls == 2 {
-		s.fail = ""
-		return errors.New("simulated lookup lock failure")
-	}
-	if err := s.failOnce("lock"); err != nil {
-		return err
-	}
-	return s.GitStore.WithGitLock(fn)
-}
-
-func (s *recoveryFailingGitStore) RestoreMain(ctx context.Context) error {
-	if err := s.failOnce("restore"); err != nil {
-		return err
-	}
-	return s.GitStore.RestoreMain(ctx)
-}
-
-func (s *recoveryFailingGitStore) CleanUntracked(ctx context.Context) error {
-	if err := s.failOnce("clean"); err != nil {
-		return err
-	}
-	return s.GitStore.CleanUntracked(ctx)
-}
-
-func (s *recoveryFailingGitStore) DeleteBranch(ctx context.Context, txID string) error {
-	if err := s.failOnce("delete"); err != nil {
-		return err
-	}
-	return s.GitStore.DeleteBranch(ctx, txID)
-}
-
-func (s *recoveryFailingGitStore) ListEntityTypes(ctx context.Context) ([]string, error) {
-	if err := s.failOnce("list entities"); err != nil {
-		return nil, err
-	}
-	return s.GitStore.ListEntityTypes(ctx)
-}
-
-func (s *recoveryFailingGitStore) ReadAllEntityFiles(
-	ctx context.Context, entityType string,
-) ([]gitstore.EntityFile, error) {
-	if err := s.failOnce("read entities"); err != nil {
-		return nil, err
-	}
-	return s.GitStore.ReadAllEntityFiles(ctx, entityType)
-}
-
-func (s *recoveryFailingGitStore) ListEdgeTypes(ctx context.Context) ([]string, error) {
-	if err := s.failOnce("list edges"); err != nil {
-		return nil, err
-	}
-	return s.GitStore.ListEdgeTypes(ctx)
-}
-
-func (s *recoveryFailingGitStore) ReadAllEdgeFiles(
-	ctx context.Context, edgeType string,
-) ([]gitstore.EdgeFile, error) {
-	if err := s.failOnce("read edges"); err != nil {
-		return nil, err
-	}
-	return s.GitStore.ReadAllEdgeFiles(ctx, edgeType)
-}
-
-// mergeDivergedGitStore surfaces ErrMergeDiverged from FastForwardMerge on the
-// first call, simulating the post-re-hydration commit-merge divergence path.
-type mergeDivergedGitStore struct {
-	gitstore.GitStore
-	diverged bool
-}
-
-func (s *mergeDivergedGitStore) FastForwardMerge(ctx context.Context, branch, into string) error {
-	if s.diverged {
-		s.diverged = false
-		return gitstore.ErrMergeDiverged
-	}
-	return s.GitStore.FastForwardMerge(ctx, branch, into)
-}
-
-type gitAttemptStore struct {
-	gitstore.GitStore
-	mu        sync.Mutex
-	attempted chan struct{}
-}
-
-func (s *gitAttemptStore) setAttempted(attempted chan struct{}) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.attempted = attempted
-}
-
-func (s *gitAttemptStore) WithGitLock(fn func() error) error {
-	s.mu.Lock()
-	attempted := s.attempted
-	s.attempted = nil
-	s.mu.Unlock()
-	if attempted != nil {
-		close(attempted)
-	}
-	return s.GitStore.WithGitLock(fn)
 }
 
 // pushTrackingGitStore wraps a gitstore to observe the background sync worker's
@@ -336,63 +356,4 @@ func (s *syncMockGitStore) releasePush() {
 	if rel != nil {
 		close(rel)
 	}
-}
-
-// cleanupFailingGitStore fails on specified git operations to test
-// that cleanup failures during BeginTransaction are surfaced.
-type cleanupFailingGitStore struct {
-	gitstore.GitStore
-	failRestore      bool
-	failClean        bool
-	failDelete       bool
-	failCreateBranch bool
-	failHardReset    bool
-}
-
-func (s *cleanupFailingGitStore) CreateBranch(ctx context.Context, txID string) error {
-	if s.failCreateBranch {
-		return fmt.Errorf("simulated CreateBranch failure")
-	}
-	return s.GitStore.CreateBranch(ctx, txID)
-}
-
-func (s *cleanupFailingGitStore) HardResetToBranch(ctx context.Context, branch string) error {
-	if s.failHardReset {
-		return fmt.Errorf("simulated HardResetToBranch failure")
-	}
-	return s.GitStore.HardResetToBranch(ctx, branch)
-}
-
-func (s *cleanupFailingGitStore) RestoreMain(ctx context.Context) error {
-	if s.failRestore {
-		return fmt.Errorf("simulated RestoreMain failure")
-	}
-	return s.GitStore.RestoreMain(ctx)
-}
-
-func (s *cleanupFailingGitStore) CleanUntracked(ctx context.Context) error {
-	if s.failClean {
-		return fmt.Errorf("simulated CleanUntracked failure")
-	}
-	return s.GitStore.CleanUntracked(ctx)
-}
-
-func (s *cleanupFailingGitStore) DeleteBranch(ctx context.Context, txID string) error {
-	if s.failDelete {
-		return fmt.Errorf("simulated DeleteBranch failure")
-	}
-	return s.GitStore.DeleteBranch(ctx, txID)
-}
-
-// lockObservationGitStore tracks when WithGitLock's closure runs so a test can
-// assert the schema hash is computed while the git lock is held.
-type lockObservationGitStore struct {
-	gitstore.GitStore
-	lockHeld *atomic.Bool
-}
-
-func (g *lockObservationGitStore) WithGitLock(fn func() error) error {
-	g.lockHeld.Store(true)
-	defer g.lockHeld.Store(false)
-	return g.GitStore.WithGitLock(fn)
 }

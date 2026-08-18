@@ -3,69 +3,11 @@ package service
 import (
 	"context"
 	"errors"
-	"fmt"
 	"sync"
 	"sync/atomic"
 
 	"github.com/foundry/flow/cartographer/internal/store"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
-
-type markerFailingStore struct {
-	store.Store
-	failMark bool
-	failDrop bool
-}
-
-type transactionStateFailingStore struct {
-	store.Store
-	fail   func(store.BranchTransactionState) bool
-	failed bool
-}
-
-func (s *transactionStateFailingStore) SaveBranchTransactionState(
-	ctx context.Context, txID string, state store.BranchTransactionState,
-) error {
-	if !s.failed && s.fail(state) {
-		s.failed = true
-		return errors.New("simulated transaction state write failure")
-	}
-	return s.Store.SaveBranchTransactionState(ctx, txID, state)
-}
-
-func (s *markerFailingStore) SaveBranchTransactionState(
-	ctx context.Context, txID string, state store.BranchTransactionState,
-) error {
-	if s.failMark && state.RollbackOnly {
-		s.failMark = false
-		return errors.New("simulated rollback-only marker failure")
-	}
-	return s.Store.SaveBranchTransactionState(ctx, txID, state)
-}
-
-func (s *markerFailingStore) DropBranchDB(ctx context.Context, txID string) error {
-	if s.failDrop {
-		s.failDrop = false
-		return errors.New("simulated marker cleanup drop failure")
-	}
-	return s.Store.DropBranchDB(ctx, txID)
-}
-
-type rehydrateFailingStore struct {
-	store.Store
-	fail bool
-}
-
-func (s *rehydrateFailingStore) RehydrateMainFromFiles(
-	ctx context.Context, entitiesDir, edgesDir string,
-) error {
-	if s.fail {
-		s.fail = false
-		return fmt.Errorf("simulated rehydration failure")
-	}
-	return s.Store.RehydrateMainFromFiles(ctx, entitiesDir, edgesDir)
-}
 
 // rehydrateTrackingStore wraps a store.Store to count RehydrateMainFromFiles
 // invocations, pinning the SPEC R10 re-hydration condition ("if new data was
@@ -117,38 +59,6 @@ func (f *flakyRehydrateStore) rehydrateCalls() int {
 	return f.calls
 }
 
-// incompatibleBranchSchemaStore simulates a branch whose schema is incompatible
-// with the current (main) schema. The store's own ApplySchema rejects
-// destructive changes (ErrDestructiveSchemaChange), so this state cannot arise
-// through public APIs; the wrapper pins the commit-time mapping of the store's
-// detection to the SPEC error-table row "Schema changed incompatibly during tx"
-// (FAILED_PRECONDITION).
-type incompatibleBranchSchemaStore struct {
-	store.Store
-}
-
-func (s *incompatibleBranchSchemaStore) CheckBranchSchemaCompatibility(context.Context, string) error {
-	return fmt.Errorf("%w: simulated incompatible schema", store.ErrDestructiveSchemaChange)
-}
-
-// cleanupFailingStore fails on CreateBranchDB and on DropBranchDB to test
-// that cleanup failures during BeginTransaction are surfaced.
-type cleanupFailingStore struct {
-	store.Store
-	failDrop bool
-}
-
-func (s *cleanupFailingStore) CreateBranchDB(context.Context, string) error {
-	return fmt.Errorf("simulated CreateBranchDB failure")
-}
-
-func (s *cleanupFailingStore) DropBranchDB(ctx context.Context, txID string) error {
-	if s.failDrop {
-		return fmt.Errorf("simulated DropBranchDB failure")
-	}
-	return s.Store.DropBranchDB(ctx, txID)
-}
-
 // lockObservationStore records whether the store's schema lookups (which
 // computeSchemaHash performs) happen while the git lock is held.
 type lockObservationStore struct {
@@ -177,24 +87,6 @@ func (s *lockObservationStore) record() {
 	} else {
 		s.unlocked++
 	}
-}
-
-type healthFailingStore struct {
-	store.Store
-}
-
-func (s *healthFailingStore) Health(ctx context.Context) (*store.HealthResult, error) {
-	return nil, fmt.Errorf("store health probe failed: pvc unreadable")
-}
-
-// exhaustedStore fails deterministically during export enumeration with a
-// RESOURCE_EXHAUSTED gRPC status, exercising the collectExportData error path.
-type exhaustedStore struct {
-	store.Store
-}
-
-func (e *exhaustedStore) ListMainEntityTypes() ([]string, error) {
-	return nil, status.Error(codes.ResourceExhausted, "simulated enumeration capacity exceeded")
 }
 
 // swapRecordingStore records the branch-lifecycle store calls the refresh
@@ -246,22 +138,4 @@ func (s *refreshTailPersistFailingStore) SaveBranchTransactionState(
 		}
 	}
 	return s.Store.SaveBranchTransactionState(ctx, txID, state)
-}
-
-// hydrationDirErrorStore fails the refresh's branch re-hydration with the
-// store's ErrInvalidEntityDir sentinel — the error mapStoreError previously
-// misclassified as INVALID_ARGUMENT — to pin the SPEC re-hydration INTERNAL
-// mapping (SPEC:987).
-type hydrationDirErrorStore struct {
-	store.Store
-	fail bool
-}
-
-func (s *hydrationDirErrorStore) HydrateBranchFromFiles(
-	ctx context.Context, txID, entitiesDir, edgesDir string,
-) error {
-	if s.fail {
-		return fmt.Errorf("%w: entities directory inconsistent", store.ErrInvalidEntityDir)
-	}
-	return s.Store.HydrateBranchFromFiles(ctx, txID, entitiesDir, edgesDir)
 }

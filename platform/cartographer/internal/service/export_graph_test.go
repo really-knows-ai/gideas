@@ -320,7 +320,9 @@ func TestExportGraph_BufferAllocationFailure(t *testing.T) {
 	srv.MarkDBReady()
 
 	// Wrap store to panic on ListMainEntityTypes, simulating an OOM.
-	srv.store = &panicStore{Store: st}
+	srv.store = &fakeStore{Store: st, onListMainEntityTypes: func() ([]string, error) {
+		panic("simulated OOM in export data collection")
+	}}
 
 	stream := &mockExportStream{ctx: capabilityContext("READ:graph/entity/*", scPriv, "sidecar")}
 	handlerInvoked, err := invokeExportGraph(srv, &flowv1.ExportGraphRequest{Format: "json"}, stream)
@@ -405,7 +407,9 @@ func TestExportGraph_DeterministicResourceExhausted(t *testing.T) {
 	srv := NewCartographerServer(base, gs, opPub, initTestKey(), nil, "",
 		30*time.Second, "test-ns", 30*time.Minute, 100000)
 	srv.MarkDBReady()
-	srv.store = &exhaustedStore{Store: base}
+	srv.store = &fakeStore{Store: base, onListMainEntityTypes: func() ([]string, error) {
+		return nil, status.Error(codes.ResourceExhausted, "simulated enumeration capacity exceeded")
+	}}
 
 	stream := &mockExportStream{ctx: capabilityContext("READ:graph/entity/*", testSidecarPriv, "sidecar")}
 	handlerInvoked, err := invokeExportGraph(srv, &flowv1.ExportGraphRequest{Format: "json"}, stream)

@@ -408,7 +408,7 @@ func TestRefreshTransaction_CommitMergeFailedThenMainAdvancedUnwedges(t *testing
 	if err != nil {
 		t.Fatalf("gitstore.New: %v", err)
 	}
-	failingGit := &mergeFailingGitStore{GitStore: gs, failMerge: true}
+	failingGit := failOnceMerge(gs)
 	opPub, _ := generateTestKey()
 	srv := NewCartographerServer(
 		base, failingGit, opPub, initTestKey(), nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000,

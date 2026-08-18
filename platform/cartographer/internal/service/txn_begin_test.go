@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -244,7 +245,9 @@ func TestBeginTransaction_ResourceExhausted(t *testing.T) {
 	srv.MarkDBReady()
 
 	// Replace the store with one that fails on CreateBranchDB.
-	srv.store = &failOnCreateBranchDBStore{Store: st}
+	srv.store = &fakeStore{Store: st, onCreateBranchDB: func(context.Context, string) error {
+		return fmt.Errorf("simulated CreateBranchDB failure")
+	}}
 
 	ctx := testCtx()
 	_, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
@@ -265,10 +268,18 @@ func TestBeginTransaction_ResourceExhausted(t *testing.T) {
 func TestBeginTransaction_GitBranchCreationResourceExhausted(t *testing.T) {
 	tests := []struct {
 		name   string
-		failFn func(*cleanupFailingGitStore)
+		failFn func(*fakeGitStore)
 	}{
-		{"CreateBranch", func(g *cleanupFailingGitStore) { g.failCreateBranch = true }},
-		{"HardResetToBranch", func(g *cleanupFailingGitStore) { g.failHardReset = true }},
+		{"CreateBranch", func(g *fakeGitStore) {
+			g.onCreateBranch = func(context.Context, string) error {
+				return fmt.Errorf("simulated CreateBranch failure")
+			}
+		}},
+		{"HardResetToBranch", func(g *fakeGitStore) {
+			g.onHardResetToBranch = func(context.Context, string) error {
+				return fmt.Errorf("simulated HardResetToBranch failure")
+			}
+		}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -281,7 +292,7 @@ func TestBeginTransaction_GitBranchCreationResourceExhausted(t *testing.T) {
 				30*time.Second, "test-ns", 30*time.Minute, 100000)
 			srv.MarkDBReady()
 
-			failing := &cleanupFailingGitStore{GitStore: gs}
+			failing := &fakeGitStore{GitStore: gs}
 			tt.failFn(failing)
 			srv.gitstore = failing
 
@@ -310,7 +321,10 @@ func TestBeginTransaction_SurfacesDropBranchDBFailure(t *testing.T) {
 		30*time.Second, "test-ns", 30*time.Minute, 100000)
 	srv.MarkDBReady()
 
-	srv.store = &cleanupFailingStore{Store: st, failDrop: true}
+	srv.store = &fakeStore{Store: st,
+		onCreateBranchDB: func(context.Context, string) error { return fmt.Errorf("simulated CreateBranchDB failure") },
+		onDropBranchDB:   func(context.Context, string) error { return fmt.Errorf("simulated DropBranchDB failure") },
+	}
 
 	ctx := testCtx()
 	_, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
@@ -349,11 +363,28 @@ func TestBeginTransaction_SurfacesCleanupFailures(t *testing.T) {
 				30*time.Second, "test-ns", 30*time.Minute, 100000)
 			srv.MarkDBReady()
 
-			srv.store = &cleanupFailingStore{Store: st}
-			srv.gitstore = &cleanupFailingGitStore{GitStore: gs,
-				failRestore: tt.failField == "restore",
-				failClean:   tt.failField == "clean",
-				failDelete:  tt.failField == "delete",
+			srv.store = &fakeStore{Store: st, onCreateBranchDB: func(context.Context, string) error {
+				return fmt.Errorf("simulated CreateBranchDB failure")
+			}}
+			srv.gitstore = &fakeGitStore{GitStore: gs,
+				onRestoreMain: func(ctx context.Context) error {
+					if tt.failField == "restore" {
+						return fmt.Errorf("simulated RestoreMain failure")
+					}
+					return gs.RestoreMain(ctx)
+				},
+				onCleanUntracked: func(ctx context.Context) error {
+					if tt.failField == "clean" {
+						return fmt.Errorf("simulated CleanUntracked failure")
+					}
+					return gs.CleanUntracked(ctx)
+				},
+				onDeleteBranch: func(ctx context.Context, txID string) error {
+					if tt.failField == "delete" {
+						return fmt.Errorf("simulated DeleteBranch failure")
+					}
+					return gs.DeleteBranch(ctx, txID)
+				},
 			}
 
 			ctx := testCtx()
@@ -384,8 +415,15 @@ func TestBeginTransaction_SurfacesMultipleCleanupFailures(t *testing.T) {
 		30*time.Second, "test-ns", 30*time.Minute, 100000)
 	srv.MarkDBReady()
 
-	srv.store = &cleanupFailingStore{Store: st, failDrop: true}
-	srv.gitstore = &cleanupFailingGitStore{GitStore: gs, failRestore: true, failClean: true, failDelete: true}
+	srv.store = &fakeStore{Store: st,
+		onCreateBranchDB: func(context.Context, string) error { return fmt.Errorf("simulated CreateBranchDB failure") },
+		onDropBranchDB:   func(context.Context, string) error { return fmt.Errorf("simulated DropBranchDB failure") },
+	}
+	srv.gitstore = &fakeGitStore{GitStore: gs,
+		onRestoreMain:    func(context.Context) error { return fmt.Errorf("simulated RestoreMain failure") },
+		onCleanUntracked: func(context.Context) error { return fmt.Errorf("simulated CleanUntracked failure") },
+		onDeleteBranch:   func(context.Context, string) error { return fmt.Errorf("simulated DeleteBranch failure") },
+	}
 
 	ctx := testCtx()
 	_, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
@@ -430,7 +468,9 @@ func TestBeginTransaction_SurfacesTxManagerCreateCleanupFailures(t *testing.T) {
 	srv.txManager.active[fixedID] = &TransactionState{ID: fixedID}
 	srv.newIDFn = func() string { return fixedID }
 
-	srv.gitstore = &cleanupFailingGitStore{GitStore: gs, failDelete: true}
+	srv.gitstore = &fakeGitStore{GitStore: gs, onDeleteBranch: func(context.Context, string) error {
+		return fmt.Errorf("simulated DeleteBranch failure")
+	}}
 
 	ctx := testCtx()
 	_, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
@@ -458,10 +498,7 @@ func TestBeginTransaction_PersistStateFailure_CleanupSuccess(t *testing.T) {
 	srv.MarkDBReady()
 
 	// Fail on the first SaveBranchTransactionState call.
-	srv.store = &transactionStateFailingStore{
-		Store: st,
-		fail:  func(store.BranchTransactionState) bool { return true },
-	}
+	srv.store = newTxStateFailingStore(st, func(store.BranchTransactionState) bool { return true })
 
 	ctx := testCtx()
 	_, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
@@ -492,12 +529,9 @@ func TestBeginTransaction_PersistStateFailure_CleanupFails(t *testing.T) {
 	srv.MarkDBReady()
 
 	// Fail on the first SaveBranchTransactionState call.
-	failingStore := &transactionStateFailingStore{
-		Store: st,
-		fail:  func(store.BranchTransactionState) bool { return true },
-	}
+	failingStore := newTxStateFailingStore(st, func(store.BranchTransactionState) bool { return true })
 	// Also make DropBranchDB fail so cleanupTransaction fails.
-	srv.store = &dropFailingStore{Store: failingStore, failDrop: true}
+	srv.store = failOnceDropBranchDB(failingStore)
 
 	ctx := testCtx()
 	_, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
@@ -536,7 +570,11 @@ func TestBeginTransaction_SchemaHashCapturedUnderGitLock(t *testing.T) {
 	}
 	lockHeld := &atomic.Bool{}
 	observedStore := &lockObservationStore{Store: st, lockHeld: lockHeld}
-	observedGit := &lockObservationGitStore{GitStore: gs, lockHeld: lockHeld}
+	observedGit := &fakeGitStore{GitStore: gs, onWithGitLock: func(fn func() error) error {
+		lockHeld.Store(true)
+		defer lockHeld.Store(false)
+		return gs.WithGitLock(fn)
+	}}
 	opPub, _ := generateTestKey()
 	srv := NewCartographerServer(observedStore, observedGit, opPub, initTestKey(), nil, "",
 		30*time.Second, "test-ns", 30*time.Minute, 100000)

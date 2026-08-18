@@ -115,14 +115,11 @@ func TestExtendTimeout_PersistFailureRevertsInMemoryState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("gitstore.New: %v", err)
 	}
-	failingStore := &transactionStateFailingStore{
-		Store: base,
+	failingStore := newTxStateFailingStore(base, func(state store.BranchTransactionState) bool {
 		// Fail only the ExtendTimeout persist (the state carrying the extended
 		// 10m AppliedTimeout), not BeginTransaction's own initial persist.
-		fail: func(state store.BranchTransactionState) bool {
-			return state.AppliedTimeout == 10*time.Minute
-		},
-	}
+		return state.AppliedTimeout == 10*time.Minute
+	})
 	opPub, _ := generateTestKey()
 	srv := NewCartographerServer(failingStore, gs, opPub, initTestKey(), nil, "",
 		30*time.Second, "test-ns", 30*time.Minute, 100000)

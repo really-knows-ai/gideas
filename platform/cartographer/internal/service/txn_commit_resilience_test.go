@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
@@ -28,7 +29,16 @@ func TestCommitTransaction_CommitFailureWithoutCommitAllowsRefreshAndRetry(t *te
 	if err != nil {
 		t.Fatalf("gitstore.New: %v", err)
 	}
-	failingGit := &commitErrorGitStore{GitStore: gs, failBefore: true}
+	commits := 0
+	failBefore := true
+	failingGit := &fakeGitStore{GitStore: gs, onCommit: func(ctx context.Context, message string) error {
+		commits++
+		if failBefore {
+			failBefore = false
+			return fmt.Errorf("simulated commit failure")
+		}
+		return gs.Commit(ctx, message)
+	}}
 	opPub, _ := generateTestKey()
 	srv := NewCartographerServer(
 		base, failingGit, opPub, initTestKey(), nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000,
@@ -69,8 +79,8 @@ func TestCommitTransaction_CommitFailureWithoutCommitAllowsRefreshAndRetry(t *te
 	}); err != nil {
 		t.Fatalf("retry CommitTransaction: %v", err)
 	}
-	if failingGit.commits != 2 {
-		t.Fatalf("expected two transaction commit attempts, got %d", failingGit.commits)
+	if commits != 2 {
+		t.Fatalf("expected two transaction commit attempts, got %d", commits)
 	}
 }
 
@@ -87,7 +97,19 @@ func TestCommitTransaction_ErrorAfterCommitRetainsResumableState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("gitstore.New: %v", err)
 	}
-	failingGit := &commitErrorGitStore{GitStore: gs, failAfter: true}
+	commits := 0
+	failAfter := true
+	failingGit := &fakeGitStore{GitStore: gs, onCommit: func(ctx context.Context, message string) error {
+		commits++
+		if err := gs.Commit(ctx, message); err != nil {
+			return err
+		}
+		if failAfter {
+			failAfter = false
+			return fmt.Errorf("simulated error after commit")
+		}
+		return nil
+	}}
 	opPub, _ := generateTestKey()
 	srv := NewCartographerServer(
 		base, failingGit, opPub, initTestKey(), nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000,
@@ -154,9 +176,9 @@ func TestCommitTransaction_ErrorAfterCommitRetainsResumableState(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("retry CommitTransaction: %v", err)
 	}
-	if failingGit.commits != 1 || countingGit.commits != 0 {
+	if commits != 1 || countingGit.commits != 0 {
 		t.Fatalf("expected no duplicate transaction commit, before restart=%d after restart=%d",
-			failingGit.commits, countingGit.commits)
+			commits, countingGit.commits)
 	}
 	if err = reopenedGit.WithGitLock(func() error {
 		if err := reopenedGit.RestoreMain(ctx); err != nil {
@@ -204,7 +226,7 @@ func TestCommitTransaction_StateWriteFailureRemainsDiscoverableAndRetryable(t *t
 				t.Fatalf("openTestStore: %v", err)
 			}
 			t.Cleanup(func() { _ = base.Close() })
-			failingStore := &transactionStateFailingStore{Store: base, fail: tc.fail}
+			failingStore := newTxStateFailingStore(base, tc.fail)
 			ladybugPath := t.TempDir()
 			gs, err := gitstore.New(ladybugPath)
 			if err != nil {
@@ -279,7 +301,25 @@ func TestCommitTransaction_RetryAfterMergeCompletedOnlyCleansUp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("gitstore.New: %v", err)
 	}
-	failingGit := &cleanupAfterMergeFailingGitStore{GitStore: gs}
+	commits, merges := 0, 0
+	failRestore := false
+	failingGit := &fakeGitStore{GitStore: gs,
+		onCommit: func(ctx context.Context, message string) error {
+			commits++
+			return gs.Commit(ctx, message)
+		},
+		onFastForwardMerge: func(ctx context.Context, branch, into string) error {
+			merges++
+			return gs.FastForwardMerge(ctx, branch, into)
+		},
+		onRestoreMain: func(ctx context.Context) error {
+			if failRestore {
+				failRestore = false
+				return fmt.Errorf("simulated post-merge restore failure")
+			}
+			return gs.RestoreMain(ctx)
+		},
+	}
 	opPub, _ := generateTestKey()
 	srv := NewCartographerServer(
 		base, failingGit, opPub, initTestKey(), nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000,
@@ -298,7 +338,7 @@ func TestCommitTransaction_RetryAfterMergeCompletedOnlyCleansUp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateEntity: %v", err)
 	}
-	failingGit.failRestore = true
+	failRestore = true
 	_, err = srv.CommitTransaction(ctx, &flowv1.CommitTransactionRequest{TransactionId: begin.TransactionId})
 	if err == nil {
 		t.Fatal("expected post-merge cleanup failure")
@@ -321,8 +361,8 @@ func TestCommitTransaction_RetryAfterMergeCompletedOnlyCleansUp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("cleanup retry: %v", err)
 	}
-	if failingGit.commits != 1 || failingGit.merges != 1 {
-		t.Fatalf("retry repeated irreversible work: commits=%d merges=%d", failingGit.commits, failingGit.merges)
+	if commits != 1 || merges != 1 {
+		t.Fatalf("retry repeated irreversible work: commits=%d merges=%d", commits, merges)
 	}
 	if err := gs.WithGitLock(func() error {
 		exists, err := gs.BranchExists(ctx, begin.TransactionId)
@@ -354,10 +394,9 @@ func TestCommitTransaction_MergePersistFailureSetsPushNeededOnRetry(t *testing.T
 	t.Cleanup(func() { _ = base.Close() })
 	// Fail the one MergeCompleted state write (the "persist completed merge"
 	// step); the earlier commit-created / re-hydration writes pass through.
-	failingStore := &transactionStateFailingStore{
-		Store: base,
-		fail:  func(state store.BranchTransactionState) bool { return state.MergeCompleted },
-	}
+	failingStore := newTxStateFailingStore(base, func(state store.BranchTransactionState) bool {
+		return state.MergeCompleted
+	})
 	ladybugPath := t.TempDir()
 	gs, err := gitstore.New(ladybugPath)
 	if err != nil {

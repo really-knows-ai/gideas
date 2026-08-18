@@ -260,7 +260,7 @@ func TestRecoverOpenTransactionsMainLookupFailuresAbort(t *testing.T) {
 			if err != nil {
 				t.Fatalf("begin transaction: %v", err)
 			}
-			failing := &recoveryFailingGitStore{GitStore: gs, fail: operation}
+			failing := newRecoveryFailingGitStore(gs, operation)
 			restarted := NewCartographerServer(
 				st, failing, opPub, initTestKey(), nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000,
 			)
@@ -300,12 +300,12 @@ func TestRecoverOpenTransactionsIdenticalCleanupIsRetryable(t *testing.T) {
 			if err != nil {
 				t.Fatalf("begin transaction: %v", err)
 			}
-			failingGit := &recoveryFailingGitStore{GitStore: gs}
+			failingGit := newRecoveryFailingGitStore(gs, "")
 			var recoveryStore = st
 			if operation == "drop" {
-				recoveryStore = &dropFailingStore{Store: st, failDrop: true}
+				recoveryStore = failOnceDropBranchDB(st)
 			} else {
-				failingGit.fail = operation
+				failingGit = newRecoveryFailingGitStore(gs, operation)
 			}
 			restarted := NewCartographerServer(
 				recoveryStore, failingGit, opPub, initTestKey(), nil, "", 30*time.Second,
