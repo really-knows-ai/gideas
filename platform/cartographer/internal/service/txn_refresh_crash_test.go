@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/foundry/flow/cartographer/internal/gitstore"
+	"github.com/foundry/flow/cartographer/internal/store"
 	"github.com/foundry/flow/cartographer/internal/store/ladybug"
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
 	"google.golang.org/grpc/codes"
@@ -422,7 +424,15 @@ func TestRefreshTransaction_RehydrationFailureIsInternal(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(func() { _ = base.Close() })
-	dirErr := &hydrationDirErrorStore{Store: base}
+	failHydration := false
+	dirErr := &fakeStore{Store: base, onHydrateBranchFromFiles: func(
+		ctx context.Context, txID, entitiesDir, edgesDir string,
+	) error {
+		if failHydration {
+			return fmt.Errorf("%w: entities directory inconsistent", store.ErrInvalidEntityDir)
+		}
+		return base.HydrateBranchFromFiles(ctx, txID, entitiesDir, edgesDir)
+	}}
 	gs, err := gitstore.New(dataPath)
 	if err != nil {
 		t.Fatalf("open git store: %v", err)
@@ -450,7 +460,7 @@ func TestRefreshTransaction_RehydrationFailureIsInternal(t *testing.T) {
 	commitGitEntity(ctx, t, gs, interim.Id, "interim")
 	// Arm the failure for the refresh's HydrateBranchFromFiles call (the
 	// BeginTransaction call has already completed).
-	dirErr.fail = true
+	failHydration = true
 
 	_, err = srv.RefreshTransaction(ctx, &flowv1.RefreshTransactionRequest{TransactionId: begin.TransactionId})
 	if err == nil {

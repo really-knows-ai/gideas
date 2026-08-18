@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -28,7 +29,7 @@ func TestRollbackTransaction_RestoresMainAfterFailedMerge(t *testing.T) {
 	if err != nil {
 		t.Fatalf("gitstore.New: %v", err)
 	}
-	failingGit := &mergeFailingGitStore{GitStore: gs, failMerge: true}
+	failingGit := failOnceMerge(gs)
 	opPub, _ := generateTestKey()
 	srv := NewCartographerServer(
 		base, failingGit, opPub, initTestKey(), nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000,
@@ -78,7 +79,7 @@ func TestRollbackTransaction_RestoresMainAfterFailedMerge(t *testing.T) {
 // the transaction registered for retry.
 func TestRollbackTransaction_PartialCommitWithoutLadybugPathIsExplicit(t *testing.T) {
 	srv, _ := newTestServer(t)
-	srv.gitstore = &mergeFailingGitStore{GitStore: srv.gitstore, failMerge: true}
+	srv.gitstore = failOnceMerge(srv.gitstore)
 	ctx := testCtx()
 	applyTestSchema(ctx, t, srv.store)
 	begin, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
@@ -112,7 +113,9 @@ func TestRollbackTransaction_WaitsForUnrelatedGitActivity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BeginTransaction: %v", err)
 	}
-	attempting := &gitAttemptStore{GitStore: srv.gitstore}
+	var attempted chan struct{}
+	origGit := srv.gitstore
+	attempting := &fakeGitStore{GitStore: origGit, onWithGitLock: gitAttemptHook(origGit, &attempted)}
 	srv.gitstore = attempting
 	gitHeld := make(chan struct{})
 	releaseGit := make(chan struct{})
@@ -125,8 +128,7 @@ func TestRollbackTransaction_WaitsForUnrelatedGitActivity(t *testing.T) {
 		})
 	}()
 	<-gitHeld
-	attempted := make(chan struct{})
-	attempting.setAttempted(attempted)
+	attempted = make(chan struct{})
 	rollbackDone := make(chan error, 1)
 	go func() {
 		_, rollbackErr := srv.RollbackTransaction(ctx, &flowv1.RollbackTransactionRequest{
@@ -166,9 +168,21 @@ func TestRollbackTransaction_AfterReconciledCommitError(t *testing.T) {
 			if err != nil {
 				t.Fatalf("gitstore.New: %v", err)
 			}
-			failingGit := &commitErrorGitStore{
-				GitStore: gs, failBefore: tc.failBefore, failAfter: tc.failAfter,
-			}
+			failBefore, failAfter := tc.failBefore, tc.failAfter
+			failingGit := &fakeGitStore{GitStore: gs, onCommit: func(ctx context.Context, message string) error {
+				if failBefore {
+					failBefore = false
+					return errors.New("simulated commit failure")
+				}
+				if err := gs.Commit(ctx, message); err != nil {
+					return err
+				}
+				if failAfter {
+					failAfter = false
+					return errors.New("simulated error after commit")
+				}
+				return nil
+			}}
 			opPub, _ := generateTestKey()
 			srv := NewCartographerServer(
 				base, failingGit, opPub, initTestKey(), nil, "", 30*time.Second,
@@ -219,7 +233,7 @@ func TestRollbackTransaction_AfterRestartDuringMainRehydrationRestoresMain(t *te
 	if err != nil {
 		t.Fatalf("gitstore.New: %v", err)
 	}
-	failingGit := &mergeFailingGitStore{GitStore: gs, failMerge: true}
+	failingGit := failOnceMerge(gs)
 	srv := NewCartographerServer(
 		base, failingGit, opPub, initTestKey(), nil, "", 30*time.Second,
 		"test-ns", 30*time.Minute, 100000, WithLadybugPath(dataPath),

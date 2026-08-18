@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -30,7 +31,14 @@ func TestCommitTransaction_MergeDivergedIsInternal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("gitstore.New: %v", err)
 	}
-	divergingGit := &mergeDivergedGitStore{GitStore: gs, diverged: true}
+	diverged := false
+	divergingGit := &fakeGitStore{GitStore: gs, onFastForwardMerge: func(ctx context.Context, branch, into string) error {
+		if !diverged {
+			diverged = true
+			return gitstore.ErrMergeDiverged
+		}
+		return gs.FastForwardMerge(ctx, branch, into)
+	}}
 	opPub, _ := generateTestKey()
 	srv := NewCartographerServer(
 		base, divergingGit, opPub, initTestKey(), nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000,
@@ -418,7 +426,16 @@ func TestCommitTransaction_RetryAfterCommitCreatedDoesNotDuplicateCommit(t *test
 		t.Fatalf("gitstore.New: %v", err)
 	}
 	countingGit := &commitCountingGitStore{GitStore: gs}
-	failingStore := &rehydrateFailingStore{Store: base, fail: true}
+	rehydrateFailed := false
+	failingStore := &fakeStore{Store: base, onRehydrateMainFromFiles: func(
+		ctx context.Context, entitiesDir, edgesDir string,
+	) error {
+		if !rehydrateFailed {
+			rehydrateFailed = true
+			return fmt.Errorf("simulated rehydration failure")
+		}
+		return base.RehydrateMainFromFiles(ctx, entitiesDir, edgesDir)
+	}}
 	opPub, _ := generateTestKey()
 	srv := NewCartographerServer(
 		failingStore, countingGit, opPub, initTestKey(), nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000,

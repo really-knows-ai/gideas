@@ -223,7 +223,7 @@ func TestRecoverRollbackOnlyTransactionWhenRejectedUpdateDoesNotIncreaseNetDiff(
 	if err != nil {
 		t.Fatalf("open git store: %v", err)
 	}
-	failing := &dropFailingStore{Store: st, failDrop: true}
+	failing := failOnceDropBranchDB(st)
 	srv := NewCartographerServer(
 		failing, gs, opPub, initTestKey(), nil, "", 30*time.Second,
 		"test-ns", 30*time.Minute, 1, WithLadybugPath(dataPath),
@@ -310,7 +310,7 @@ func TestRecoverRollbackOnlyTransactionWhenRejectedUpdateDoesNotIncreaseNetDiff(
 
 func TestChangeLogMarkerFailureStillCleansRejectedTransaction(t *testing.T) {
 	srv, base := newTestServer(t)
-	srv.store = &markerFailingStore{Store: base, failMark: true}
+	srv.store = newMarkerFailingStore(base, true, false)
 	srv.txManager.changeLogCap = 1
 	ctx := testCtx()
 	applyTestSchema(ctx, t, base)
@@ -357,7 +357,7 @@ func TestChangeLogMarkerAndCleanupFailureCannotRecoverAsActive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open git store: %v", err)
 	}
-	failing := &markerFailingStore{Store: st, failMark: true, failDrop: true}
+	failing := newMarkerFailingStore(st, true, true)
 	srv := NewCartographerServer(
 		failing, gs, opPub, initTestKey(), nil, "", 30*time.Second,
 		"test-ns", 30*time.Minute, 1, WithLadybugPath(dataPath),

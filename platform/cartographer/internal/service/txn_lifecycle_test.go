@@ -279,7 +279,9 @@ func TestDeleteEntity_StoreFailureDoesNotAddChangeLogEntry(t *testing.T) {
 	); err != nil {
 		t.Fatalf("seed branch entity: %v", err)
 	}
-	srv.store = &deleteEntityFailingStore{Store: base}
+	srv.store = &fakeStore{Store: base, onDeleteEntity: func(context.Context, string, string) (*store.Entity, error) {
+		return nil, errors.New("simulated DeleteEntity failure")
+	}}
 	_, err = srv.DeleteEntity(ctx, &flowv1.DeleteEntityRequest{Id: id, TransactionId: begin.TransactionId})
 	if err == nil || !strings.Contains(err.Error(), "simulated DeleteEntity failure") {
 		t.Fatalf("DeleteEntity error = %v", err)
@@ -298,7 +300,7 @@ func TestDeleteEntity_StoreFailureDoesNotAddChangeLogEntry(t *testing.T) {
 
 func TestTransaction_ChangeLogRollbackFailureIsExplicitAndRetryable(t *testing.T) {
 	srv, base := newTestServer(t)
-	failing := &dropFailingStore{Store: base, failDrop: true}
+	failing := failOnceDropBranchDB(base)
 	srv.store = failing
 	srv.txManager.changeLogCap = 1
 	ctx := testCtx()

@@ -1,7 +1,9 @@
 package service
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -186,7 +188,9 @@ func TestCommitTransaction_IncompatibleSchemaBlocksCommit(t *testing.T) {
 	// From here on the store reports an incompatible branch schema, exercising
 	// the service's mapping of ErrDestructiveSchemaChange to the SPEC
 	// FAILED_PRECONDITION row.
-	srv.store = &incompatibleBranchSchemaStore{Store: srv.store}
+	srv.store = &fakeStore{Store: srv.store, onCheckBranchSchemaCompatibility: func(context.Context, string) error {
+		return fmt.Errorf("%w: simulated incompatible schema", store.ErrDestructiveSchemaChange)
+	}}
 
 	_, err = srv.CommitTransaction(ctx, &flowv1.CommitTransactionRequest{TransactionId: txID})
 	if status.Code(err) != codes.FailedPrecondition || !strings.Contains(err.Error(), "schema changed incompatibly") {
@@ -248,7 +252,7 @@ func TestCommitTransaction_RecoveredPartialCommitRehydratesAfterStartupRebuild(t
 	}
 	// The first commit's fast-forward merge fails, simulating the crash
 	// window between main's re-hydration and the merge.
-	failingGit := &mergeFailingGitStore{GitStore: gs, failMerge: true}
+	failingGit := failOnceMerge(gs)
 	srv := NewCartographerServer(
 		st, failingGit, opPub, initTestKey(), nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000,
 		WithLadybugPath(dataPath),
@@ -364,10 +368,9 @@ func TestCommitTransaction_MergeCompletedAckWaitsForPush(t *testing.T) {
 	t.Cleanup(func() { _ = base.Close() })
 	// Fail only the "persist completed merge" state write so the first commit
 	// leaves MergeCompleted=true in memory with the git merge already landed.
-	failingStore := &transactionStateFailingStore{
-		Store: base,
-		fail:  func(state store.BranchTransactionState) bool { return state.MergeCompleted },
-	}
+	failingStore := newTxStateFailingStore(base, func(state store.BranchTransactionState) bool {
+		return state.MergeCompleted
+	})
 	fc := newFakeClock(time.Now())
 	sw := NewSyncWorker("https://example.com/repo.git", syncGit, failingStore, fc)
 	go sw.Run()

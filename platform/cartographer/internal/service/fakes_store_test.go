@@ -9,24 +9,148 @@ import (
 	"github.com/foundry/flow/cartographer/internal/store"
 )
 
-// wipeFailingStore fails on every call to WipeSchema, used to test mid-wipe
-// error handling in WipeGraph.
-type wipeFailingStore struct {
+// fakeStore wraps a store.Store, overriding selected methods with per-method
+// test hooks. A nil hook delegates to the embedded Store, so a failure-injection
+// seam is a one-field literal:
+//
+//	fakeStore{Store: s, onWipeSchema: func(context.Context) error { return errWipe }}
+type fakeStore struct {
 	store.Store
+	onWipeSchema                     func(context.Context) error
+	onCreateBranchDB                 func(context.Context, string) error
+	onDropBranchDB                   func(context.Context, string) error
+	onDeleteEntity                   func(context.Context, string, string) (*store.Entity, error)
+	onListMainEntityTypes            func() ([]string, error)
+	onHealth                         func(context.Context) (*store.HealthResult, error)
+	onRehydrateMainFromFiles         func(context.Context, string, string) error
+	onHydrateBranchFromFiles         func(context.Context, string, string, string) error
+	onSaveBranchTransactionState     func(context.Context, string, store.BranchTransactionState) error
+	onCheckBranchSchemaCompatibility func(context.Context, string) error
 }
 
-func (w *wipeFailingStore) WipeSchema(ctx context.Context) error {
-	return fmt.Errorf("simulated WipeSchema failure")
+func (f *fakeStore) WipeSchema(ctx context.Context) error {
+	if f.onWipeSchema != nil {
+		return f.onWipeSchema(ctx)
+	}
+	return f.Store.WipeSchema(ctx)
 }
 
-// failOnCreateBranchDBStore fails on CreateBranchDB, used to test
-// RESOURCE_EXHAUSTED in BeginTransaction.
-type failOnCreateBranchDBStore struct {
-	store.Store
+func (f *fakeStore) CreateBranchDB(ctx context.Context, txID string) error {
+	if f.onCreateBranchDB != nil {
+		return f.onCreateBranchDB(ctx, txID)
+	}
+	return f.Store.CreateBranchDB(ctx, txID)
 }
 
-func (f *failOnCreateBranchDBStore) CreateBranchDB(context.Context, string) error {
-	return fmt.Errorf("simulated CreateBranchDB failure")
+func (f *fakeStore) DropBranchDB(ctx context.Context, txID string) error {
+	if f.onDropBranchDB != nil {
+		return f.onDropBranchDB(ctx, txID)
+	}
+	return f.Store.DropBranchDB(ctx, txID)
+}
+
+func (f *fakeStore) DeleteEntity(ctx context.Context, id, branch string) (*store.Entity, error) {
+	if f.onDeleteEntity != nil {
+		return f.onDeleteEntity(ctx, id, branch)
+	}
+	return f.Store.DeleteEntity(ctx, id, branch)
+}
+
+func (f *fakeStore) ListMainEntityTypes() ([]string, error) {
+	if f.onListMainEntityTypes != nil {
+		return f.onListMainEntityTypes()
+	}
+	return f.Store.ListMainEntityTypes()
+}
+
+func (f *fakeStore) Health(ctx context.Context) (*store.HealthResult, error) {
+	if f.onHealth != nil {
+		return f.onHealth(ctx)
+	}
+	return f.Store.Health(ctx)
+}
+
+func (f *fakeStore) RehydrateMainFromFiles(ctx context.Context, entitiesDir, edgesDir string) error {
+	if f.onRehydrateMainFromFiles != nil {
+		return f.onRehydrateMainFromFiles(ctx, entitiesDir, edgesDir)
+	}
+	return f.Store.RehydrateMainFromFiles(ctx, entitiesDir, edgesDir)
+}
+
+func (f *fakeStore) HydrateBranchFromFiles(ctx context.Context, txID, entitiesDir, edgesDir string) error {
+	if f.onHydrateBranchFromFiles != nil {
+		return f.onHydrateBranchFromFiles(ctx, txID, entitiesDir, edgesDir)
+	}
+	return f.Store.HydrateBranchFromFiles(ctx, txID, entitiesDir, edgesDir)
+}
+
+func (f *fakeStore) SaveBranchTransactionState(
+	ctx context.Context, txID string, state store.BranchTransactionState,
+) error {
+	if f.onSaveBranchTransactionState != nil {
+		return f.onSaveBranchTransactionState(ctx, txID, state)
+	}
+	return f.Store.SaveBranchTransactionState(ctx, txID, state)
+}
+
+func (f *fakeStore) CheckBranchSchemaCompatibility(ctx context.Context, txID string) error {
+	if f.onCheckBranchSchemaCompatibility != nil {
+		return f.onCheckBranchSchemaCompatibility(ctx, txID)
+	}
+	return f.Store.CheckBranchSchemaCompatibility(ctx, txID)
+}
+
+// failOnceDropBranchDB returns a fakeStore whose first DropBranchDB call fails
+// and whose later calls delegate to s.
+func failOnceDropBranchDB(s store.Store) *fakeStore {
+	var failed bool
+	return &fakeStore{Store: s, onDropBranchDB: func(ctx context.Context, txID string) error {
+		if !failed {
+			failed = true
+			return fmt.Errorf("simulated DropBranchDB failure")
+		}
+		return s.DropBranchDB(ctx, txID)
+	}}
+}
+
+// newTxStateFailingStore returns a fakeStore whose first
+// SaveBranchTransactionState call matching fail returns a simulated write
+// failure; every other call delegates to s.
+func newTxStateFailingStore(s store.Store, fail func(store.BranchTransactionState) bool) *fakeStore {
+	var failed bool
+	return &fakeStore{Store: s, onSaveBranchTransactionState: func(
+		ctx context.Context, txID string, state store.BranchTransactionState,
+	) error {
+		if !failed && fail(state) {
+			failed = true
+			return errors.New("simulated transaction state write failure")
+		}
+		return s.SaveBranchTransactionState(ctx, txID, state)
+	}}
+}
+
+// newMarkerFailingStore returns a fakeStore that fails the first rollback-only
+// marker write and/or the first DropBranchDB call, delegating every other call
+// to s.
+func newMarkerFailingStore(s store.Store, failMark, failDrop bool) *fakeStore {
+	return &fakeStore{Store: s,
+		onSaveBranchTransactionState: func(
+			ctx context.Context, txID string, state store.BranchTransactionState,
+		) error {
+			if failMark && state.RollbackOnly {
+				failMark = false
+				return errors.New("simulated rollback-only marker failure")
+			}
+			return s.SaveBranchTransactionState(ctx, txID, state)
+		},
+		onDropBranchDB: func(ctx context.Context, txID string) error {
+			if failDrop {
+				failDrop = false
+				return errors.New("simulated marker cleanup drop failure")
+			}
+			return s.DropBranchDB(ctx, txID)
+		},
+	}
 }
 
 type beginSetupBlockingStore struct {
@@ -70,28 +194,10 @@ func (s *wipeBlockingStore) CreateBranchDB(ctx context.Context, txID string) err
 	return s.Store.CreateBranchDB(ctx, txID)
 }
 
-// panicStore panics on ListMainEntityTypes to simulate a buffer allocation
-// panic inside collectExportData.
-type panicStore struct {
-	store.Store
-}
-
-func (p *panicStore) ListMainEntityTypes() ([]string, error) {
-	panic("simulated OOM in export data collection")
-}
-
 type mutationBlockingStore struct {
 	store.Store
 	wrote   chan struct{}
 	release chan struct{}
-}
-
-type deleteEntityFailingStore struct {
-	store.Store
-}
-
-func (s *deleteEntityFailingStore) DeleteEntity(context.Context, string, string) (*store.Entity, error) {
-	return nil, errors.New("simulated DeleteEntity failure")
 }
 
 func (s *mutationBlockingStore) CreateEntity(
@@ -142,17 +248,4 @@ func (s *hydrationCountingStore) RehydrateMainFromFiles(context.Context, string,
 func (s *hydrationCountingStore) RehydrateFromBranch(context.Context, string) error {
 	s.fromBranch++
 	return nil
-}
-
-type dropFailingStore struct {
-	store.Store
-	failDrop bool
-}
-
-func (s *dropFailingStore) DropBranchDB(ctx context.Context, txID string) error {
-	if s.failDrop {
-		s.failDrop = false
-		return fmt.Errorf("simulated DropBranchDB failure")
-	}
-	return s.Store.DropBranchDB(ctx, txID)
 }

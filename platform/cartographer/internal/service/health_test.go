@@ -2,11 +2,13 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/foundry/flow/cartographer/internal/gitstore"
+	"github.com/foundry/flow/cartographer/internal/store"
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -37,7 +39,9 @@ func TestHealthCheck_PropagatesStoreError(t *testing.T) {
 		t.Fatalf("openTestStore: %v", err)
 	}
 	t.Cleanup(func() { _ = base.Close() })
-	failing := &healthFailingStore{Store: base}
+	failing := &fakeStore{Store: base, onHealth: func(context.Context) (*store.HealthResult, error) {
+		return nil, fmt.Errorf("store health probe failed: pvc unreadable")
+	}}
 	gs, _ := gitstore.New(t.TempDir())
 	opPub, _ := generateTestKey()
 	srv := NewCartographerServer(failing, gs, opPub, initTestKey(), nil, "",

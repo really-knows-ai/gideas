@@ -187,7 +187,8 @@ func TestRefreshTransaction_ConcurrentCommitCannotUseStaleHead(t *testing.T) {
 	if err != nil {
 		t.Fatalf("gitstore.New: %v", err)
 	}
-	attemptingGit := &gitAttemptStore{GitStore: gs}
+	var gitAttempted chan struct{}
+	attemptingGit := &fakeGitStore{GitStore: gs, onWithGitLock: gitAttemptHook(gs, &gitAttempted)}
 	opPub, _ := generateTestKey()
 	srv := NewCartographerServer(
 		blocking, attemptingGit, opPub, initTestKey(), nil, "", 30*time.Second, "test-ns", 30*time.Minute, 100000,
@@ -215,8 +216,7 @@ func TestRefreshTransaction_ConcurrentCommitCannotUseStaleHead(t *testing.T) {
 		refreshDone <- refreshErr
 	}()
 	<-blocking.blocked
-	gitAttempted := make(chan struct{})
-	attemptingGit.setAttempted(gitAttempted)
+	gitAttempted = make(chan struct{})
 	unrelatedDone := make(chan error, 1)
 	go func() { unrelatedDone <- srv.withGitLock(func() error { return nil }) }()
 	<-gitAttempted

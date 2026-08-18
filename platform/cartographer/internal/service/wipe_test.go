@@ -96,7 +96,14 @@ func TestWipeGraph_TreeOnTxBranchWipeLandsOnMain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("gitstore.New: %v", err)
 	}
-	failingGit := &mergeFailingGitStore{GitStore: gs}
+	failMerge := false
+	failingGit := &fakeGitStore{GitStore: gs, onFastForwardMerge: func(ctx context.Context, branch, into string) error {
+		if failMerge {
+			failMerge = false
+			return fmt.Errorf("simulated merge failure")
+		}
+		return gs.FastForwardMerge(ctx, branch, into)
+	}}
 	opPub, _ := generateTestKey()
 	srv := NewCartographerServer(
 		base, failingGit, opPub, initTestKey(), nil, "", 30*time.Second,
@@ -130,7 +137,7 @@ func TestWipeGraph_TreeOnTxBranchWipeLandsOnMain(t *testing.T) {
 	// A second transaction whose commit fails at the fast-forward merge leaves
 	// the working tree checked out on the transaction branch with its commit
 	// recorded (reconcileFailedCommitGitLocked).
-	failingGit.failMerge = true
+	failMerge = true
 	begin2, err := srv.BeginTransaction(ctx, &flowv1.BeginTransactionRequest{})
 	if err != nil {
 		t.Fatalf("BeginTransaction: %v", err)
@@ -332,7 +339,9 @@ func TestWipeGraph_MidWipeFailure(t *testing.T) {
 	ctx := context.Background()
 
 	// Replace the store with one that fails on WipeAll.
-	srv.store = &wipeFailingStore{Store: st}
+	srv.store = &fakeStore{Store: st, onWipeSchema: func(context.Context) error {
+		return fmt.Errorf("simulated WipeSchema failure")
+	}}
 
 	// The git operations (withGitLock) will succeed, but WipeAll will fail,
 	// triggering the mid-wipe error.
@@ -355,17 +364,29 @@ func TestWipeGraph_GitSideMidWipeFailure(t *testing.T) {
 	scPub, _ := generateTestKey()
 	for _, tc := range []struct {
 		name      string
-		configure func(*wipeFailingGitStore)
+		configure func(*fakeGitStore)
 	}{
-		{"git rm entities", func(g *wipeFailingGitStore) { g.failGitRm = true }},
-		{"wipe commit", func(g *wipeFailingGitStore) { g.failCommit = true }},
-		{"clean untracked", func(g *wipeFailingGitStore) { g.failClean = true }},
+		{"git rm entities", func(g *fakeGitStore) {
+			g.onGitRm = func(context.Context, string) error {
+				return fmt.Errorf("simulated GitRm failure")
+			}
+		}},
+		{"wipe commit", func(g *fakeGitStore) {
+			g.onCommit = func(context.Context, string) error {
+				return fmt.Errorf("simulated wipe commit failure")
+			}
+		}},
+		{"clean untracked", func(g *fakeGitStore) {
+			g.onCleanUntracked = func(context.Context) error {
+				return fmt.Errorf("simulated clean untracked failure")
+			}
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			st, _ := openTestStore(t)
 			t.Cleanup(func() { _ = st.Close() })
 			gs, _ := gitstore.New(t.TempDir())
-			failingGit := &wipeFailingGitStore{GitStore: gs}
+			failingGit := &fakeGitStore{GitStore: gs}
 			tc.configure(failingGit)
 			srv := NewCartographerServer(st, failingGit, opPub, scPub, nil, "",
 				30*time.Second, "test-ns", 30*time.Minute, 100000)
@@ -407,7 +428,9 @@ func TestWipeGraph_StoreSideFailureConvergesLiveStoreToWipedGit(t *testing.T) {
 	}
 	// The store-side wipe fails on demand; the real store's data is cleared by
 	// the in-RPC re-hydration.
-	srv := NewCartographerServer(&wipeFailingStore{Store: st}, gs, opPub, scPub, nil, "",
+	srv := NewCartographerServer(&fakeStore{Store: st, onWipeSchema: func(context.Context) error {
+		return fmt.Errorf("simulated WipeSchema failure")
+	}}, gs, opPub, scPub, nil, "",
 		30*time.Second, "test-ns", 30*time.Minute, 100000)
 	srv.MarkDBReady()
 	ctx := context.Background()
