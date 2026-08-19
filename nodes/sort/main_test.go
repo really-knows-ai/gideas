@@ -14,8 +14,8 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
-// Well-known output name for routing to the human-approval node.
-const outputHumanApproval = "human-approval"
+// Well-known output name for routing to the hitl-approval node.
+const outputHitlApproval = "hitl-approval"
 
 // ---------------------------------------------------------------------------
 // Test helper — spins up a real ephemeral TCP server with the sortSpy
@@ -24,7 +24,7 @@ const outputHumanApproval = "human-approval"
 // defaultConfig returns a sortConfig matching the reference arrangement.
 func defaultConfig() *sortConfig {
 	return &sortConfig{
-		NodeOrder:         "quench,appraisal,human-approval",
+		NodeOrder:         "quench,appraisal,hitl-approval",
 		DeadlockThreshold: 3,
 	}
 }
@@ -119,23 +119,23 @@ func TestSort_RoutesToAppraise_MissingApprovalStamp(t *testing.T) {
 		t.Fatalf("handleSort() error: %v", err)
 	}
 
-	if len(spy.RoutedOutputs) != 1 || spy.RoutedOutputs[0] != outputHumanApproval {
-		t.Fatalf("expected route to human-approval, got %v", spy.RoutedOutputs)
+	if len(spy.RoutedOutputs) != 1 || spy.RoutedOutputs[0] != outputHitlApproval {
+		t.Fatalf("expected route to hitl-approval, got %v", spy.RoutedOutputs)
 	}
 }
 
 func TestSort_RoutesToHumanApproval_MissingApprovalStamp(t *testing.T) {
 	spy := newSortSpy()
 	spy.StampState["appraisal"] = true
-	// Approval stamp is missing — Sort should route to human-approval.
+	// Approval stamp is missing — Sort should route to hitl-approval.
 	client, workitem := setupSortTest(t, spy)
 
 	if err := handleSort(context.Background(), workitem, client, defaultConfig()); err != nil {
 		t.Fatalf("handleSort() error: %v", err)
 	}
 
-	if len(spy.RoutedOutputs) != 1 || spy.RoutedOutputs[0] != "human-approval" {
-		t.Fatalf("expected route to human-approval, got %v", spy.RoutedOutputs)
+	if len(spy.RoutedOutputs) != 1 || spy.RoutedOutputs[0] != "hitl-approval" {
+		t.Fatalf("expected route to hitl-approval, got %v", spy.RoutedOutputs)
 	}
 	if len(spy.StampedNames) != 0 {
 		t.Fatalf("expected no stamping, got %v", spy.StampedNames)
@@ -255,9 +255,9 @@ func TestSort_DoesNotRedeadlockWontFixFeedback(t *testing.T) {
 	if len(spy.DeadlockedIDs) != 0 {
 		t.Fatalf("expected no deadlocking for arbitrated WONT_FIX, got %v", spy.DeadlockedIDs)
 	}
-	// Should route to human-approval (missing approval stamp) instead of re-deadlocking.
-	if len(spy.RoutedOutputs) != 1 || spy.RoutedOutputs[0] != outputHumanApproval {
-		t.Fatalf("expected route to human-approval, got %v", spy.RoutedOutputs)
+	// Should route to hitl-approval (missing approval stamp) instead of re-deadlocking.
+	if len(spy.RoutedOutputs) != 1 || spy.RoutedOutputs[0] != outputHitlApproval {
+		t.Fatalf("expected route to hitl-approval, got %v", spy.RoutedOutputs)
 	}
 }
 
@@ -278,9 +278,9 @@ func TestSort_DoesNotRedeadlockRejectedFeedback(t *testing.T) {
 	if len(spy.DeadlockedIDs) != 0 {
 		t.Fatalf("expected no deadlocking for arbitrated REJECTED, got %v", spy.DeadlockedIDs)
 	}
-	// Should route to human-approval (missing approval stamp) instead of re-deadlocking.
-	if len(spy.RoutedOutputs) != 1 || spy.RoutedOutputs[0] != outputHumanApproval {
-		t.Fatalf("expected route to human-approval, got %v", spy.RoutedOutputs)
+	// Should route to hitl-approval (missing approval stamp) instead of re-deadlocking.
+	if len(spy.RoutedOutputs) != 1 || spy.RoutedOutputs[0] != outputHitlApproval {
+		t.Fatalf("expected route to hitl-approval, got %v", spy.RoutedOutputs)
 	}
 }
 
@@ -301,9 +301,9 @@ func TestSort_BelowThreshold_RoutesToRefine(t *testing.T) {
 	if len(spy.DeadlockedIDs) != 0 {
 		t.Fatalf("expected no deadlocking, got %v", spy.DeadlockedIDs)
 	}
-	// Appraisal stamp present + WONT_FIX from quench → human-approval (missing approval).
-	if len(spy.RoutedOutputs) != 1 || spy.RoutedOutputs[0] != outputHumanApproval {
-		t.Fatalf("expected route to human-approval, got %v", spy.RoutedOutputs)
+	// Appraisal stamp present + WONT_FIX from quench → hitl-approval (missing approval).
+	if len(spy.RoutedOutputs) != 1 || spy.RoutedOutputs[0] != outputHitlApproval {
+		t.Fatalf("expected route to hitl-approval, got %v", spy.RoutedOutputs)
 	}
 }
 
@@ -1047,8 +1047,8 @@ func attestTopology() *flowv1.GetFlowTopologyResponse {
 				{Name: "quench", Target: "quench"},
 				{Name: "appraisal", Target: "appraisal"},
 				{Name: "refine", Target: "refine"},
-				{Name: "human-arbiter", Target: "human-arbiter"},
-				{Name: "human-approval", Target: "human-approval"},
+				{Name: "hitl-arbiter", Target: "hitl-arbiter"},
+				{Name: "hitl-approval", Target: "hitl-approval"},
 				{Name: "attest-law", Target: "attest-law"},
 			},
 		},
@@ -1069,11 +1069,11 @@ func attestTopology() *flowv1.GetFlowTopologyResponse {
 			"refine": {
 				Name: "refine",
 			},
-			"human-arbiter": {
-				Name: "human-arbiter",
+			"hitl-arbiter": {
+				Name: "hitl-arbiter",
 			},
-			"human-approval": {
-				Name:         "human-approval",
+			"hitl-approval": {
+				Name:         "hitl-approval",
 				Capabilities: []string{"STAMP:artefact/haiku/approval"},
 			},
 			// Attestation provider — NOT in nodeOrder, only reached via fallback.

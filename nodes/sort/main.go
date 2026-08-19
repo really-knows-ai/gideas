@@ -45,8 +45,8 @@ const (
 	defaultDeadlockThreshold int32 = 3
 
 	// outputArbiter is the well-known output name for escalation to the
-	// human-arbiter node when deadlock is detected.
-	outputArbiter = "human-arbiter"
+	// hitl-arbiter node when deadlock is detected.
+	outputArbiter = "hitl-arbiter"
 
 	// outputRefine is the well-known output name for routing to refinement.
 	outputRefine = "refine"
