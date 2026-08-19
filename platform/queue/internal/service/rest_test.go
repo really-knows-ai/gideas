@@ -14,6 +14,8 @@ import (
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
 	flowv1api "github.com/foundry/flow/operator/api/v1"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // setupRestRegistry seeds a CR with living shards wired to bufconn fakes via
@@ -143,6 +145,16 @@ func TestREST_ClaimDecideRelease_ProxyPath(t *testing.T) {
 			w := doReq(h, tc.method, tc.path, tc.body)
 			if w.Code != http.StatusOK {
 				t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+			}
+			// decide: pin the JSON {"choice":...} → DecideItem body-parsing seam.
+			if tc.name == "decide" {
+				got := h.shards["say:a"].decidedCalls()
+				if len(got) != 1 {
+					t.Fatalf("decide reached the shard %d times, want 1", len(got))
+				}
+				if got[0].GetChoice() != "approve" {
+					t.Fatalf("decide choice = %q, want %q", got[0].GetChoice(), "approve")
+				}
 			}
 		})
 	}
@@ -291,5 +303,85 @@ func TestREST_UnknownItem_WithEvictedShard_Returns503(t *testing.T) {
 		if a == "evicted-addr" {
 			t.Fatal("evicted shard's address was dialed")
 		}
+	}
+}
+
+func TestREST_ConflictErrors_SurfaceAs409(t *testing.T) {
+	// Claim: peer ClaimItem → gRPC AlreadyExists → 409 QUEUE_ITEM_ALREADY_CLAIMED.
+	// Decide: peer DecideItem → gRPC FailedPrecondition → 409 QUEUE_ITEM_INVALID_STATE.
+	cases := []struct {
+		name     string
+		method   string
+		path     string
+		body     string
+		inject   func(f *fakePeerShard)
+		wantCode string
+	}{
+		{
+			name:   "claim already claimed",
+			method: http.MethodPost,
+			path:   "/queues/hitl-approval/wi-1/claim",
+			inject: func(f *fakePeerShard) {
+				f.setClaimsError(status.Error(codes.AlreadyExists, "already claimed"))
+			},
+			wantCode: "QUEUE_ITEM_ALREADY_CLAIMED",
+		},
+		{
+			name:   "decide invalid state",
+			method: http.MethodPost,
+			path:   "/queues/hitl-approval/wi-1/decide",
+			body:   `{"choice":"approve"}`,
+			inject: func(f *fakePeerShard) {
+				f.setDecideError(status.Error(codes.FailedPrecondition, "invalid state"))
+			},
+			wantCode: "QUEUE_ITEM_INVALID_STATE",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newRestHarness(t, []string{"say:a"})
+			h.shards["say:a"].setItems(&flowv1.QueueItem{WorkitemId: "wi-1", Status: "waiting"})
+			tc.inject(h.shards["say:a"])
+			w := doReq(h, tc.method, tc.path, tc.body)
+			if w.Code != http.StatusConflict {
+				t.Fatalf("status = %d, want 409: %s", w.Code, w.Body.String())
+			}
+			if !strings.Contains(w.Body.String(), tc.wantCode) {
+				t.Fatalf("body lacks %s: %s", tc.wantCode, w.Body.String())
+			}
+		})
+	}
+}
+
+func TestREST_PartialShardFailure_Returns503(t *testing.T) {
+	// One living shard answers empty, another living shard fails GetLocalQueue
+	// mid-fan-out and no owner is found ⇒ 503 QUEUE_UNAVAILABLE (retryable),
+	// NOT 404 (SPEC proxy-write error row — the item may sit on the
+	// newly-unreachable living shard).
+	h := newRestHarness(t, []string{"say:a", "say:b"})
+	h.shards["say:b"].setLocalError(status.Error(codes.Unavailable, "shard b unreachable"))
+	w := doReq(h, http.MethodGet, "/queues/hitl-approval/wi-1", "")
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "QUEUE_UNAVAILABLE") {
+		t.Fatalf("body lacks QUEUE_UNAVAILABLE: %s", w.Body.String())
+	}
+}
+
+func TestREST_Decide_MalformedBody_Returns400(t *testing.T) {
+	h := newRestHarness(t, []string{"say:a"})
+	h.shards["say:a"].setItems(&flowv1.QueueItem{WorkitemId: "wi-1", Status: "waiting"})
+	// ContentLength != 0 with an invalid JSON body ⇒ 400 before any shard is
+	// dialed.
+	w := doReq(h, http.MethodPost, "/queues/hitl-approval/wi-1/decide", "{not-json")
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "BAD_REQUEST") {
+		t.Fatalf("body lacks BAD_REQUEST: %s", w.Body.String())
+	}
+	if got := h.shards["say:a"].decidedCalls(); len(got) != 0 {
+		t.Fatalf("decide reached the shard on a malformed body: %v", got)
 	}
 }

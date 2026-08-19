@@ -93,6 +93,12 @@ type fakePeerShard struct {
 	decided  []*flowv1.DecideItemRequest
 	notified []string // shard_ids received via NotifyShardDead
 
+	// Error-injection knobs (mirror the SDK's failBeats pattern): when set,
+	// the corresponding handler returns the error instead of succeeding.
+	claimErr  error
+	decideErr error
+	localErr  error
+
 	lis    *bufconn.Listener
 	srv    *grpc.Server
 	dialer peerDialer
@@ -127,6 +133,9 @@ func (f *fakePeerShard) GetLocalQueue(
 ) (*flowv1.GetLocalQueueResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.localErr != nil {
+		return nil, f.localErr
+	}
 	return &flowv1.GetLocalQueueResponse{Items: f.items}, nil
 }
 
@@ -134,10 +143,13 @@ func (f *fakePeerShard) ClaimItem(
 	_ context.Context, req *flowv1.ClaimItemRequest,
 ) (*flowv1.ClaimItemResponse, error) {
 	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.claimErr != nil {
+		return nil, f.claimErr
+	}
 	f.claimed = append(f.claimed, req.GetWorkitemId())
 	// Return a minimal item so the proxy has something to proxy back.
 	item := &flowv1.QueueItem{WorkitemId: req.GetWorkitemId(), Status: "claimed"}
-	f.mu.Unlock()
 	return &flowv1.ClaimItemResponse{Item: item}, nil
 }
 
@@ -145,9 +157,9 @@ func (f *fakePeerShard) ReleaseItem(
 	_ context.Context, req *flowv1.ReleaseItemRequest,
 ) (*flowv1.ReleaseItemResponse, error) {
 	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.released = append(f.released, req.GetWorkitemId())
 	item := &flowv1.QueueItem{WorkitemId: req.GetWorkitemId(), Status: "waiting"}
-	f.mu.Unlock()
 	return &flowv1.ReleaseItemResponse{Item: item}, nil
 }
 
@@ -155,8 +167,11 @@ func (f *fakePeerShard) DecideItem(
 	_ context.Context, req *flowv1.DecideItemRequest,
 ) (*flowv1.DecideItemResponse, error) {
 	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.decideErr != nil {
+		return nil, f.decideErr
+	}
 	f.decided = append(f.decided, req)
-	f.mu.Unlock()
 	return &flowv1.DecideItemResponse{Acknowledged: true}, nil
 }
 
@@ -173,6 +188,28 @@ func (f *fakePeerShard) NotifyShardDead(
 func (f *fakePeerShard) setItems(items ...*flowv1.QueueItem) {
 	f.mu.Lock()
 	f.items = items
+	f.mu.Unlock()
+}
+
+// setClaimsError makes ClaimItem return the given error once set (injection
+// knob mirroring the SDK's failBeats pattern).
+func (f *fakePeerShard) setClaimsError(err error) {
+	f.mu.Lock()
+	f.claimErr = err
+	f.mu.Unlock()
+}
+
+// setDecideError makes DecideItem return the given error once set.
+func (f *fakePeerShard) setDecideError(err error) {
+	f.mu.Lock()
+	f.decideErr = err
+	f.mu.Unlock()
+}
+
+// setLocalError makes GetLocalQueue return the given error once set.
+func (f *fakePeerShard) setLocalError(err error) {
+	f.mu.Lock()
+	f.localErr = err
 	f.mu.Unlock()
 }
 

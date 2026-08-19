@@ -37,6 +37,15 @@ type peerProxy struct {
 	peers map[string]flowv1.QueuePeerServiceClient
 }
 
+// ponytail: A fresh peerProxy (and its conn cache) is created per REST/item-gRPC
+// request and closed afterwards (rest.go / itemgrpc.go), so each call re-dials the
+// living shard conns instead of reusing a Registry-lifetime cache. PHASE_03 calls
+// for a per-shard-addr conn cache keyed to the registry; this request-scoped
+// variant is a benign trade-off — correctness is identical (living set is still
+// re-derived from the CR each call) and it avoids stale-conn lifetime management.
+// Ceiling: at very high request rates the re-dial per call adds gRPC connect
+// latency and churn. Upgrade path: hoist a conn cache into Registry's lifetime,
+// keyed by shard addr, invalidated on the lease sweep's shard-drop.
 func newPeerProxy(reg *Registry) *peerProxy {
 	return &peerProxy{
 		reg:   reg,
@@ -152,6 +161,7 @@ func (p *peerProxy) findOwner(
 	}
 
 	queried := 0
+	queryFailed := false
 	for _, s := range shards {
 		c, err := p.dial(ctx, s.Addr)
 		if err != nil {
@@ -160,7 +170,10 @@ func (p *peerProxy) findOwner(
 		}
 		resp, err := c.GetLocalQueue(ctx, &flowv1.GetLocalQueueRequest{})
 		if err != nil {
+			// A living shard failed mid-fan-out; the item may sit on it, so
+			// this is a retryable 503, not a 404 (SPEC proxy-write error row).
 			slog.Warn("queue-service: peer GetLocalQueue failed", "addr", s.Addr, "error", err)
+			queryFailed = true
 			continue
 		}
 		queried++
@@ -175,10 +188,12 @@ func (p *peerProxy) findOwner(
 	//   - if we could not successfully query ANY living shard (all living
 	//     shards unreachable), 503 — we cannot distinguish "item on a dead
 	//     shard" from "no such item";
+	//   - else if a living shard failed to respond mid-fan-out, 503 — the item
+	//     may sit on the newly-unreachable shard;
 	//   - else if any CR-registered shard is non-living (stale/evicted), 503 —
 	//     the item may sit on the dead shard;
 	//   - else all CR shards living and none owns it, 404 (genuinely absent).
-	if queried == 0 {
+	if queried == 0 || queryFailed {
 		return nil, errShardUnavailable
 	}
 	if p.hasNonLiving(q) {
@@ -202,6 +217,14 @@ func (p *peerProxy) hasNonLiving(q *v1.Queue) bool {
 // errQueueItemNotFound is returned when no living shard owns the item and all
 // CR shards are living.
 var errQueueItemNotFound = fmt.Errorf("queue item not found")
+
+// errQueueItemAlreadyClaimed / errQueueItemInvalidState mirror the store's
+// sentinels (surfaced by a peer shard as gRPC AlreadyExists / FailedPrecondition);
+// the REST frontend maps them to HTTP 409.
+var (
+	errQueueItemAlreadyClaimed = fmt.Errorf("queue item already claimed")
+	errQueueItemInvalidState   = fmt.Errorf("queue item invalid state transition")
+)
 
 // getItem proxies GetLocalQueue/owner-lookup to return a single item from the
 // living owner.
@@ -290,6 +313,12 @@ func mapPeerError(err error) error {
 	if isGRPCNotFound(err) {
 		return errQueueItemNotFound
 	}
+	if isGRPCAlreadyExists(err) {
+		return errQueueItemAlreadyClaimed
+	}
+	if isGRPCFailedPrecondition(err) {
+		return errQueueItemInvalidState
+	}
 	return err
 }
 
@@ -301,4 +330,17 @@ func isGRPCUnavailable(err error) bool {
 // isGRPCNotFound reports whether the error is a gRPC NotFound status.
 func isGRPCNotFound(err error) bool {
 	return status.Code(err) == codes.NotFound
+}
+
+// isGRPCAlreadyExists reports whether the error is a gRPC AlreadyExists status
+// (the peer shard's ClaimItem maps ErrQueueItemAlreadyClaimed to it).
+func isGRPCAlreadyExists(err error) bool {
+	return status.Code(err) == codes.AlreadyExists
+}
+
+// isGRPCFailedPrecondition reports whether the error is a gRPC
+// FailedPrecondition status (the peer shard's DecideItem/ClaimItem maps
+// ErrQueueItemInvalidState to it).
+func isGRPCFailedPrecondition(err error) bool {
+	return status.Code(err) == codes.FailedPrecondition
 }

@@ -167,10 +167,11 @@ func TestQueueManager_Start_Registers_WhenQueueServiceConfigured(t *testing.T) {
 		t.Errorf("shardID = %q, want %q", reg.GetShardId(), qm.shardID)
 	}
 	// The registered shard addr must derive from the same shardID as the
-	// registered identity — never from a second HOSTNAME read.
-	wantAddr := "shard-0:50053"
+	// registered identity — never from a second HOSTNAME read (LEARNINGS:
+	// derive from the subject's own fields, not a hardcoded host:port).
+	wantAddr := net.JoinHostPort(qm.shardID, defaultPeerPort)
 	if got := reg.GetShardAddr(); got != wantAddr {
-		t.Errorf("shardAddr = %q, want %q (net.JoinHostPort(qm.shardID, peerPort))", got, wantAddr)
+		t.Errorf("shardAddr = %q, want %q (net.JoinHostPort(qm.shardID, defaultPeerPort))", got, wantAddr)
 	}
 }
 
@@ -180,6 +181,9 @@ func TestQueueManager_Start_Standalone_WhenEnvUnset(t *testing.T) {
 	}
 	t.Setenv("FLOW_STORAGE_PATH", ":memory:")
 	t.Setenv("FLOW_HITL_PORT", "0")
+	// Explicitly clear FLOW_QUEUE_SERVICE_ADDR so the standalone path is
+	// deterministic and independent of the ambient environment (LEARNINGS).
+	t.Setenv("FLOW_QUEUE_SERVICE_ADDR", "")
 
 	qm, err := NewManager()
 	if err != nil {
@@ -221,12 +225,14 @@ func TestQueueManager_Heartbeat_TicksAtInterval(t *testing.T) {
 		t.Fatal("no heartbeat recorded within deadline")
 	}
 
-	// After Stop returns, no further heartbeat may land: the in-flight tick
-	// must complete before Stop observes completion, and the loop must exit.
-	countAtStop := len(fake.beatCalls())
 	if err := qm.Stop(); err != nil {
 		t.Fatalf("Stop failed: %v", err)
 	}
+	// Capture AFTER Stop returns so an in-flight tick completing during Stop's
+	// hbWG.Wait() is counted as pre-Stop, not miscounted as a post-Stop send
+	// (LEARNINGS: never read a counter before the goroutine being asserted has
+	// stopped). Then settle and assert no further beat lands.
+	countAtStop := len(fake.beatCalls())
 	time.Sleep(100 * time.Millisecond)
 	if got := len(fake.beatCalls()); got != countAtStop {
 		t.Fatalf("heartbeat landed after Stop returned: got %d calls, want %d", got, countAtStop)
@@ -298,5 +304,95 @@ func TestQueueManager_RegistrationFailure_DoesNotFailStart(t *testing.T) {
 	}
 	if err := qm.Stop(); err != nil {
 		t.Fatalf("Stop failed: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Pure heartbeatLoop unit tests (no SQLite/HTTP, no -short guard)
+// ---------------------------------------------------------------------------
+
+// newLoopClient builds a queueRegistryClient wired to a bufconn fake, so
+// heartbeatLoop is exercised without opening a SQLite store or HTTP listener.
+func newLoopClient(
+	t *testing.T, fake *registryFake, interval time.Duration,
+) (*sync.WaitGroup, context.CancelFunc) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	reg, err := newQueueRegistryClient(fake.addr, fake.dialer, "shard-0", "hitl-approval", "shard-0:50053", interval)
+	if err != nil {
+		t.Fatalf("newQueueRegistryClient failed: %v", err)
+	}
+	t.Cleanup(func() { _ = reg.close() })
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go reg.heartbeatLoop(ctx, &wg)
+	return &wg, cancel
+}
+
+func TestHeartbeatLoop_TicksAtInterval(t *testing.T) {
+	fake := newFakeRegistry(t)
+	wg, cancel := newLoopClient(t, fake, 20*time.Millisecond)
+	defer wg.Wait()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if len(fake.beatCalls()) >= 2 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if got := len(fake.beatCalls()); got < 2 {
+		t.Fatalf("heartbeat did not tick at interval: got %d beats, want >= 2", got)
+	}
+	cancel()
+	for _, b := range fake.beatCalls() {
+		if b.GetShardId() != "shard-0" {
+			t.Errorf("beat shard = %q, want shard-0", b.GetShardId())
+		}
+	}
+}
+
+func TestHeartbeatLoop_NoSendAfterCancel(t *testing.T) {
+	fake := newFakeRegistry(t)
+	wg, cancel := newLoopClient(t, fake, 10*time.Millisecond)
+
+	// Wait for at least one beat so we know the loop is live.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if len(fake.beatCalls()) >= 1 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if len(fake.beatCalls()) < 1 {
+		t.Fatal("no heartbeat recorded before cancel")
+	}
+
+	cancel()
+	wg.Wait() // the loop must exit after cancel
+	countAfterCancel := len(fake.beatCalls())
+	time.Sleep(50 * time.Millisecond)
+	if got := len(fake.beatCalls()); got != countAfterCancel {
+		t.Fatalf("heartbeat sent after cancel: got %d beats, want %d", got, countAfterCancel)
+	}
+}
+
+func TestHeartbeatLoop_FailureLogsAndRetries(t *testing.T) {
+	fake := newFakeRegistry(t)
+	fake.server.failBeats = 1
+	wg, cancel := newLoopClient(t, fake, 20*time.Millisecond)
+	defer wg.Wait()
+	defer cancel()
+
+	// The failed beat must not terminate the loop; the next tick succeeds.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if len(fake.beatCalls()) >= 1 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if got := len(fake.beatCalls()); got != 1 {
+		t.Fatalf("expected exactly 1 successful beat after the failed one, got %d", got)
 	}
 }

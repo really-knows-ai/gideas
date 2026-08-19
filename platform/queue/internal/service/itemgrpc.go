@@ -44,6 +44,10 @@ func toItemGRPCError(err error) error {
 	switch {
 	case errors.Is(err, errQueueItemNotFound):
 		return status.Error(codes.NotFound, err.Error())
+	case errors.Is(err, errQueueItemAlreadyClaimed):
+		return status.Error(codes.AlreadyExists, err.Error())
+	case errors.Is(err, errQueueItemInvalidState):
+		return status.Error(codes.FailedPrecondition, err.Error())
 	case errors.Is(err, errShardUnavailable):
 		return status.Error(codes.Unavailable, err.Error())
 	default:

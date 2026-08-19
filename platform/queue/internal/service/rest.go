@@ -140,6 +140,10 @@ func writeRestProxyError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, errQueueItemNotFound):
 		writeRestError(w, http.StatusNotFound, "QUEUE_ITEM_NOT_FOUND", err.Error())
+	case errors.Is(err, errQueueItemAlreadyClaimed):
+		writeRestError(w, http.StatusConflict, "QUEUE_ITEM_ALREADY_CLAIMED", err.Error())
+	case errors.Is(err, errQueueItemInvalidState):
+		writeRestError(w, http.StatusConflict, "QUEUE_ITEM_INVALID_STATE", err.Error())
 	case errors.Is(err, errShardUnavailable):
 		writeRestError(w, http.StatusServiceUnavailable, "QUEUE_UNAVAILABLE", err.Error())
 	default:
