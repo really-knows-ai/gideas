@@ -225,7 +225,10 @@ func TestHITL_Minimal_Route(t *testing.T) {
 func TestDeriveBehaviour_HITLAppraise(t *testing.T) {
 	spy := newHITLAppraiseSpy()
 	flowObj := newFlowFromTopology(t, spy)
-	b := deriveBehaviour(flowObj, spy.Topology)
+	b, err := deriveBehaviour(flowObj, spy.Topology, defaultConfig())
+	if err != nil {
+		t.Fatalf("deriveBehaviour returned error: %v", err)
+	}
 
 	if len(b.readArtefacts) != 1 || b.readArtefacts[0] != artefactPetition {
 		t.Errorf("readArtefacts=%v, want [petition]", b.readArtefacts)
@@ -260,7 +263,10 @@ func TestDeriveBehaviour_HITLAppraise(t *testing.T) {
 func TestDeriveBehaviour_ArbiterResolve(t *testing.T) {
 	spy := newArbiterHITLResolveSpy()
 	flowObj := newFlowFromTopology(t, spy)
-	b := deriveBehaviour(flowObj, spy.Topology)
+	b, err := deriveBehaviour(flowObj, spy.Topology, defaultConfig())
+	if err != nil {
+		t.Fatalf("deriveBehaviour returned error: %v", err)
+	}
 
 	if len(b.readArtefacts) != 1 || b.readArtefacts[0] != artefactEvidenceBundle {
 		t.Errorf("readArtefacts=%v, want [evidence-bundle]", b.readArtefacts)
@@ -282,7 +288,10 @@ func TestDeriveBehaviour_ArbiterResolve(t *testing.T) {
 func TestDeriveBehaviour_Minimal(t *testing.T) {
 	spy := newMinimalSpy()
 	flowObj := newFlowFromTopology(t, spy)
-	b := deriveBehaviour(flowObj, spy.Topology)
+	b, err := deriveBehaviour(flowObj, spy.Topology, defaultConfig())
+	if err != nil {
+		t.Fatalf("deriveBehaviour returned error: %v", err)
+	}
 
 	if len(b.readArtefacts) != 0 {
 		t.Errorf("readArtefacts=%v, want []", b.readArtefacts)
@@ -317,7 +326,10 @@ func TestBuildChoicesResponse_HITLAppraise_WithLabels(t *testing.T) {
 	})
 
 	flowObj := newFlowFromTopology(t, spy)
-	resp := buildChoicesResponse(flowObj, spy.Topology, cfg)
+	resp, err := buildChoicesResponse(flowObj, spy.Topology, cfg)
+	if err != nil {
+		t.Fatalf("buildChoicesResponse returned error: %v", err)
+	}
 
 	if !resp.HasFeedback {
 		t.Error("expected HasFeedback=true")
@@ -360,7 +372,10 @@ func TestBuildChoicesResponse_ArbiterResolve_DefaultLabels(t *testing.T) {
 	cfg := defaultConfig()
 
 	flowObj := newFlowFromTopology(t, spy)
-	resp := buildChoicesResponse(flowObj, spy.Topology, cfg)
+	resp, err := buildChoicesResponse(flowObj, spy.Topology, cfg)
+	if err != nil {
+		t.Fatalf("buildChoicesResponse returned error: %v", err)
+	}
 
 	if resp.HasFeedback {
 		t.Error("expected HasFeedback=false")
@@ -388,7 +403,10 @@ func TestBuildChoicesResponse_Minimal_NoCancel(t *testing.T) {
 	cfg := defaultConfig()
 
 	flowObj := newFlowFromTopology(t, spy)
-	resp := buildChoicesResponse(flowObj, spy.Topology, cfg)
+	resp, err := buildChoicesResponse(flowObj, spy.Topology, cfg)
+	if err != nil {
+		t.Fatalf("buildChoicesResponse returned error: %v", err)
+	}
 
 	if resp.HasFeedback {
 		t.Error("expected HasFeedback=false")
@@ -396,7 +414,6 @@ func TestBuildChoicesResponse_Minimal_NoCancel(t *testing.T) {
 	if resp.HasCancel {
 		t.Error("expected HasCancel=false")
 	}
-	// Only 1 choice: "default" route. No cancel.
 	if len(resp.Choices) != 1 {
 		t.Fatalf("expected 1 choice, got %d", len(resp.Choices))
 	}
@@ -428,7 +445,10 @@ func TestBuildChoicesResponse_MultipleOutputs(t *testing.T) {
 
 	spy := &hitlSpy{Topology: topology}
 	flowObj := newFlowFromTopology(t, spy)
-	resp := buildChoicesResponse(flowObj, topology, cfg)
+	resp, err := buildChoicesResponse(flowObj, topology, cfg)
+	if err != nil {
+		t.Fatalf("buildChoicesResponse returned error: %v", err)
+	}
 
 	if len(resp.Choices) != 3 {
 		t.Fatalf("expected 3 choices, got %d", len(resp.Choices))
@@ -452,6 +472,146 @@ func TestBuildChoicesResponse_MultipleOutputs(t *testing.T) {
 		if resp.Choices[i].Type != choiceTypeRoute {
 			t.Errorf("choice[%d].Type=%q, want 'route'", i, resp.Choices[i].Type)
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Choices restriction (hitl-sort's humanChoices absorbed into hitl config)
+// ---------------------------------------------------------------------------
+
+// TestHITL_ChoicesRestriction_SubsetRoutes verifies that when hitl config
+// restricts choices to a subset of topology outputs, deciding a listed output
+// routes, and deciding an unlisted output fails with the invalid-choice path.
+func TestHITL_ChoicesRestriction_SubsetRoutes(t *testing.T) {
+	spy := newThreeOutputSpy()
+	client := newSpyClient(t, spy)
+	qm := newTestQueueManager(t)
+	cfg := configWithChoices(choiceEntry{Output: "b", Label: "Bravo"})
+	ctx := context.Background()
+	wctx := newWorkitemContext("wi-restrict-1")
+
+	errCh := runHandler(ctx, client, qm, cfg, wctx)
+	simulateDecision(t, ctx, qm, "wi-restrict-1", "b")
+
+	if err := <-errCh; err != nil {
+		t.Fatalf("handler returned error: %v", err)
+	}
+
+	spy.mu.Lock()
+	defer spy.mu.Unlock()
+
+	// Routed to "b".
+	if len(spy.RoutedOutputs) != 1 || spy.RoutedOutputs[0] != "b" {
+		t.Errorf("expected route to 'b', got %v", spy.RoutedOutputs)
+	}
+}
+
+// TestHITL_ChoicesRestriction_UnlistedChoiceFails verifies that deciding an
+// output not in the restricted choices set is rejected by the handler.
+func TestHITL_ChoicesRestriction_UnlistedChoiceFails(t *testing.T) {
+	spy := newThreeOutputSpy()
+	client := newSpyClient(t, spy)
+	qm := newTestQueueManager(t)
+	cfg := configWithChoices(choiceEntry{Output: "b"})
+	ctx := context.Background()
+	wctx := newWorkitemContext("wi-restrict-2")
+
+	errCh := runHandler(ctx, client, qm, cfg, wctx)
+	simulateDecision(t, ctx, qm, "wi-restrict-2", "a")
+
+	err := <-errCh
+	if err == nil {
+		t.Fatal("expected error for unlisted choice, got nil")
+	}
+	if !strings.Contains(err.Error(), "invalid choice") {
+		t.Errorf("expected 'invalid choice' in error, got: %v", err)
+	}
+}
+
+// TestHITL_ChoicesRestriction_ConfiguredOutputNotInTopology verifies that a
+// configured choices output absent from the topology yields a handler error
+// before enqueue (no queue item parked).
+func TestHITL_ChoicesRestriction_ConfiguredOutputNotInTopology(t *testing.T) {
+	spy := newThreeOutputSpy()
+	client := newSpyClient(t, spy)
+	qm := newTestQueueManager(t)
+	cfg := configWithChoices(choiceEntry{Output: "b"}, choiceEntry{Output: "nope"})
+	ctx := context.Background()
+	wctx := newWorkitemContext("wi-restrict-3")
+
+	errCh := runHandler(ctx, client, qm, cfg, wctx)
+
+	err := <-errCh
+	if err == nil {
+		t.Fatal("expected error for out-of-topology choice, got nil")
+	}
+	if !strings.Contains(err.Error(), "not a valid output in topology") {
+		t.Errorf("expected 'not a valid output in topology' in error, got: %v", err)
+	}
+
+	// No queue item was parked (error happened before enqueue).
+	spy.mu.Lock()
+	defer spy.mu.Unlock()
+	if spy.PauseTimerCalls != 0 {
+		t.Errorf("expected 0 PauseTimer calls (no enqueue before error), got %d", spy.PauseTimerCalls)
+	}
+}
+
+// TestHITL_ChoicesRestriction_AbsentPresentsAll verifies that empty/absent
+// choices preserves the current behavior of presenting all topology outputs.
+func TestHITL_ChoicesRestriction_AbsentPresentsAll(t *testing.T) {
+	spy := newThreeOutputSpy()
+	flowObj := newFlowFromTopology(t, spy)
+	b, err := deriveBehaviour(flowObj, spy.Topology, defaultConfig())
+	if err != nil {
+		t.Fatalf("deriveBehaviour returned error: %v", err)
+	}
+	if len(b.outputChoices) != 3 {
+		t.Fatalf("outputChoices=%v, want 3 outputs", b.outputChoices)
+	}
+	for _, o := range []string{"a", "b", "c"} {
+		if !b.validChoices[o] {
+			t.Errorf("expected %q in validChoices", o)
+		}
+	}
+}
+
+// TestBuildChoicesResponse_ChoicesRestriction verifies that GET /choices body
+// lists exactly the restricted outputs (config order, with the choices label),
+// plus cancel when exit-bound.
+func TestBuildChoicesResponse_ChoicesRestriction(t *testing.T) {
+	spy := newThreeOutputSpy()
+	flowObj := newFlowFromTopology(t, spy)
+	cfg := configWithChoices(
+		choiceEntry{Output: "c", Label: "Charlie"},
+		choiceEntry{Output: "a", Label: "Alpha"},
+	)
+
+	resp, err := buildChoicesResponse(flowObj, spy.Topology, cfg)
+	if err != nil {
+		t.Fatalf("buildChoicesResponse returned error: %v", err)
+	}
+
+	if len(resp.Choices) != 2 {
+		t.Fatalf("expected 2 choices, got %d: %+v", len(resp.Choices), resp.Choices)
+	}
+	if resp.Choices[0].Value != "c" || resp.Choices[0].Label != "Charlie" {
+		t.Errorf("choice[0]=%+v, want c/Charlie", resp.Choices[0])
+	}
+	if resp.Choices[1].Value != "a" || resp.Choices[1].Label != "Alpha" {
+		t.Errorf("choice[1]=%+v, want a/Alpha", resp.Choices[1])
+	}
+}
+
+// TestBuildChoicesResponse_ChoicesInvalid asserts that a misconfigured choices
+// list (output not in topology) surfaces as an error rather than a partial body.
+func TestBuildChoicesResponse_ChoicesInvalid(t *testing.T) {
+	spy := newThreeOutputSpy()
+	flowObj := newFlowFromTopology(t, spy)
+	cfg := configWithChoices(choiceEntry{Output: "nope"})
+
+	if _, err := buildChoicesResponse(flowObj, spy.Topology, cfg); err == nil {
+		t.Fatal("expected error for invalid choices config, got nil")
 	}
 }
 
