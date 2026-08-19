@@ -202,6 +202,7 @@ func (qm *Manager) Start(ctx context.Context, opts ...Option) error {
 	qm.mesh = newQueueMesh(store, qm.shardID, resolver, cfg.peerPort)
 	qm.peer = &queuePeerServer{
 		store: store,
+		mesh:  qm.mesh,
 		onDecide: func(workitemID, choice string) {
 			// Signal any local WaitForDecision callers. Uses Load so
 			// WaitForDecision always finds the channel; it cleans up after
@@ -218,6 +219,13 @@ func (qm *Manager) Start(ctx context.Context, opts ...Option) error {
 			}
 		},
 	}
+	// Wire the promotion path (R-C4): the queuePeerServer.NotifyShardDead
+	// handler invokes this hook on every surviving shard (tests drive it
+	// directly). It runs outside the mesh lock; handleShardDead's markDead is
+	// its only lock call.
+	qm.mesh.onShardDead = func(dead string) {
+		qm.mesh.handleShardDead(context.Background(), dead)
+	}
 
 	qm.mesh.start(ctx)
 
@@ -232,6 +240,11 @@ func (qm *Manager) Start(ctx context.Context, opts ...Option) error {
 		if interval <= 0 {
 			interval = defaultHeartbeatInterval
 		}
+		// The mesh's backup-selection view is the heartbeat-derived living set
+		// (R-B3) — refreshed on each HeartbeatQueue response, corrected down by
+		// deadShards on the mesh side. The SDK never reads the Queue CR.
+		heartbeats := &heartbeatShardRegistry{}
+		qm.mesh.registry = heartbeats
 		reg, err := newQueueRegistryClient(
 			qm.queueServiceAddr, qm.registryDial,
 			qm.shardID, qm.queueName, shardAddr, interval,
@@ -240,6 +253,7 @@ func (qm *Manager) Start(ctx context.Context, opts ...Option) error {
 			slog.Warn("flow hitl: failed to connect to queue-service", "addr", qm.queueServiceAddr, "error", err)
 		} else {
 			qm.registry = reg
+			reg.onHeartbeat = func(shards []Shard) { heartbeats.update(shards) }
 			if err := reg.register(ctx); err != nil {
 				slog.Warn("flow hitl: queue-service registration failed", "error", err)
 			}
@@ -322,8 +336,21 @@ func (qm *Manager) RegisterGRPC(srv *grpc.Server) {
 // --- QueueManager interface implementation ---
 
 func (qm *Manager) Enqueue(ctx context.Context, workitemID string) error {
-	if err := qm.store.enqueue(ctx, workitemID); err != nil {
+	// R-C2: one time-ordered parking-event ID per enqueue.
+	gen := newGenerationID()
+	// R-C1: pick one random backup from the living set (excluding self).
+	backup := qm.mesh.chooseBackup([]string{qm.shardID})
+	if err := qm.store.enqueue(ctx, workitemID, gen, backup); err != nil {
 		return err
+	}
+	// R-C1: replicate to the chosen backup (records backup_shard on success,
+	// resets to '' on failure = backfill-eligible).
+	if backup != "" {
+		if err := qm.mesh.replicateAndRecord(ctx, workitemID, gen, qm.shardID, qm.store.queueName, backup); err != nil {
+			// ponytail: a failed replicate leaves the item backfill-eligible
+			// (warn inside replicateAndRecord); owner remains authoritative.
+			_ = err
+		}
 	}
 	// Create a decision channel so WaitForDecision can block.
 	qm.decisions.Store(workitemID, make(chan string, 1))

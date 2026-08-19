@@ -31,6 +31,11 @@ type queueRegistryClient struct {
 	queueName string
 	shardAddr string
 	interval  time.Duration
+	// onHeartbeat, when set, receives the living shard set (identity+addr)
+	// carried by each HeartbeatQueue response so the mesh can refresh its
+	// candidate backup view (R-B3). Corrected down on the mesh side by
+	// deadShards.
+	onHeartbeat func([]Shard)
 }
 
 // newQueueRegistryClient builds a queueRegistryClient. dial is an explicit
@@ -75,14 +80,25 @@ func (r *queueRegistryClient) register(ctx context.Context) error {
 }
 
 // heartbeat refreshes the shard's lease. Failures are non-fatal; the loop logs
-// and retries on the next tick (standalone parity — never fail the node).
+// and retries on the next tick (standalone parity — never fail the node). On
+// success it refreshes the mesh's living-shard view from the response (R-B3).
 func (r *queueRegistryClient) heartbeat(ctx context.Context) error {
-	_, err := r.client.HeartbeatQueue(ctx, &flowv1.HeartbeatQueueRequest{
+	resp, err := r.client.HeartbeatQueue(ctx, &flowv1.HeartbeatQueueRequest{
 		QueueName: r.queueName,
 		ShardId:   r.shardID,
 		ShardAddr: r.shardAddr,
 	})
-	return err
+	if err != nil {
+		return err
+	}
+	if r.onHeartbeat != nil {
+		var shards []Shard
+		for _, s := range resp.GetShards() {
+			shards = append(shards, Shard{ID: s.GetShardId(), Addr: s.GetShardAddr()})
+		}
+		r.onHeartbeat(shards)
+	}
+	return nil
 }
 
 // deregister drops the shard from the queue's registry on clean shutdown.

@@ -70,11 +70,14 @@ CREATE TABLE IF NOT EXISTS queue_items (
     queue_name  TEXT NOT NULL DEFAULT '',
     status      TEXT NOT NULL DEFAULT 'waiting',
     enqueued_at DATETIME NOT NULL DEFAULT (datetime('now')),
-    claimed_at  DATETIME
+    claimed_at  DATETIME,
+    generation  TEXT NOT NULL DEFAULT '',
+    backup_shard TEXT NOT NULL DEFAULT ''
 );
 
 CREATE INDEX IF NOT EXISTS idx_status ON queue_items(status);
 CREATE INDEX IF NOT EXISTS idx_shard ON queue_items(shard_id);
+CREATE INDEX IF NOT EXISTS idx_backup_shard ON queue_items(backup_shard);
 `
 	if _, err := s.db.Exec(schema); err != nil {
 		return fmt.Errorf("exec schema: %w", err)
@@ -82,11 +85,14 @@ CREATE INDEX IF NOT EXISTS idx_shard ON queue_items(shard_id);
 	return nil
 }
 
-// enqueue inserts a new item into the queue with status "waiting".
-func (s *queueStore) enqueue(ctx context.Context, workitemID string) error {
+// enqueue inserts a new owner row into the queue with status "waiting".
+// generation is the parking-event ID (R-C2); backupShard is the recorded
+// backup identity (” = deferred / no backup yet, R-C1).
+func (s *queueStore) enqueue(ctx context.Context, workitemID, generation, backupShard string) error {
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO queue_items (workitem_id, shard_id, queue_name, status) VALUES (?, ?, ?, 'waiting')`,
-		workitemID, s.shardID, s.queueName,
+		`INSERT INTO queue_items (workitem_id, shard_id, queue_name, status, generation, backup_shard) `+
+			`VALUES (?, ?, ?, 'waiting', ?, ?)`,
+		workitemID, s.shardID, s.queueName, generation, backupShard,
 	)
 	if err != nil {
 		return fmt.Errorf("enqueue: %w", err)
@@ -94,16 +100,37 @@ func (s *queueStore) enqueue(ctx context.Context, workitemID string) error {
 	return nil
 }
 
-// getLocal returns queue items from this shard, filtered by the given criteria.
-func (s *queueStore) getLocal(ctx context.Context, filter QueueFilter) ([]QueueItem, int, error) {
-	// Build the WHERE clause.
+// listOwnerRows returns the rows this shard OWNS (shard_id == s.shardID),
+// filtered by the given criteria. Returns the rows AND the total matching
+// count (which feeds GetLocalQueue's pagination response Total).
+func (s *queueStore) listOwnerRows(ctx context.Context, filter QueueFilter) ([]QueueItem, int, error) {
 	where := "WHERE shard_id = ?"
 	args := []any{s.shardID}
 	if filter.Status != nil {
 		where += " AND status = ?"
 		args = append(args, string(*filter.Status))
 	}
+	return s.queryRows(ctx, filter, where, args)
+}
 
+// listBackups returns the backup rows this shard HOLDS for foreign owners
+// (shard_id != s.shardID), filtered by the given criteria. Same
+// count-bearing shape as listOwnerRows so GetLocalQueue's Total = owner
+// count + backup count when it serves both kinds.
+func (s *queueStore) listBackups(ctx context.Context, filter QueueFilter) ([]QueueItem, int, error) {
+	where := "WHERE shard_id <> ?"
+	args := []any{s.shardID}
+	if filter.Status != nil {
+		where += " AND status = ?"
+		args = append(args, string(*filter.Status))
+	}
+	return s.queryRows(ctx, filter, where, args)
+}
+
+// queryRows runs a paginated SELECT + COUNT for the given WHERE clause.
+func (s *queueStore) queryRows(
+	ctx context.Context, filter QueueFilter, where string, args []any,
+) ([]QueueItem, int, error) {
 	// Count total matching rows.
 	var total int
 	countQuery := "SELECT COUNT(*) FROM queue_items " + where
@@ -118,11 +145,11 @@ func (s *queueStore) getLocal(ctx context.Context, filter QueueFilter) ([]QueueI
 	}
 	offset := max(filter.Offset, 0)
 
-	query := "SELECT workitem_id, shard_id, queue_name, status, enqueued_at, claimed_at FROM queue_items " +
-		where + " ORDER BY enqueued_at ASC LIMIT ? OFFSET ?"
-	args = append(args, limit, offset)
+	query := "SELECT workitem_id, shard_id, queue_name, status, enqueued_at, claimed_at, generation, " +
+		"backup_shard FROM queue_items " + where + " ORDER BY enqueued_at ASC LIMIT ? OFFSET ?"
+	fullArgs := append(append([]any{}, args...), limit, offset)
 
-	rows, err := s.db.QueryContext(ctx, query, args...)
+	rows, err := s.db.QueryContext(ctx, query, fullArgs...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("query queue: %w", err)
 	}
@@ -145,7 +172,7 @@ func (s *queueStore) getLocal(ctx context.Context, filter QueueFilter) ([]QueueI
 // getByID retrieves a single queue item by Workitem ID.
 func (s *queueStore) getByID(ctx context.Context, workitemID string) (*QueueItem, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT workitem_id, shard_id, queue_name, status, enqueued_at, claimed_at
+		`SELECT workitem_id, shard_id, queue_name, status, enqueued_at, claimed_at, generation, backup_shard
 		 FROM queue_items WHERE workitem_id = ?`, workitemID,
 	)
 	item, err := scanQueueItemRow(row)
@@ -203,22 +230,134 @@ func (s *queueStore) release(ctx context.Context, workitemID string) (*QueueItem
 	return s.getByID(ctx, workitemID)
 }
 
-// decide deletes a "claimed" item from the queue (decision made).
-func (s *queueStore) decide(ctx context.Context, workitemID string) error {
+// decideWithRow deletes a "claimed" item from the queue (decision made) and
+// returns the pre-delete row so the caller has its generation + backup_shard
+// BEFORE the delete (what drop-propagation uses — nothing is fetched after).
+// Order pinned: fetch the row (ErrQueueItemNotFound if absent) -> guard
+// status=='claimed' (ErrQueueItemInvalidState) -> delete -> return the
+// pre-fetched row. Ownership is NOT decided here — the store cannot
+// distinguish an owner row from a backup row it holds; the mesh call sites
+// compare the returned row's ShardID against self via localOwnerRow.
+func (s *queueStore) decideWithRow(ctx context.Context, workitemID string) (QueueItem, error) {
+	item, err := s.getByID(ctx, workitemID)
+	if err != nil {
+		return QueueItem{}, err
+	}
+	if item.Status != QueueStatusClaimed {
+		return QueueItem{}, ErrQueueItemInvalidState
+	}
+
 	res, err := s.db.ExecContext(ctx,
 		`DELETE FROM queue_items WHERE workitem_id = ? AND status = 'claimed'`,
 		workitemID,
 	)
 	if err != nil {
-		return fmt.Errorf("decide: %w", err)
+		return QueueItem{}, fmt.Errorf("decide: %w", err)
 	}
+	if n, err := res.RowsAffected(); err != nil {
+		return QueueItem{}, fmt.Errorf("decide rows affected: %w", err)
+	} else if n == 0 {
+		// Race: the row was deleted between fetch and delete. Treat as not
+		// found (nothing to decide) — same sentinel as a missing item.
+		return QueueItem{}, ErrQueueItemNotFound
+	}
+	return *item, nil
+}
 
-	n, err := res.RowsAffected()
+// insertBackup stores a backup row on this shard for a foreign owner
+// (shard_id = ownerShard, backup_shard = ”). NOT an upsert: workitem_id is
+// the table's PRIMARY KEY, so a same-shard duplicate insert for an already
+// stored workitem_id fails (this is why stale-copy tests pin every new backup
+// to a different shard than the stale copy).
+func (s *queueStore) insertBackup(ctx context.Context, workitemID, ownerShard, queueName, generation string) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO queue_items (workitem_id, shard_id, queue_name, status, generation, backup_shard) `+
+			`VALUES (?, ?, ?, 'waiting', ?, '')`,
+		workitemID, ownerShard, queueName, generation,
+	)
 	if err != nil {
-		return fmt.Errorf("decide rows affected: %w", err)
+		return fmt.Errorf("insert backup: %w", err)
 	}
-	if n == 0 {
-		return s.diagnoseStateFailure(ctx, workitemID, "decide")
+	return nil
+}
+
+// listBackupsForOwner returns the backup rows this shard holds whose owner is
+// ownerShard (shard_id = ownerShard). Used by handleShardDead for promotion.
+func (s *queueStore) listBackupsForOwner(ctx context.Context, ownerShard string) ([]QueueItem, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT workitem_id, shard_id, queue_name, status, enqueued_at, claimed_at, generation, backup_shard
+		 FROM queue_items WHERE shard_id = ?`, ownerShard,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list backups for owner: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var items []QueueItem
+	for rows.Next() {
+		item, err := scanQueueItem(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate backups for owner: %w", err)
+	}
+	return items, nil
+}
+
+// promoteBackup flips a backup row this shard holds (shard_id = ownerShard)
+// to a new owner. Returns ErrQueueItemNotFound when 0 rows affected
+// (already-promoted / gone — the idempotency guard for promotion).
+func (s *queueStore) promoteBackup(ctx context.Context, workitemID, ownerShard, newOwner string) (QueueItem, error) {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE queue_items SET shard_id = ?, backup_shard = '' WHERE workitem_id = ? AND shard_id = ?`,
+		newOwner, workitemID, ownerShard,
+	)
+	if err != nil {
+		return QueueItem{}, fmt.Errorf("promote backup: %w", err)
+	}
+	if n, err := res.RowsAffected(); err != nil {
+		return QueueItem{}, fmt.Errorf("promote backup rows affected: %w", err)
+	} else if n == 0 {
+		return QueueItem{}, ErrQueueItemNotFound
+	}
+	item, err := s.getByID(ctx, workitemID)
+	if err != nil {
+		return QueueItem{}, err
+	}
+	return *item, nil
+}
+
+// setBackupShard records the chosen backup identity on the owner row
+// (R-C4/R-C5 record-or-clear: ” = deferred / failed replicate).
+func (s *queueStore) setBackupShard(ctx context.Context, workitemID, backupShard string) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE queue_items SET backup_shard = ? WHERE workitem_id = ?`,
+		backupShard, workitemID,
+	)
+	if err != nil {
+		return fmt.Errorf("set backup shard: %w", err)
+	}
+	return nil
+}
+
+// dropByGeneration deletes a backup row generation-guarded (R-C5). Returns
+// ErrQueueItemNotFound when 0 rows matched (absent or generation mismatch —
+// the stale-drop guard).
+func (s *queueStore) dropByGeneration(ctx context.Context, workitemID, generation string) error {
+	res, err := s.db.ExecContext(ctx,
+		`DELETE FROM queue_items WHERE workitem_id = ? AND generation = ?`,
+		workitemID, generation,
+	)
+	if err != nil {
+		return fmt.Errorf("drop by generation: %w", err)
+	}
+	if n, err := res.RowsAffected(); err != nil {
+		return fmt.Errorf("drop by generation rows affected: %w", err)
+	} else if n == 0 {
+		return ErrQueueItemNotFound
 	}
 	return nil
 }
@@ -256,6 +395,8 @@ func (s *queueStore) diagnoseStateFailure(ctx context.Context, workitemID, op st
 }
 
 // scanQueueItem scans a QueueItem from a sql.Rows iterator.
+// IsBackup is computed by shard-aware call sites (item.ShardID != s.shardID);
+// the scans only fill Generation and BackupShard (there is no schema column).
 func scanQueueItem(rows *sql.Rows) (QueueItem, error) {
 	var item QueueItem
 	var statusStr, enqueuedStr string
@@ -264,6 +405,7 @@ func scanQueueItem(rows *sql.Rows) (QueueItem, error) {
 	if err := rows.Scan(
 		&item.WorkitemID, &item.ShardID, &item.QueueName,
 		&statusStr, &enqueuedStr, &claimedStr,
+		&item.Generation, &item.BackupShard,
 	); err != nil {
 		return QueueItem{}, fmt.Errorf("scan queue item: %w", err)
 	}
@@ -286,6 +428,7 @@ func scanQueueItemRow(row *sql.Row) (QueueItem, error) {
 	if err := row.Scan(
 		&item.WorkitemID, &item.ShardID, &item.QueueName,
 		&statusStr, &enqueuedStr, &claimedStr,
+		&item.Generation, &item.BackupShard,
 	); err != nil {
 		return QueueItem{}, err
 	}
