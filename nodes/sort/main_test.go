@@ -124,7 +124,7 @@ func TestSort_RoutesToAppraise_MissingApprovalStamp(t *testing.T) {
 	}
 }
 
-func TestSort_RoutesToHumanApproval_MissingApprovalStamp(t *testing.T) {
+func TestSort_RoutesToHitlApproval_MissingApprovalStamp(t *testing.T) {
 	spy := newSortSpy()
 	spy.StampState["appraisal"] = true
 	// Approval stamp is missing — Sort should route to hitl-approval.
