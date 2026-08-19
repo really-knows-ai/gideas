@@ -44,12 +44,25 @@ All implementation, verification, review, and commits happen inside the new work
 
 ### 3. Execute phases in order
 
-For each `PHASE_XX.md`, dispatch an implementer subagent with this prompt:
+For each `PHASE_XX.md`, decide which subagent(s) the phase needs, then dispatch them. Route work by its nature — do not hand an entire phase to a single generic agent, because the specialized agents have disjoint permissions and responsibilities:
 
-The main agent MUST read `LEARNINGS.md` (if it exists) and pass its contents into the implementer prompt as shown below — do not just reference the file path, because the implementer subagent may not have the full project context to locate or interpret it. The key patterns, Known Deviations, and candidate patterns in `LEARNINGS.md` are critical input the implementer needs to avoid repeating previously identified issues.
+- **Source code** — production and config source (`.go`, `.proto`, YAML, charts, etc.) → the `implementer` subagent. It edits source only and its permissions deny `**/*_test.go`.
+- **Unit tests** → the `unit-test-implementer` subagent. Its contract: true unit tests (single unit, injected fakes, zero real I/O, millisecond-fast) plus only the minimal testability seams required. It edits `*_test.go` (and nothing else) and never builds integration suites.
+- **Integration tests** → the `int-test-implementer` subagent. Its contract: real components composed across real I/O boundaries, `-short`-guarded, isolated per test. It edits `*_test.go` only and never touches production source.
+
+If a phase spans more than one kind of work, dispatch the relevant subagents separately — never a single agent for mixed source+tests (the `implementer` cannot write `_test.go`, and the test implementers will not write source). Run them in sequence (source first, then its tests) when they depend on each other, or in parallel via separate `task` calls when independent, then coordinate the merged result in the worktree.
+
+The main agent MUST read `LEARNINGS.md` (if it exists) and pass its contents into every subagent prompt as shown below — do not just reference the file path, because the subagents may not have the full project context to locate or interpret it. The key patterns, Known Deviations, and candidate patterns in `LEARNINGS.md` are critical input each subagent needs to avoid repeating previously identified issues.
+
+Set the dispatch target (`implementer`, `unit-test-implementer`, or `int-test-implementer`) to match the routed work, and state the subagent's scope explicitly:
 
 ```
-Implement this phase of a phased plan.
+Implement this phase of a phased plan as a <implementer | unit-test-implementer | int-test-implementer>.
+
+**Your scope:**
+- implementer: source code only — never edit *_test.go.
+- unit-test-implementer: unit tests only — single unit, injected fakes, zero real I/O, millisecond-fast; may add only the minimal testability seams required; never build an integration suite.
+- int-test-implementer: integration tests only — real components across real I/O boundaries, -short-guarded, isolated per test; never edit production source.
 
 **Spec file:**
 [path to SPEC.md]
@@ -69,13 +82,13 @@ Implement this phase of a phased plan.
 Requirements:
 - Read `AGENTS.md`, `SPEC.md`, the plan, and current phase before editing.
 - Read the Learnings above in full before implementing. Every pattern and known deviation documented there must be followed — do not reintroduce issues that prior review cycles identified and fixed.
-- Implement only the current phase.
+- Implement only the work in your scope for the current phase.
 - Preserve completed prior-phase behaviour.
 - Follow the verification steps and acceptance criteria in the current phase.
 - Report files changed, verification run, and any unresolved blockers.
 ```
 
-After the implementer returns, inspect the worktree diff and run the phase verification steps from the phase file. If the phase file omits a needed verification command, choose the narrowest relevant project command and record the choice.
+After the subagents return, inspect the worktree diff and run the phase verification steps from the phase file. If the phase file omits a needed verification command, choose the narrowest relevant project command and record the choice.
 
 ### 4. Review the phase
 
@@ -185,8 +198,9 @@ Report:
 ## Hard Rules
 
 - Start a fresh git worktree and development branch before implementation.
-- Keep `SPEC.md` and `LEARNINGS.md` (if it exists) available to every implementer and reviewer subagent.
-- The main agent MUST read `LEARNINGS.md` and inline its full contents into implementer prompts — do not delegate reading to subagents. The `special-review` skill reads LEARNINGS.md automatically for its reviewers.
+- Keep `SPEC.md` and `LEARNINGS.md` (if it exists) available to every implementer, test-implementer, and reviewer subagent.
+- Route work to the correct subagent by its nature: `implementer` for source code (never `_test.go`), `unit-test-implementer` for unit tests, `int-test-implementer` for integration tests. Never hand mixed source+tests to a single agent. Dispatch each agent with its scope stated explicitly.
+- The main agent MUST read `LEARNINGS.md` and inline its full contents into implementer and test-implementer prompts — do not delegate reading to subagents. The `special-review` skill reads LEARNINGS.md automatically for its reviewers.
 - Execute phases strictly in order.
 - Commit after each approved phase.
 - Phase reviews use the `special-review` skill (producing a per-phase review file) followed by the `special-fixer` skill (if issues found).
@@ -198,7 +212,8 @@ Report:
 
 - **Working in the current checkout**: Phased execution starts in a fresh worktree and branch.
 - **Skipping phase commits**: Each approved phase becomes its own commit before the next phase starts.
-- **Letting agents work from phase files alone**: Every implementer receives `SPEC.md`, the plan, the current phase path, and the full contents of `LEARNINGS.md`.
+- **Letting agents work from phase files alone**: Every subagent receives `SPEC.md`, the plan, the current phase path, and the full contents of `LEARNINGS.md`.
+- **Dispatching the wrong subagent**: Route by work type — `implementer` for source only, `unit-test-implementer` for unit tests, `int-test-implementer` for integration tests. Do not send a phase to a single generic agent; the `implementer` cannot write `_test.go` and the test implementers will not write source. Mixed phases dispatch multiple agents (source first, then tests) and the results are coordinated in the worktree.
 - **Letting subagents read `LEARNINGS.md` themselves**: The main agent reads `LEARNINGS.md` and inlines its full contents into implementer prompts. Subagents may not locate or interpret it correctly if given only a file path. The `special-review` skill handles its own LEARNINGS.md reading — let it do that.
 - **Skipping the special-review → special-fixer loop for phase reviews**: After each phase, always run `special-review` first, then `special-fixer` if issues exist. Do not skip to commit without a structured review artifact.
 - **Reviewing against phase files alone**: Phase reviews use `SPEC.md` + `PHASE_XX.md` as criteria, not just the phase file. The implementation must satisfy spec requirements, not just the phase's documented scope.
