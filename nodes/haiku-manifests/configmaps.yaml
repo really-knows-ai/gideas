@@ -33,7 +33,7 @@ metadata:
     app.kubernetes.io/name: sort
 data:
   node-config.yaml: |
-    nodeOrder: "quench,appraisal,human-approval"
+    nodeOrder: "quench,appraisal,hitl-approval"
     deadlockThreshold: 3
 ---
 apiVersion: v1
@@ -198,6 +198,18 @@ data:
   node-config.yaml: |
     choiceLabels:
       resolution: "Provide Resolution"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: hitl-approval-config
+  namespace: haiku-flow
+  labels:
+    app.kubernetes.io/name: hitl-approval
+data:
+  node-config.yaml: |
+    choiceLabels:
+      approve: "Approve Petition"
 ---
 # --- Clerk Forge ---
 apiVersion: v1

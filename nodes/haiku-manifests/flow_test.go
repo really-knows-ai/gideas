@@ -75,7 +75,7 @@ func TestFoundryFlow_NodeGroups(t *testing.T) {
 	t.Run("contents", func(t *testing.T) {
 		wantMainCycle := []string{
 			"forge", "sort", "quench", "appraisal", "appraiser", "refine",
-			"human-arbiter", "human-approval",
+			"hitl-arbiter", "hitl-approval",
 		}
 		assertGroupEqual(t, ff.Spec.NodeGroups, "main-cycle", wantMainCycle)
 	})
@@ -139,17 +139,17 @@ func TestFoundryNode_Outputs(t *testing.T) {
 		{name: "appraiser", nodeID: "appraiser", empty: true},
 		{name: "refine/default", nodeID: "refine", outputs: map[string]string{"default": "sort"}},
 		{name: "sort/outputs", nodeID: "sort", outputs: map[string]string{
-			"quench":         "quench",
-			"appraisal":      "appraisal",
-			"refine":         "refine",
-			"human-arbiter":  "human-arbiter",
-			"human-approval": "human-approval",
+			"quench":        "quench",
+			"appraisal":     "appraisal",
+			"refine":        "refine",
+			"hitl-arbiter":  "hitl-arbiter",
+			"hitl-approval": "hitl-approval",
 		}, expectCount: 5},
-		{name: "human-arbiter/outputs", nodeID: "human-arbiter", outputs: map[string]string{
+		{name: "hitl-arbiter/outputs", nodeID: "hitl-arbiter", outputs: map[string]string{
 			"accept": "sort",
 			"reject": "sort",
 		}, expectCount: 2},
-		{name: "human-approval/outputs", nodeID: "human-approval", outputs: map[string]string{
+		{name: "hitl-approval/outputs", nodeID: "hitl-approval", outputs: map[string]string{
 			"approve": "sort",
 		}, expectCount: 1},
 	}
@@ -203,14 +203,14 @@ func TestFoundryNode_Capabilities(t *testing.T) {
 		}, hasNot: []string{
 			"STAMP:artefact/haiku/approval",
 		}},
-		{name: "human-arbiter", nodeID: "human-arbiter", has: []string{
+		{name: "hitl-arbiter", nodeID: "hitl-arbiter", has: []string{
 			"READ:artefact/haiku",
 			"READ:artefact/petition",
 			"READ:feedback",
 			"WRITE:feedback/link-ruling",
 			"STAMP:artefact/haiku/arbitrated",
 		}},
-		{name: "human-approval", nodeID: "human-approval", has: []string{
+		{name: "hitl-approval", nodeID: "hitl-approval", has: []string{
 			"READ:artefact/haiku",
 			"READ:artefact/petition",
 			"STAMP:artefact/haiku/approval",
@@ -262,8 +262,8 @@ func TestFoundryNode_ImageAndEntryExit(t *testing.T) {
 	}{
 		{name: "forge/entry", nodeID: "forge", entry: "standard-entry"},
 		{name: "sort/exit", nodeID: "sort", exit: "standard-exit"},
-		{name: "human-arbiter/exit", nodeID: "human-arbiter", exit: "standard-exit"},
-		{name: "human-approval/exit", nodeID: "human-approval", exit: "standard-exit"},
+		{name: "hitl-arbiter/exit", nodeID: "hitl-arbiter", exit: "standard-exit"},
+		{name: "hitl-approval/exit", nodeID: "hitl-approval", exit: "standard-exit"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
