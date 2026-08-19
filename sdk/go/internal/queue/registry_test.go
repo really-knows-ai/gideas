@@ -346,7 +346,7 @@ func TestHeartbeatLoop_TicksAtInterval(t *testing.T) {
 	}
 	cancel()
 	for _, b := range fake.beatCalls() {
-		if b.GetShardId() != "shard-0" {
+		if b.GetShardId() != testShard0 {
 			t.Errorf("beat shard = %q, want shard-0", b.GetShardId())
 		}
 	}

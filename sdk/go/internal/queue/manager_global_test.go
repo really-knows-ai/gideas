@@ -33,15 +33,15 @@ func TestQueueManager_GlobalQueue_MultiShard(t *testing.T) {
 	t.Cleanup(func() { _ = store1.close() })
 
 	// Enqueue items on each store.
-	_ = store0.enqueue(ctx, "wi-0")
-	_ = store1.enqueue(ctx, "wi-1")
+	_ = store0.enqueue(ctx, "wi-0", "", "")
+	_ = store1.enqueue(ctx, "wi-1", "", "")
 
 	// Set up mesh for store0 with store1 as a peer via bufconn.
 	shard1 := newMeshTestShard(t, "mgr-1")
-	_ = shard1.store.enqueue(ctx, "wi-peer")
+	_ = shard1.store.enqueue(ctx, "wi-peer", "", "")
 
 	mesh0 := newQueueMesh(store0, "mgr-0", &staticResolver{}, "50053")
-	mesh0.peers["mgr-1"] = connectToShard(t, shard1)
+	mesh0.peers[shard1.addr] = connectToShard(t, shard1)
 
 	qm0 := &Manager{
 		store:   store0,
@@ -116,7 +116,7 @@ func TestQueueManager_WaitForDecision_CrossShard(t *testing.T) {
 		t.Fatalf("failed to connect to shard-A: %v", err)
 	}
 	t.Cleanup(func() { _ = connA.Close() })
-	meshB.peers["shard-A"] = flowv1.NewQueuePeerServiceClient(connA)
+	meshB.peers["passthrough:///shard-A"] = flowv1.NewQueuePeerServiceClient(connA)
 
 	qmB := &Manager{
 		store:   storeB,
