@@ -81,7 +81,7 @@ test-all: test test-operator ## Run every test suite including the operator.
 # ---------------------------------------------------------------------------
 
 # CGO-enabled node binaries (built from ./nodes/<name>/).
-CGO_NODE_BINS = appraisal appraiser arbiter codification codify-smt embassy facilitator forge friction-watcher haiku-quench hitl hitl-appraise human-arbiter juror law-applicator petition-watcher refine rule-router sort tribunal ttl-watcher
+CGO_NODE_BINS = appraisal appraiser arbiter codification codify-smt embassy facilitator forge friction-watcher haiku-quench hitl hitl-appraise hitl-arbiter juror law-applicator petition-watcher refine rule-router sort tribunal ttl-watcher
 
 # CGO-enabled platform service binaries (built from ./platform/<name>/cmd/).
 CGO_PLATFORM_BINS = archivist monitor eventbus frictionledger librarian cartographer

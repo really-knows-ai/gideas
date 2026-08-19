@@ -446,3 +446,32 @@ func newThreeOutputSpy() *hitlSpy {
 		},
 	}
 }
+
+// newApprovalSpy returns a spy configured like the former human-approval
+// node expressed as a hitl:latest CRD instance: output "approve" → sort,
+// READ:artefact/haiku + petition, STAMP:artefact/haiku/approval, exit-bound.
+func newApprovalSpy() *hitlSpy {
+	return &hitlSpy{
+		ArtefactContents: map[string]string{
+			"haiku":    "test-haiku-content",
+			"petition": "test-petition-content",
+		},
+		Topology: &flowv1.GetFlowTopologyResponse{
+			Self: &flowv1.FlowNode{
+				Name: "hitl-approval",
+				Capabilities: []string{
+					"READ:flow",
+					"READ:artefact/haiku",
+					"READ:artefact/petition",
+					"STAMP:artefact/haiku/approval",
+				},
+				Outputs: []*flowv1.FlowOutput{
+					{Name: "approve", Target: "sort"},
+				},
+			},
+			ExitContract: map[string]*flowv1.StampRequirements{
+				"haiku": {Stamps: []string{"approval"}},
+			},
+		},
+	}
+}

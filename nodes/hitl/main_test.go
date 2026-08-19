@@ -616,6 +616,90 @@ func TestBuildChoicesResponse_ChoicesInvalid(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Approval as a hitl:latest instance (former human-approval expressible
+// purely via config: output approve → sort, STAMP:artefact/haiku/approval,
+// exit-bound standard-exit)
+// ---------------------------------------------------------------------------
+
+// TestHITL_ApprovalAsInstance_Approve verifies deciding "approve" stamps the
+// haiku with "approval" and routes to "approve", without completing.
+func TestHITL_ApprovalAsInstance_Approve(t *testing.T) {
+	spy := newApprovalSpy()
+	client := newSpyClient(t, spy)
+	qm := newTestQueueManager(t)
+	cfg := configWithLabels(map[string]string{"approve": "Approve Petition"})
+	ctx := context.Background()
+	wctx := newWorkitemContext("wi-approval-1")
+
+	errCh := runHandler(ctx, client, qm, cfg, wctx)
+	simulateDecision(t, ctx, qm, "wi-approval-1", "approve")
+
+	if err := <-errCh; err != nil {
+		t.Fatalf("handler returned error: %v", err)
+	}
+
+	spy.mu.Lock()
+	defer spy.mu.Unlock()
+
+	// Stamped haiku/approval.
+	if len(spy.StampedArtefacts) != 1 {
+		t.Fatalf("expected 1 stamp, got %d", len(spy.StampedArtefacts))
+	}
+	if spy.StampedArtefacts[0].ArtefactID != "haiku" || spy.StampedArtefacts[0].StampName != "approval" {
+		t.Errorf("expected stamp haiku/approval, got %+v", spy.StampedArtefacts[0])
+	}
+
+	// Routed to "approve".
+	if len(spy.RoutedOutputs) != 1 || spy.RoutedOutputs[0] != "approve" {
+		t.Errorf("expected route to 'approve', got %v", spy.RoutedOutputs)
+	}
+
+	// No completions.
+	if len(spy.CompletedReasons) != 0 {
+		t.Errorf("expected no completions, got %v", spy.CompletedReasons)
+	}
+}
+
+// TestHITL_ApprovalAsInstance_Cancel verifies deciding "cancel" completes with
+// CANCELLED and applies no stamp.
+func TestHITL_ApprovalAsInstance_Cancel(t *testing.T) {
+	spy := newApprovalSpy()
+	client := newSpyClient(t, spy)
+	qm := newTestQueueManager(t)
+	cfg := configWithLabels(map[string]string{"approve": "Approve Petition"})
+	ctx := context.Background()
+	wctx := newWorkitemContext("wi-approval-2")
+
+	errCh := runHandler(ctx, client, qm, cfg, wctx)
+	simulateDecision(t, ctx, qm, "wi-approval-2", "cancel")
+
+	if err := <-errCh; err != nil {
+		t.Fatalf("handler returned error: %v", err)
+	}
+
+	spy.mu.Lock()
+	defer spy.mu.Unlock()
+
+	// No stamps on cancel.
+	if len(spy.StampedArtefacts) != 0 {
+		t.Errorf("expected no stamps on cancel, got %v", spy.StampedArtefacts)
+	}
+
+	// No routes on cancel.
+	if len(spy.RoutedOutputs) != 0 {
+		t.Errorf("expected no routes on cancel, got %v", spy.RoutedOutputs)
+	}
+
+	// Completed with CANCELLED.
+	if len(spy.CompletedReasons) != 1 {
+		t.Fatalf("expected 1 completion, got %d", len(spy.CompletedReasons))
+	}
+	if spy.CompletedReasons[0] != flowv1.CompletionReason_COMPLETION_REASON_CANCELLED {
+		t.Errorf("expected COMPLETION_REASON_CANCELLED, got %v", spy.CompletedReasons[0])
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Edge case: cancel choice (exit-bound node)
 // ---------------------------------------------------------------------------
 

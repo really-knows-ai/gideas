@@ -1,12 +1,12 @@
-// human-arbiter is the deadlock resolution node of the Haiku Foundry Cycle.
+// hitl-arbiter is the deadlock resolution node of the Haiku Foundry Cycle.
 //
 // It reads the haiku and petition artefacts for context, identifies all
 // DEADLOCKED feedback items, parks the workitem in the QueueManager, and
 // waits for a human decision:
 //
-//   - accept → LinkRuling("human-arbiter", WONT_FIX) for each deadlocked item,
+//   - accept → LinkRuling("hitl-arbiter", WONT_FIX) for each deadlocked item,
 //     stamps "arbitrated" on the haiku, routes to "accept".
-//   - reject → LinkRuling("human-arbiter", REJECTED) for each deadlocked item,
+//   - reject → LinkRuling("hitl-arbiter", REJECTED) for each deadlocked item,
 //     stamps "arbitrated" on the haiku, routes to "reject".
 //   - cancel → Complete(COMPLETION_REASON_CANCELLED).
 //
@@ -35,29 +35,29 @@ const (
 	artefactHaiku    = "haiku"
 	artefactPetition = "petition"
 	stampArbitrated  = "arbitrated"
-	sourceLawID      = "human-arbiter"
+	sourceLawID      = "hitl-arbiter"
 	choiceAccept     = "accept"
 	choiceReject     = "reject"
 	choiceCancel     = "cancel"
 )
 
 func main() {
-	slog.Info("human-arbiter: starting")
+	slog.Info("hitl-arbiter: starting")
 
-	if err := nodeutil.RunHITLNode("human-arbiter", handler,
-		flow.WithQueueName("human-arbiter"),
+	if err := nodeutil.RunHITLNode("hitl-arbiter", handler,
+		flow.WithQueueName("hitl-arbiter"),
 		flow.WithCustomRoutes(func(mux *http.ServeMux) {
 			mux.HandleFunc("GET /choices", handleChoices)
 		}),
 	); err != nil {
-		slog.Error("human-arbiter: server failed", "error", err)
+		slog.Error("hitl-arbiter: server failed", "error", err)
 		os.Exit(1)
 	}
 }
 
 // handler returns a flow.Handler that delegates to handleArbiter.
 func handler(qm flow.QueueManager) flow.Handler {
-	return nodeutil.NewHITLHandler(qm, "human-arbiter", func(
+	return nodeutil.NewHITLHandler(qm, "hitl-arbiter", func(
 		ctx context.Context,
 		_ *flow.Client,
 		workitem *flow.Workitem,
@@ -78,23 +78,23 @@ func handleArbiter(
 	workitemID := wctx.GetWorkitemId()
 
 	if err := workitem.Heartbeat(); err != nil {
-		return fmt.Errorf("human-arbiter: heartbeat: %w", err)
+		return fmt.Errorf("hitl-arbiter: heartbeat: %w", err)
 	}
 
 	// ── Step 1: Read artefacts for context ─────────────────────────────
 	haikuArt, err := workitem.GetArtefact(artefactHaiku)
 	if err != nil {
-		return fmt.Errorf("human-arbiter: read haiku artefact: %w", err)
+		return fmt.Errorf("hitl-arbiter: read haiku artefact: %w", err)
 	}
 	_, err = workitem.GetArtefact(artefactPetition)
 	if err != nil {
-		return fmt.Errorf("human-arbiter: read petition artefact: %w", err)
+		return fmt.Errorf("hitl-arbiter: read petition artefact: %w", err)
 	}
 
 	// ── Step 2: Get feedback and filter deadlocked ─────────────────────
 	items, err := workitem.GetFeedback(artefactHaiku)
 	if err != nil {
-		return fmt.Errorf("human-arbiter: get feedback: %w", err)
+		return fmt.Errorf("hitl-arbiter: get feedback: %w", err)
 	}
 
 	var deadlocked []*flow.Feedback
@@ -106,22 +106,22 @@ func handleArbiter(
 
 	// ── Step 3: No deadlocked items — graceful degradation ─────────────
 	if len(deadlocked) == 0 {
-		slog.Warn("human-arbiter: no deadlocked feedback found, degrading gracefully",
+		slog.Warn("hitl-arbiter: no deadlocked feedback found, degrading gracefully",
 			"workitem_id", workitemID)
 		if err := haikuArt.Stamp(stampArbitrated); err != nil {
-			return fmt.Errorf("human-arbiter: stamp haiku: %w", err)
+			return fmt.Errorf("hitl-arbiter: stamp haiku: %w", err)
 		}
 		if err := workitem.RouteTo(choiceAccept); err != nil {
-			return fmt.Errorf("human-arbiter: route to %s: %w", choiceAccept, err)
+			return fmt.Errorf("hitl-arbiter: route to %s: %w", choiceAccept, err)
 		}
 		return nil
 	}
 
 	// ── Step 4: Enqueue, pause, wait, validate, resume ────────────────
-	slog.Info("human-arbiter: deadlocked feedback found",
+	slog.Info("hitl-arbiter: deadlocked feedback found",
 		"workitem_id", workitemID,
 		"count", len(deadlocked))
-	choice, err := nodeutil.AwaitHumanDecision(ctx, qm, workitem, workitemID, "human-arbiter", map[string]bool{
+	choice, err := nodeutil.AwaitHumanDecision(ctx, qm, workitem, workitemID, "hitl-arbiter", map[string]bool{
 		choiceAccept: true,
 		choiceReject: true,
 		choiceCancel: true,
@@ -139,14 +139,14 @@ func handleArbiter(
 		return linkRulingsAndRoute(workitem, haikuArt, deadlocked, flow.FeedbackStateRejected, choice)
 
 	case choiceCancel:
-		slog.Info("human-arbiter: cancel requested", "workitem_id", workitemID)
+		slog.Info("hitl-arbiter: cancel requested", "workitem_id", workitemID)
 		if err := workitem.Complete(flow.WithReason(flowv1.CompletionReason_COMPLETION_REASON_CANCELLED)); err != nil {
-			return fmt.Errorf("human-arbiter: complete cancelled: %w", err)
+			return fmt.Errorf("hitl-arbiter: complete cancelled: %w", err)
 		}
 		return nil
 	default:
 		// Unreachable after validation, but guard against logic drift.
-		return fmt.Errorf("human-arbiter: unreachable choice %q", choice)
+		return fmt.Errorf("hitl-arbiter: unreachable choice %q", choice)
 	}
 }
 
@@ -161,14 +161,14 @@ func linkRulingsAndRoute(
 ) error {
 	for _, fb := range deadlocked {
 		if err := fb.LinkRuling(sourceLawID, targetState); err != nil {
-			return fmt.Errorf("human-arbiter: link ruling for %s: %w", fb.GetID(), err)
+			return fmt.Errorf("hitl-arbiter: link ruling for %s: %w", fb.GetID(), err)
 		}
 	}
 	if err := haikuArt.Stamp(stampArbitrated); err != nil {
-		return fmt.Errorf("human-arbiter: stamp haiku: %w", err)
+		return fmt.Errorf("hitl-arbiter: stamp haiku: %w", err)
 	}
 	if err := workitem.RouteTo(output); err != nil {
-		return fmt.Errorf("human-arbiter: route to %s: %w", output, err)
+		return fmt.Errorf("hitl-arbiter: route to %s: %w", output, err)
 	}
 	return nil
 }
