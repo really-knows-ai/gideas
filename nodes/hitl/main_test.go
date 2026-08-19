@@ -476,7 +476,7 @@ func TestBuildChoicesResponse_MultipleOutputs(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Choices restriction (hitl-sort's humanChoices absorbed into hitl config)
+// Choices restriction (config restricts the presented routing choices)
 // ---------------------------------------------------------------------------
 
 // TestHITL_ChoicesRestriction_SubsetRoutes verifies that when hitl config
@@ -616,9 +616,8 @@ func TestBuildChoicesResponse_ChoicesInvalid(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Approval as a hitl:latest instance (former human-approval expressible
-// purely via config: output approve → sort, STAMP:artefact/haiku/approval,
-// exit-bound standard-exit)
+// Approval as a hitl:latest instance (purely via config: output approve →
+// sort, STAMP:artefact/haiku/approval, exit-bound standard-exit)
 // ---------------------------------------------------------------------------
 
 // TestHITL_ApprovalAsInstance_Approve verifies deciding "approve" stamps the

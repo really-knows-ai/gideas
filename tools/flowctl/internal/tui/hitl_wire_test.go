@@ -37,7 +37,7 @@ func TestNodeChangeTriggersProbe(t *testing.T) {
 	// Simulate a modified event with a new node
 	model, cmd := m.Update(WorkitemUpdateMsg{
 		Event: "MODIFIED",
-		Item:  api.WorkitemSummary{Name: "wi-001", Node: "human-approval"},
+		Item:  api.WorkitemSummary{Name: "wi-001", Node: "hitl-approval"},
 	})
 	m2 := model.(*Model)
 
@@ -49,8 +49,8 @@ func TestNodeChangeTriggersProbe(t *testing.T) {
 
 	// The workitem's node should be updated in the list
 	if len(m2.workitemList.Items) > 0 {
-		if m2.workitemList.Items[0].Node != "human-approval" {
-			t.Errorf("expected list item node 'human-approval', got %q", m2.workitemList.Items[0].Node)
+		if m2.workitemList.Items[0].Node != "hitl-approval" {
+			t.Errorf("expected list item node 'hitl-approval', got %q", m2.workitemList.Items[0].Node)
 		}
 	}
 
@@ -68,7 +68,7 @@ func TestHitlProbeShowsPrompt(t *testing.T) {
 
 	model, cmd := m.Update(components.HitlProbeResultMsg{
 		WorkitemID: "wi-001",
-		NodeName:   "human-approval",
+		NodeName:   "hitl-approval",
 		QueueItem:  &api.QueueItem{WorkitemID: "wi-001"},
 		Choices: []api.Choice{
 			{Value: "approve", Label: "Approve", Type: "route"},
@@ -93,7 +93,7 @@ func TestHitlProbeExhaustionShowsDiagnostic(t *testing.T) {
 
 	model, cmd := m.Update(components.HitlProbeExhaustedMsg{
 		WorkitemID: "wi-001",
-		NodeName:   "human-approval",
+		NodeName:   "hitl-approval",
 		Diagnostic: "HITL probe timed out — node may not have enqueued the item",
 	})
 	m2 := model.(*Model)
@@ -117,7 +117,7 @@ func TestDefaultChoicesOnProbeResult(t *testing.T) {
 	// HitlProbeResultMsg carries whatever choices were resolved
 	model, cmd := m.Update(components.HitlProbeResultMsg{
 		WorkitemID: "wi-001",
-		NodeName:   "human-approval",
+		NodeName:   "hitl-approval",
 		QueueItem:  &api.QueueItem{WorkitemID: "wi-001"},
 		Choices: []api.Choice{
 			{Value: "approve", Label: "Approve", Type: "route"},
@@ -150,7 +150,7 @@ func TestDynamicChoicesOnProbeResult(t *testing.T) {
 	// Dynamic choices from /choices
 	model, cmd := m.Update(components.HitlProbeResultMsg{
 		WorkitemID: "wi-001",
-		NodeName:   "human-arbiter",
+		NodeName:   "hitl-arbiter",
 		QueueItem:  &api.QueueItem{WorkitemID: "wi-001"},
 		Choices: []api.Choice{
 			{Value: "accept", Label: "Accept", Type: "route"},
@@ -225,7 +225,7 @@ func TestCancelChoiceShowsConfirmation(t *testing.T) {
 	m := initialModel()
 	m.screen = ScreenWorkitemDetail
 	m.hitlState = components.NewHitlState(8080)
-	m2, _ := startHitlProbe(t, &m, "human-approval")
+	m2, _ := startHitlProbe(t, &m, "hitl-approval")
 
 	// Press "c" (first letter of "Cancel")
 	// This is handled in updateWorkitemDetailKeys
@@ -247,7 +247,7 @@ func TestCancelConfirmationDismissesOnNo(t *testing.T) {
 	m := initialModel()
 	m.screen = ScreenWorkitemDetail
 	m.hitlState = components.NewHitlState(8080)
-	m2, _ := startHitlProbe(t, &m, "human-approval")
+	m2, _ := startHitlProbe(t, &m, "hitl-approval")
 	m2.workitemDetail.hitl.ConfirmingCancel = true
 	m2.workitemDetail.hitl.PendingChoice = "cancel"
 
@@ -269,7 +269,7 @@ func TestCancelConfirmationSubmitsOnYes(t *testing.T) {
 	m := initialModel()
 	m.screen = ScreenWorkitemDetail
 	m.hitlState = components.NewHitlState(8080)
-	m2, _ := startHitlProbe(t, &m, "human-approval")
+	m2, _ := startHitlProbe(t, &m, "hitl-approval")
 	m2.workitemDetail.hitl.ConfirmingCancel = true
 	m2.workitemDetail.hitl.PendingChoice = "cancel"
 
@@ -295,7 +295,7 @@ func TestCtrlCCleansHitlForward(t *testing.T) {
 	m := initialModel()
 	m.screen = ScreenWorkitemDetail
 	m.hitlState = components.NewHitlState(8080)
-	m2, mockPFM := startHitlProbe(t, &m, "human-approval")
+	m2, mockPFM := startHitlProbe(t, &m, "hitl-approval")
 
 	if len(mockPFM.forwards) != 1 {
 		t.Fatalf("expected 1 HITL forward from probe, got %d", len(mockPFM.forwards))
@@ -324,7 +324,7 @@ func TestHitlDebugHintNonDefaultPort(t *testing.T) {
 	// The diagnostic is already composed by HitlState.Probe.
 	model, cmd := m.Update(components.HitlProbeExhaustedMsg{
 		WorkitemID: "wi-001",
-		NodeName:   "human-approval",
+		NodeName:   "hitl-approval",
 		Diagnostic: "HITL probe timed out — node may not have enqueued the item\nHITL probe failed — verify `--hitl-port` matches the node's `FLOW_HITL_PORT`",
 	})
 	m2 := model.(*Model)

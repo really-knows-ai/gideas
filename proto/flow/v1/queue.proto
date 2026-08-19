@@ -57,7 +57,7 @@ message QueueItem {
   string workitem_id = 1;
   // Owning pod identity (e.g., "review-queue-0").
   string shard_id = 2;
-  // Queue name scoping (e.g., "human-arbiter"). Defaults to FLOW_NODE_ID.
+  // Queue name scoping (e.g., "hitl-arbiter"). Defaults to FLOW_NODE_ID.
   string queue_name = 6;
   // Queue status: "waiting" or "claimed".
   string status = 3;

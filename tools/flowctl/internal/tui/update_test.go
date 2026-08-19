@@ -365,7 +365,7 @@ func TestUpdateHitlProbeFoundWithChoices(t *testing.T) {
 	// In Phase 05, it always means "active".
 	model, cmd := m.Update(components.HitlProbeResultMsg{
 		WorkitemID: "wi-001",
-		NodeName:   "human-approval",
+		NodeName:   "hitl-approval",
 		QueueItem:  &api.QueueItem{WorkitemID: "wi-001"},
 		Choices: []api.Choice{
 			{Value: "approve", Label: "Approve", Type: "route"},

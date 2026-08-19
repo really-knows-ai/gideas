@@ -44,7 +44,7 @@ func WithQueueName(name string) Option {
 // WithCustomRoutes registers additional HTTP routes on the QueueManager's
 // REST API mux. The provided function is called after the standard HITL
 // routes are registered, so it can add node-specific endpoints (e.g. GET
-// /choices for hitl-sort) on the same server without forking the SDK.
+// /choices for hitl) on the same server without forking the SDK.
 func WithCustomRoutes(fn func(mux *http.ServeMux)) Option {
 	return func(c *config) { c.customRoutes = fn }
 }

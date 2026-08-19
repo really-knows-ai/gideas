@@ -195,7 +195,7 @@ func TestHitlStateConcurrentProbeAccess(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "hitl-pod",
 			Namespace: "test-ns",
-			Labels:    map[string]string{"flow.foundry.io/node-name": "human-approval"},
+			Labels:    map[string]string{"flow.foundry.io/node-name": "hitl-approval"},
 		},
 		Status: corev1.PodStatus{
 			Phase: corev1.PodRunning,
@@ -210,7 +210,7 @@ func TestHitlStateConcurrentProbeAccess(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		cmd := h.Probe(context.Background(), clientset, "test-ns", "human-approval", "wi-001", bf)
+		cmd := h.Probe(context.Background(), clientset, "test-ns", "hitl-approval", "wi-001", bf)
 		cmd() // returns HitlProbeRetryMsg once the forward is released
 	}()
 

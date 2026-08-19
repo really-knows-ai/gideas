@@ -447,9 +447,9 @@ func newThreeOutputSpy() *hitlSpy {
 	}
 }
 
-// newApprovalSpy returns a spy configured like the former human-approval
-// node expressed as a hitl:latest CRD instance: output "approve" → sort,
-// READ:artefact/haiku + petition, STAMP:artefact/haiku/approval, exit-bound.
+// newApprovalSpy returns a spy configured as a hitl:latest approval CRD
+// instance: output "approve" → sort, READ:artefact/haiku + petition,
+// STAMP:artefact/haiku/approval, exit-bound.
 func newApprovalSpy() *hitlSpy {
 	return &hitlSpy{
 		ArtefactContents: map[string]string{

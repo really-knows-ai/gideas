@@ -322,7 +322,7 @@ func TestWatchWorkitems(t *testing.T) {
 // ─── T4: GetWorkitem ───────────────────────────────────────────────────────
 
 func TestGetWorkitem(t *testing.T) {
-	parent := makeWorkitemWithStatus("wi-parent", "Suspended", "human-approval",
+	parent := makeWorkitemWithStatus("wi-parent", "Suspended", "hitl-approval",
 		"Needs human review", map[string]int32{"forge": 1, "sort": 1},
 		map[string]string{"env": "prod"},
 	)
@@ -339,8 +339,8 @@ func TestGetWorkitem(t *testing.T) {
 	if detail.State != "Suspended" {
 		t.Errorf("expected state Suspended, got %s", detail.State)
 	}
-	if detail.Node != "human-approval" {
-		t.Errorf("expected node human-approval, got %s", detail.Node)
+	if detail.Node != "hitl-approval" {
+		t.Errorf("expected node hitl-approval, got %s", detail.Node)
 	}
 	if detail.FailureReason != "Needs human review" {
 		t.Errorf("expected failure reason 'Needs human review', got %s", detail.FailureReason)

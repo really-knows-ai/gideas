@@ -69,11 +69,11 @@ func TestWorkitemNodeColumnActive(t *testing.T) {
 		{Name: "wi-running", State: "Running", Node: "sort", ChildrenCount: 0, Age: 2 * time.Minute},
 		{Name: "wi-pending", State: "Pending", Node: "forge", ChildrenCount: 0, Age: 30 * time.Second},
 		{Name: "wi-routing", State: "Routing", Node: "router", ChildrenCount: 0, Age: time.Minute},
-		{Name: "wi-suspended", State: "Suspended", Node: "human-approval", ChildrenCount: 0, Age: 8 * time.Minute},
+		{Name: "wi-suspended", State: "Suspended", Node: "hitl-approval", ChildrenCount: 0, Age: 8 * time.Minute},
 	}
 	m.Namespace = "test-ns"
 	v := m.View()
-	if !strings.Contains(v, "sort") || !strings.Contains(v, "forge") || !strings.Contains(v, "router") || !strings.Contains(v, "human-approval") {
+	if !strings.Contains(v, "sort") || !strings.Contains(v, "forge") || !strings.Contains(v, "router") || !strings.Contains(v, "hitl-approval") {
 		t.Error("expected active node names in view, got:", v)
 	}
 }
@@ -137,7 +137,7 @@ func TestWorkitemStateColumnColorsApplied(t *testing.T) {
 	m.Loading = false
 	m.Items = []api.WorkitemSummary{
 		{Name: "wi-001", State: "Completed", Node: "-", ChildrenCount: 0, Age: 12 * time.Minute},
-		{Name: "wi-002", State: "Suspended", Node: "human-approval", ChildrenCount: 0, Age: 8 * time.Minute},
+		{Name: "wi-002", State: "Suspended", Node: "hitl-approval", ChildrenCount: 0, Age: 8 * time.Minute},
 		{Name: "wi-003", State: "Pending", Node: "forge", ChildrenCount: 0, Age: 30 * time.Second},
 	}
 	m.Namespace = "test-ns"

@@ -164,7 +164,7 @@ type QueueItem struct {
 	WorkitemId string `protobuf:"bytes,1,opt,name=workitem_id,json=workitemId,proto3" json:"workitem_id,omitempty"`
 	// Owning pod identity (e.g., "review-queue-0").
 	ShardId string `protobuf:"bytes,2,opt,name=shard_id,json=shardId,proto3" json:"shard_id,omitempty"`
-	// Queue name scoping (e.g., "human-arbiter"). Defaults to FLOW_NODE_ID.
+	// Queue name scoping (e.g., "hitl-arbiter"). Defaults to FLOW_NODE_ID.
 	QueueName string `protobuf:"bytes,6,opt,name=queue_name,json=queueName,proto3" json:"queue_name,omitempty"`
 	// Queue status: "waiting" or "claimed".
 	Status string `protobuf:"bytes,3,opt,name=status,proto3" json:"status,omitempty"`
