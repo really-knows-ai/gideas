@@ -251,6 +251,48 @@ func TestManager_Enqueue_UniqueGenerationPerParkingEvent(t *testing.T) {
 	}
 }
 
+// TestManager_Enqueue_Repark_RestoresBackup pins the R-C1 factor-1 invariant
+// across a re-park when the stale backup copy still occupies the only remaining
+// backup-candidate shard. insertBackup is generation-guarded: the re-parked
+// (G2) ReplicateItem must drop the stale G1 backup on that shard and store the
+// new G2 copy — the item is never left backup-less in a live cluster.
+func TestManager_Enqueue_Repark_RestoresBackup(t *testing.T) {
+	ctx := context.Background()
+	// 2-shard mesh: owner shard-0, backup = the only candidate shard-1.
+	s1 := newMeshTestShard(t, testShard1)
+	qm := buildReplicatingManager(t, testShard0, []registeredShard{{testShard1, s1}})
+
+	if err := qm.Enqueue(ctx, testWorkitemID); err != nil {
+		t.Fatalf("Enqueue failed: %v", err)
+	}
+	if _, err := qm.store.claim(ctx, testWorkitemID); err != nil {
+		t.Fatalf("claim failed: %v", err)
+	}
+	// Decide at the STORE level (no mesh) so no DropItem fires — the stale G1
+	// backup stays on shard-1 (a missed drop/partition, R-C5).
+	if _, err := qm.store.decideWithRow(ctx, testWorkitemID); err != nil {
+		t.Fatalf("decide failed: %v", err)
+	}
+	if rows := backupRows(t, s1.store); len(rows) != 1 {
+		t.Fatalf("expected the stale G1 backup to remain on shard-1, got %+v", rows)
+	}
+
+	// Re-park G2: chooseBackup picks shard-1 (the only candidate). With the
+	// generation-guarded insertBackup, the stale G1 is superseded and the G2
+	// backup lands there — factor-1 restored.
+	if err := qm.Enqueue(ctx, testWorkitemID); err != nil {
+		t.Fatalf("re-Enqueue failed: %v", err)
+	}
+	g2, _ := qm.store.getByID(ctx, testWorkitemID)
+	if g2.BackupShard != testShard1 {
+		t.Fatalf("expected backup_shard == shard-1 after re-park restore, got %q", g2.BackupShard)
+	}
+	rows := backupRows(t, s1.store)
+	if len(rows) != 1 || rows[0].Generation != g2.Generation {
+		t.Fatalf("shard-1 must hold exactly the G2 backup (stale G1 superseded), got %+v", rows)
+	}
+}
+
 func TestNewGenerationID_IsTimeOrdered(t *testing.T) {
 	// ≥1ms sleep between calls -> strictly increasing (lexicographic) strings.
 	time.Sleep(2 * time.Millisecond)

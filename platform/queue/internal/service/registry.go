@@ -128,6 +128,24 @@ func livingShards(q *v1.Queue) []*flowv1.ShardRegistration {
 	return out
 }
 
+// createQueue builds and creates the Queue CR with the initial shard embedded
+// (the API server persists status sent on Create even with the status
+// subresource). Shared by the first registration and by HeartbeatQueue's
+// self-heal path.
+func (r *Registry) createQueue(ctx context.Context, queueName, shardID, shardAddr, phase string) error {
+	q := &v1.Queue{}
+	q.Name = queueName
+	q.Namespace = r.Namespace
+	q.Spec.QueueName = queueName
+	q.Status.Shards = []v1.QueueShardStatus{{
+		ShardID:         shardID,
+		Addr:            shardAddr,
+		LastHeartbeatAt: metav1Now(time.Now().UTC()),
+		Phase:           phase,
+	}}
+	return r.client.Create(ctx, q)
+}
+
 // RegisterQueue get/creates the Queue CR and idempotently upserts the shard. On
 // first registration the CR is created with the initial .status.shards[]
 // (persisted by the API server even with the status subresource); subsequent
@@ -142,18 +160,7 @@ func (r *Registry) RegisterQueue(
 		}
 		// First registration: create the CR with the initial shard embedded in
 		// client.Create (the API server persists status sent on Create).
-		now := time.Now().UTC()
-		q = &v1.Queue{}
-		q.Name = req.GetQueueName()
-		q.Namespace = r.Namespace
-		q.Spec.QueueName = req.GetQueueName()
-		q.Status.Shards = []v1.QueueShardStatus{{
-			ShardID:         req.GetShardId(),
-			Addr:            req.GetShardAddr(),
-			LastHeartbeatAt: metav1Now(now),
-			Phase:           phaseActive,
-		}}
-		if err := r.client.Create(ctx, q); err != nil {
+		if err := r.createQueue(ctx, req.GetQueueName(), req.GetShardId(), req.GetShardAddr(), phaseActive); err != nil {
 			return nil, toInternal("register queue: create", err)
 		}
 		return &flowv1.RegisterQueueResponse{Acknowledged: true}, nil
@@ -176,10 +183,22 @@ func (r *Registry) HeartbeatQueue(
 ) (*flowv1.HeartbeatQueueResponse, error) {
 	q, err := r.get(ctx, req.GetQueueName())
 	if err != nil {
-		if isNotFound(err) {
-			return nil, status.Error(codes.NotFound, "queue not found")
+		if !isNotFound(err) {
+			return nil, toInternal("heartbeat: get", err)
 		}
-		return nil, toInternal("heartbeat: get", err)
+		// Self-heal (R-B3 "idempotent upsert"): the SDK registers exactly once
+		// at boot, so if the queue-service was unavailable then, later
+		// heartbeats must be able to establish the lease once it recovers —
+		// create the CR here rather than returning NotFound forever (which
+		// would leave the shard permanently outside the living set, invisible
+		// to failover).
+		if err := r.createQueue(ctx, req.GetQueueName(), req.GetShardId(), req.GetShardAddr(), phaseActive); err != nil {
+			return nil, toInternal("heartbeat: create", err)
+		}
+		q, err = r.get(ctx, req.GetQueueName())
+		if err != nil {
+			return nil, toInternal("heartbeat: get after create", err)
+		}
 	}
 
 	now := time.Now().UTC()

@@ -135,6 +135,30 @@ func TestDecide_RemoteRouting_StillPropagatesDrop(t *testing.T) {
 	}
 }
 
+// TestGetItem_BackupHolderDoesNotServeBackupCopy pins the R-C6 owner-only read
+// rule on the LOCAL branch of routeGetItem: a shard that holds a backup row for
+// a workitem must not serve that backup copy via GetItem — it is "not mine" and
+// falls through (here to not-found, since the holder has no peers to route to).
+func TestGetItem_BackupHolderDoesNotServeBackupCopy(t *testing.T) {
+	ctx := context.Background()
+	s0 := newMeshTestShard(t, testShard0)
+	s1 := newMeshTestShard(t, testShard1)
+	const gen = "0000000000000001-gi"
+	if err := s0.store.enqueue(ctx, testWorkitemID, gen, testShard1); err != nil {
+		t.Fatal(err)
+	}
+	if err := s1.store.insertBackup(ctx, testWorkitemID, testShard0, testQueueName, gen); err != nil {
+		t.Fatal(err)
+	}
+
+	// The backup-holder shard-1 has no peers: its local branch must not return
+	// its held backup row (ShardID == shard-0, not self). R-C6 -> not found.
+	qm1 := buildReplicatingManager(t, testShard1, nil)
+	if _, err := qm1.mesh.routeGetItem(ctx, testWorkitemID); !errors.Is(err, ErrQueueItemNotFound) {
+		t.Fatalf("backup holder must not serve its backup copy via GetItem; got %v", err)
+	}
+}
+
 func TestClaim_BackupHolderRoutesToOwner(t *testing.T) {
 	ctx := context.Background()
 	s0 := newMeshTestShard(t, testShard0)

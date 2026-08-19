@@ -575,12 +575,14 @@ func dedupeItems(items []QueueItem) []QueueItem {
 
 // routeGetItem looks up an item: local first, then fan out to peers.
 func (m *queueMesh) routeGetItem(ctx context.Context, workitemID string) (*QueueItem, error) {
-	// Local first.
+	// Local first — owner-row-only (R-C6): a backup row this shard holds points
+	// at a foreign owner and must not be served here, mirroring the remote
+	// fan-out's !IsBackup filter. Treat it as "not mine" (same as absence).
 	item, err := m.store.getByID(ctx, workitemID)
-	if err == nil {
+	if err == nil && item.ShardID == m.shardID {
 		return item, nil
 	}
-	if !errors.Is(err, ErrQueueItemNotFound) {
+	if err != nil && !errors.Is(err, ErrQueueItemNotFound) {
 		return nil, err
 	}
 

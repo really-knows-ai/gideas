@@ -265,11 +265,22 @@ func (s *queueStore) decideWithRow(ctx context.Context, workitemID string) (Queu
 }
 
 // insertBackup stores a backup row on this shard for a foreign owner
-// (shard_id = ownerShard, backup_shard = ”). NOT an upsert: workitem_id is
-// the table's PRIMARY KEY, so a same-shard duplicate insert for an already
-// stored workitem_id fails (this is why stale-copy tests pin every new backup
-// to a different shard than the stale copy).
+// (shard_id = ownerShard, backup_shard = ”). It is a generation-guarded
+// replace, not a blind upsert: workitem_id is the table's PRIMARY KEY, so a
+// same-shard re-park of an already-stored workitem_id must first drop the
+// stale (older-generation) copy — otherwise the INSERT fails on the PK and the
+// item is left with no backup, breaking the R-C1 factor-1 invariant. A newer
+// (higher) generation is never dropped, so a raced supersession never downgrades
+// a fresh copy.
 func (s *queueStore) insertBackup(ctx context.Context, workitemID, ownerShard, queueName, generation string) error {
+	// Drop any older-generation copy of the same workitem_id held here (a stale
+	// backup that a newer park supersedes), then insert the new one.
+	if _, err := s.db.ExecContext(ctx,
+		`DELETE FROM queue_items WHERE workitem_id = ? AND generation < ?`,
+		workitemID, generation,
+	); err != nil {
+		return fmt.Errorf("clear stale backup: %w", err)
+	}
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO queue_items (workitem_id, shard_id, queue_name, status, generation, backup_shard) `+
 			`VALUES (?, ?, ?, 'waiting', ?, '')`,
