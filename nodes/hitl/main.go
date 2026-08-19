@@ -39,6 +39,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
 	"os"
 	"strings"
@@ -265,9 +266,7 @@ func buildChoicesResponse(
 		return nil, err
 	}
 	labels := map[string]string{}
-	for k, v := range cfg.ChoiceLabels {
-		labels[k] = v
-	}
+	maps.Copy(labels, cfg.ChoiceLabels)
 	// choices[].label takes precedence over choiceLabels when present.
 	for _, ce := range cfg.Choices {
 		if ce.Label != "" {
