@@ -194,3 +194,48 @@ func TestGetGlobalQueue_OneCopyPerWorkitem(t *testing.T) {
 		t.Fatalf("wi-b should keep its lone copy, got %q", got["wi-b"])
 	}
 }
+
+// TestGetGlobalQueue_NoPeers_SurfacesLocalBackups pins that a peerless shard's
+// getGlobalQueue still surfaces the backup rows it holds (the only remaining
+// copies when their owner is unreachable) plus its own owner rows, deduped to
+// one copy per workitem_id (R-C3). This guards the no-peer fast path: it must
+// not return only owner rows and hide locally-held backups.
+func TestGetGlobalQueue_NoPeers_SurfacesLocalBackups(t *testing.T) {
+	ctx := context.Background()
+
+	store, err := newQueueStore(":memory:", "collector", testQueueName)
+	if err != nil {
+		t.Fatalf("newQueueStore failed: %v", err)
+	}
+	t.Cleanup(func() { _ = store.close() })
+
+	mesh := newQueueMesh(store, "collector", &staticResolver{}, "50053")
+	mesh.registry = newStaticShardRegistry(nil) // no peers
+
+	// An owner row for this shard, and a backup row for a foreign owner that is
+	// unreachable (no peers). Both must be surfaced.
+	if err := store.enqueue(ctx, "wi-owner", "0000000000000002-o", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.insertBackup(ctx, "wi-backup", testShard0, testQueueName, "0000000000000001-b"); err != nil {
+		t.Fatal(err)
+	}
+
+	items, err := mesh.getGlobalQueue(ctx, QueueFilter{})
+	if err != nil {
+		t.Fatalf("getGlobalQueue failed: %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("expected 2 copies (owner + held backup), got %+v", items)
+	}
+	got := map[string]bool{}
+	for _, it := range items {
+		got[it.WorkitemID] = !it.IsBackup
+	}
+	if !got["wi-owner"] {
+		t.Fatalf("wi-owner should surface as an owner copy (IsBackup=false), got %q", "wi-owner")
+	}
+	if isOwner, ok := got["wi-backup"]; !ok || isOwner {
+		t.Fatalf("wi-backup should surface as the held backup (IsBackup=true) when its owner is absent, got %+v", items)
+	}
+}

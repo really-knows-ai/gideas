@@ -487,7 +487,11 @@ func (m *queueMesh) getGlobalQueue(ctx context.Context, filter QueueFilter) ([]Q
 	m.mu.RUnlock()
 
 	if len(peerClients) == 0 {
-		return localItems, nil
+		// No peers: still return the local owner rows AND any backup rows this
+		// shard holds, deduped by R-C3 (owner preferred, backup when owner
+		// absent) — a peerless shard may hold the only remaining copy of an
+		// item as a backup row. Returning only owner rows would hide it.
+		return dedupeItems(all), nil
 	}
 
 	// Fan out to peers.
