@@ -81,6 +81,9 @@ message QueueItem {
   // Generation UUID disambiguating distinct parking events of the same
   // workitem. Stale backup copies are superseded by a newer generation.
   string generation_id = 7;
+  // True when this copy is a backup held on a non-owning shard. Owner copy
+  // = false. Routing (findOwner/routeGetItem) matches owner rows only.
+  bool is_backup = 8;
 }
 
 message ClaimItemRequest {

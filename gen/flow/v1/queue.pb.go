@@ -174,7 +174,10 @@ type QueueItem struct {
 	ClaimedAt string `protobuf:"bytes,5,opt,name=claimed_at,json=claimedAt,proto3" json:"claimed_at,omitempty"`
 	// Generation UUID disambiguating distinct parking events of the same
 	// workitem. Stale backup copies are superseded by a newer generation.
-	GenerationId  string `protobuf:"bytes,7,opt,name=generation_id,json=generationId,proto3" json:"generation_id,omitempty"`
+	GenerationId string `protobuf:"bytes,7,opt,name=generation_id,json=generationId,proto3" json:"generation_id,omitempty"`
+	// True when this copy is a backup held on a non-owning shard. Owner copy
+	// = false. Routing (findOwner/routeGetItem) matches owner rows only.
+	IsBackup      bool `protobuf:"varint,8,opt,name=is_backup,json=isBackup,proto3" json:"is_backup,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -256,6 +259,13 @@ func (x *QueueItem) GetGenerationId() string {
 		return x.GenerationId
 	}
 	return ""
+}
+
+func (x *QueueItem) GetIsBackup() bool {
+	if x != nil {
+		return x.IsBackup
+	}
+	return false
 }
 
 type ClaimItemRequest struct {
@@ -1541,7 +1551,7 @@ const file_flow_v1_queue_proto_rawDesc = "" +
 	"\x05items\x18\x01 \x03(\v2\x12.flow.v1.QueueItemR\x05items\x12\x14\n" +
 	"\x05total\x18\x02 \x01(\x05R\x05total\x12\x14\n" +
 	"\x05limit\x18\x03 \x01(\x05R\x05limit\x12\x16\n" +
-	"\x06offset\x18\x04 \x01(\x05R\x06offset\"\xe3\x01\n" +
+	"\x06offset\x18\x04 \x01(\x05R\x06offset\"\x80\x02\n" +
 	"\tQueueItem\x12\x1f\n" +
 	"\vworkitem_id\x18\x01 \x01(\tR\n" +
 	"workitemId\x12\x19\n" +
@@ -1553,7 +1563,8 @@ const file_flow_v1_queue_proto_rawDesc = "" +
 	"enqueuedAt\x12\x1d\n" +
 	"\n" +
 	"claimed_at\x18\x05 \x01(\tR\tclaimedAt\x12#\n" +
-	"\rgeneration_id\x18\a \x01(\tR\fgenerationId\"3\n" +
+	"\rgeneration_id\x18\a \x01(\tR\fgenerationId\x12\x1b\n" +
+	"\tis_backup\x18\b \x01(\bR\bisBackup\"3\n" +
 	"\x10ClaimItemRequest\x12\x1f\n" +
 	"\vworkitem_id\x18\x01 \x01(\tR\n" +
 	"workitemId\";\n" +
