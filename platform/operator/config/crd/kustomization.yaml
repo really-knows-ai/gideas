@@ -12,6 +12,7 @@ resources:
 - bases/flow.foundry.io_lawgroups.yaml
 - bases/flow.foundry.io_codificationservices.yaml
 - bases/flow.foundry.io_foundrygraphs.yaml
+- bases/flow.foundry.io_queues.yaml
 # +kubebuilder:scaffold:crdkustomizeresource
 
 patches:
