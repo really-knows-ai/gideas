@@ -12,7 +12,7 @@ import (
 // NewHITLHandler returns a flow.Handler that runs the shared HITL handler
 // preamble — assignment log, SDK client, workitem fetch (SetupHandler) and
 // client close — then delegates to process. name is the log/error prefix
-// (e.g. "hitl", "human-approval"); it must not include a trailing colon.
+// (e.g. "hitl", "hitl-approval"); it must not include a trailing colon.
 // process receives the client, workitem, queue manager, and workitem context.
 func NewHITLHandler(
 	qm flow.QueueManager,
@@ -56,7 +56,7 @@ func RunHITLNode(
 // inactivity timer, waits for a human decision, validates it, and resumes the
 // timer. It returns the validated choice.
 //
-// name is the log/error prefix (e.g. "hitl", "human-approval"). When valid is
+// name is the log/error prefix (e.g. "hitl", "hitl-approval"). When valid is
 // nil the returned choice is accepted without validation — including an empty
 // choice (hitl-appraise intentionally accepts any decision). Otherwise an
 // empty choice (queue-manager shutdown) is an error and a choice outside the
@@ -132,4 +132,24 @@ func CompleteCancelled(workitem *flow.Workitem, name string) error {
 		return fmt.Errorf("%s: complete (cancelled): %w", name, err)
 	}
 	return nil
+}
+
+// DiscoverStamp queries the flow topology and extracts the node's stamp
+// capability. It returns the governed artefact kind and stamp name. The
+// first STAMP:artefact/<kind>/<stamp> capability wins (a node should have
+// exactly one in the stamping role, but the first is taken defensively).
+func DiscoverStamp(ctx context.Context, client *flow.Client) (string, string, error) {
+	// ponytail: uses RawOperator escape hatch for proto access to capabilities.
+	topology, err := client.RawOperator().GetFlowTopology(ctx, &flowv1.GetFlowTopologyRequest{})
+	if err != nil {
+		return "", "", fmt.Errorf("get flow topology: %w", err)
+	}
+
+	stamps := flow.ParseStampCapabilities(topology.GetSelf().GetCapabilities())
+	if len(stamps) == 0 {
+		return "", "", fmt.Errorf("no STAMP:artefact capability found in topology")
+	}
+
+	sc := stamps[0]
+	return sc.GovernedArtefact, sc.StampName, nil
 }
