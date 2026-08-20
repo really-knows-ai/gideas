@@ -25,13 +25,7 @@ permission:
   edit:
     "*": deny
     ".opencode/**": deny
-    "Makefile": allow
-    "go.work": allow
-    "go.work.sum": allow
-    "AGENTS.md": allow
-    ".golangci.yml": allow
-    "plans/**": allow
-    ".worktrees/**": allow
+    ".worktrees/**/*_test.go": allow
     "cmd/**/*_test.go": allow
     "platform/**/*_test.go": allow
     "sdk/**/*_test.go": allow

@@ -30,7 +30,6 @@ permission:
   edit:
     "*": deny
     ".opencode/**": deny
-    "**/*_test.go": deny
     "Makefile": allow
     "go.work": allow
     "go.work.sum": allow
@@ -50,6 +49,7 @@ permission:
     "tools/**": allow
     ".worktrees/**": allow
     "/tmp/**": allow
+    "**/*_test.go": deny
   glob:
     "*": deny
     ".opencode/**": allow
