@@ -11,28 +11,28 @@ import (
 
 // CancelQueuedItem cancels a specific queued item for an internal caller. The
 // cancel contract IS a decision with an empty choice (matches how the SDK
-// expresses a cancellation as an empty-choice decision). Routes to the living
-// owner and issues QueuePeerService.DecideItem with choice "".
+// expresses a cancellation as an empty-choice decision). Broadcast through the
+// write funnel (serialized per item, fan-out to every living shard).
 func (r *Registry) CancelQueuedItem(
 	ctx context.Context, req *flowv1.CancelQueuedItemRequest,
 ) (*flowv1.CancelQueuedItemResponse, error) {
 	proxy := newPeerProxy(r)
 	defer proxy.close()
-	if err := proxy.decide(ctx, req.GetQueueName(), req.GetWorkitemId(), ""); err != nil {
+	if err := proxy.decideBroadcast(ctx, req.GetQueueName(), req.GetWorkitemId(), ""); err != nil {
 		return nil, toItemGRPCError(err)
 	}
 	return &flowv1.CancelQueuedItemResponse{Acknowledged: true}, nil
 }
 
 // DecideQueuedItem decides a specific queued item for an internal caller.
-// Routes to the living owner and issues QueuePeerService.DecideItem with the
-// caller's choice.
+// Broadcast through the write funnel (serialized per item, fan-out to every
+// living shard) with the caller's choice.
 func (r *Registry) DecideQueuedItem(
 	ctx context.Context, req *flowv1.DecideQueuedItemRequest,
 ) (*flowv1.DecideQueuedItemResponse, error) {
 	proxy := newPeerProxy(r)
 	defer proxy.close()
-	if err := proxy.decide(ctx, req.GetQueueName(), req.GetWorkitemId(), req.GetChoice()); err != nil {
+	if err := proxy.decideBroadcast(ctx, req.GetQueueName(), req.GetWorkitemId(), req.GetChoice()); err != nil {
 		return nil, toItemGRPCError(err)
 	}
 	return &flowv1.DecideQueuedItemResponse{Acknowledged: true}, nil

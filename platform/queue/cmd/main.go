@@ -85,6 +85,7 @@ func main() {
 	}
 	gs := grpc.NewServer()
 	flowv1.RegisterQueueRegistryServiceServer(gs, reg)
+	flowv1.RegisterQueueGatewayServiceServer(gs, service.NewGatewayServer(reg))
 	reflection.Register(gs)
 
 	// REST frontend.

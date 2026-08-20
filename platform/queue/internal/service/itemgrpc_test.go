@@ -14,13 +14,16 @@ import (
 	"google.golang.org/grpc/test/bufconn"
 )
 
-// newItemGRPCHarness seeds a CR with a living shard fake and returns a
-// QueueRegistryServiceClient connected to a bufconn server backed by the
-// registry.
-func newItemGRPCHarness(t *testing.T) (flowv1.QueueRegistryServiceClient, *fakePeerShard) {
+// newItemGRPCHarness seeds a CR with a living (mirror) shard fake and returns
+// a QueueRegistryServiceClient connected to a bufconn server backed by the
+// registry. The peer fake is a fakeMirrorShard (faithful mirror store) so the
+// broadcast-funnel paths (DecideQueuedItem/CancelQueuedItem → decideBroadcast)
+// are meaningfully exercised: a 1-shard queue behaves identically under the
+// fan-out.
+func newItemGRPCHarness(t *testing.T) (flowv1.QueueRegistryServiceClient, *fakeMirrorShard) {
 	now := time.Now().UTC()
-	owner := newFakePeerShard(t)
-	owner.setItems(&flowv1.QueueItem{WorkitemId: "wi-1", Status: "waiting"})
+	owner := newFakeMirrorShard(t, "owner-id")
+	owner.setItem(&flowv1.QueueItem{WorkitemId: "wi-1", Status: "waiting", GenerationId: "0000000000000001"})
 	c := newFakeClient(t, queueCR("hitl-approval",
 		shard("owner-id", "owner-addr", phaseActive, now),
 	))
@@ -64,8 +67,9 @@ func TestItemGRPC_CancelQueuedItem_RoutesToLivingShard(t *testing.T) {
 	if !resp.GetAcknowledged() {
 		t.Fatal("cancel not acknowledged")
 	}
-	// Cancel is delivered as DecideItem with an EMPTY choice to the living
-	// owner.
+	// Cancel is delivered as DecideItem with an EMPTY choice to every living
+	// mirror shard (a 1-shard queue: the sole shard). The funnel's decideBroadcast
+	// fans out; the fake records the decide.
 	decided := owner.decidedCalls()
 	if len(decided) != 1 {
 		t.Fatalf("expected 1 DecideItem, got %d", len(decided))
@@ -94,8 +98,10 @@ func TestItemGRPC_DecideQueuedItem_RoutesToLivingShard(t *testing.T) {
 }
 
 func TestItemGRPC_UnknownQueueItem_NotFound(t *testing.T) {
-	client, _ := newItemGRPCHarness(t) // owner is living but does not hold wi-unknown
+	client, _ := newItemGRPCHarness(t) // the living mirror shard does not hold wi-unknown
 
+	// All living shards respond (the single mirror shard) and none holds the
+	// item → the dedupe/decide path resolves to NotFound, not Unavailable.
 	_, err := client.DecideQueuedItem(context.Background(), &flowv1.DecideQueuedItemRequest{
 		QueueName: "hitl-approval", WorkitemId: "wi-unknown", Choice: "",
 	})

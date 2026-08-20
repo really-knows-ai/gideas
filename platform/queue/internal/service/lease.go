@@ -6,16 +6,15 @@ import (
 	"log/slog"
 	"time"
 
-	flowv1 "github.com/foundry/flow/gen/flow/v1"
 	v1 "github.com/foundry/flow/operator/api/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 // DefaultQueueLeaseTTL is the queue-shard lease TTL: 3 missed heartbeats × the
 // SDK's DefaultHeartbeatInterval (15s). A shard whose lastHeartbeatAt is older
-// than this is evicted (dropped from the Queue CR status) and its death is
-// broadcast to the surviving shards. Mirror of DefaultCapabilityStalenessWindow
-// — the single source of truth for the default lease TTL.
+// than this is evicted (dropped from the Queue CR status). Mirror of
+// DefaultCapabilityStalenessWindow — the single source of truth for the default
+// lease TTL.
 const DefaultQueueLeaseTTL = 3 * 15 * time.Second // 45s
 
 // defaultLeaseSweepInterval is the cadence of the eviction sweep ticker. It
@@ -70,10 +69,12 @@ func (r *Registry) sweepEvictions(ctx context.Context) error {
 	return nil
 }
 
-// evictQueue performs the four-step eviction transition for the given stale
+// evictQueue performs the three-step eviction transition for the given stale
 // shards of a queue: (1) mark phase=evicted, (2) drop from .status.shards[],
-// (3) fire OnShardEvicted, (4) fan out NotifyShardDead to each surviving
-// (still-living) shard.
+// (3) fire OnShardEvicted. The NotifyShardDead fan-out (step 4) was deleted in
+// PHASE_03 — mirror-everywhere means surviving shards do not need a death
+// notice; they simply stop hearing from the dead shard and reads always
+// scatter-gather over living shards only.
 func (r *Registry) evictQueue(ctx context.Context, queueName string, stale []v1.QueueShardStatus) error {
 	// Step 1: mark each stale shard phase=evicted (tombstones it for any
 	// concurrent reader).
@@ -107,7 +108,7 @@ func (r *Registry) evictQueue(ctx context.Context, queueName string, stale []v1.
 		return err
 	}
 
-	// Step 3: fire the broadcast hook before the death notice goes out.
+	// Step 3: fire the broadcast hook.
 	for _, s := range stale {
 		if r.OnShardEvicted != nil {
 			r.OnShardEvicted(queueName, s.ShardID)
@@ -116,48 +117,5 @@ func (r *Registry) evictQueue(ctx context.Context, queueName string, stale []v1.
 		}
 	}
 
-	// Step 4: fan out NotifyShardDead(shardID) to each surviving living shard.
-	// Addresses come from the surviving (non-evicted, fresh) CR shard entries.
-	if len(remaining) == 0 {
-		return nil
-	}
-	return r.fanOutShardDead(ctx, queueName, remaining, stale)
-}
-
-// fanOutShardDead dials each surviving living shard's QueuePeerService and
-// calls NotifyShardDead for each dead shard. Connects through the peerDialer
-// seam (nil ⇒ production dialer).
-func (r *Registry) fanOutShardDead(
-	ctx context.Context, queueName string,
-	survivors []v1.QueueShardStatus, dead []v1.QueueShardStatus,
-) error {
-	proxy := newPeerProxy(r)
-	defer proxy.close()
-
-	var firstErr error
-	for _, sv := range survivors {
-		c, err := proxy.dial(ctx, sv.Addr)
-		if err != nil {
-			slog.Warn("queue-service: fan-out dial failed", "queue", queueName, "addr", sv.Addr, "error", err)
-			continue
-		}
-		for _, d := range dead {
-			if _, err := c.NotifyShardDead(ctx, &flowv1.NotifyShardDeadRequest{ShardId: d.ShardID}); err != nil {
-				slog.Warn(
-					"queue-service: NotifyShardDead failed",
-					"queue", queueName, "survivor", sv.ShardID,
-					"dead", d.ShardID, "error", err,
-				)
-				if firstErr == nil {
-					firstErr = err
-				}
-			} else {
-				slog.Info(
-					"queue-service: notified shard of death",
-					"queue", queueName, "survivor", sv.ShardID, "dead", d.ShardID,
-				)
-			}
-		}
-	}
-	return firstErr
+	return nil
 }

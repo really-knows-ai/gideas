@@ -7,6 +7,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
@@ -50,11 +51,18 @@ type Registry struct {
 	// production gRPC dialer; same-package tests inject a bufconn dialer.
 	peerDialer peerDialer
 	// OnShardEvicted fires (queueName, shardID) when the sweep evicts a shard,
-	// BEFORE the NotifyShardDead fan-out. nil ⇒ slog.Warn.
+	// BEFORE the CR removal. nil ⇒ slog.Warn.
 	OnShardEvicted func(queueName, shardID string)
 	// Namespace scopes every Queue CR operation. Resolved in cmd/main.go and
 	// set after construction; defaults to "default".
 	Namespace string
+
+	// itemLocks is the per-item in-flight guard (R-3.2): serializes writes
+	// one-at-a-time per workitem_id across the SHARED Registry. peerProxy is
+	// created per-request, so this guard must live here (Registry-lifetime) to
+	// be visible to concurrent requests, not on the per-request proxy.
+	itemLocks   map[string]*sync.Mutex
+	itemLocksMu sync.Mutex
 }
 
 // NewRegistry constructs a Registry. TTL and sweep interval are explicit
@@ -65,7 +73,29 @@ func NewRegistry(c client.Client, leaseTTL, sweepInterval time.Duration) *Regist
 		client:        c,
 		leaseTTL:      leaseTTL,
 		sweepInterval: sweepInterval,
+		itemLocks:     make(map[string]*sync.Mutex),
 	}
+}
+
+// lockItem serializes a per-item write under the in-flight guard (R-3.2),
+// returning an unlock function. One Mutex per workitem_id (created on demand,
+// never removed — a bounded, benign map since the queue's item id space is the
+// workitem domain). Callers MUST defer the returned func.
+//
+// ponytail: itemLocks grows one entry per distinct workitem_id for the process
+// lifetime; the entry count is bounded by the workitem domain, not request
+// rate, so this is a benign ceiling. If that ever became a concern the upgrade
+// path is an LRU or sharded keyed-semaphore.
+func (r *Registry) lockItem(workitemID string) func() {
+	r.itemLocksMu.Lock()
+	mu, ok := r.itemLocks[workitemID]
+	if !ok {
+		mu = &sync.Mutex{}
+		r.itemLocks[workitemID] = mu
+	}
+	r.itemLocksMu.Unlock()
+	mu.Lock()
+	return mu.Unlock
 }
 
 // key returns the namespaced ObjectKey for a queue CR.

@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -17,8 +19,7 @@ import (
 
 // peerDialer connects to a shard's QueuePeerService. nil ⇒ the production
 // dialer; same-package tests inject a bufconn dialer so the REST/item-gRPC
-// proxy tests and the lease-sweep NotifyShardDead fan-out reach fakes
-// deterministically with no real network.
+// proxy tests reach fakes deterministically with no real network.
 type peerDialer func(ctx context.Context, addr string) (*grpc.ClientConn, error)
 
 // errShardUnavailable is returned when no living shard can serve a proxy op.
@@ -26,10 +27,12 @@ type peerDialer func(ctx context.Context, addr string) (*grpc.ClientConn, error)
 // the queue-service surfaces it as 503 QUEUE_UNAVAILABLE.
 var errShardUnavailable = fmt.Errorf("queue unavailable: no living shard")
 
-// peerProxy routes QueuePeerService operations to the living shards of a
-// queue. The authoritative liveness view is the Queue CR (R-B5): a shard is
-// living iff it is present in .status.shards[], its phase is not "evicted",
-// and its lastHeartbeatAt is within the lease TTL.
+// peerProxy broadcasts QueuePeerService write/read operations to the living
+// shards of a queue. The authoritative liveness view is the Queue CR (R-B5): a
+// shard is living iff it is present in .status.shards[], its phase is not
+// "evicted", and its lastHeartbeatAt is within the lease TTL. Per-item write
+// serialization (the in-flight guard) lives on the Registry, which is SHARED
+// across the per-request peerProxy instances created by rest.go/itemgrpc.go.
 type peerProxy struct {
 	reg   *Registry
 	mu    sync.Mutex
@@ -37,15 +40,6 @@ type peerProxy struct {
 	peers map[string]flowv1.QueuePeerServiceClient
 }
 
-// ponytail: A fresh peerProxy (and its conn cache) is created per REST/item-gRPC
-// request and closed afterwards (rest.go / itemgrpc.go), so each call re-dials the
-// living shard conns instead of reusing a Registry-lifetime cache. PHASE_03 calls
-// for a per-shard-addr conn cache keyed to the registry; this request-scoped
-// variant is a benign trade-off — correctness is identical (living set is still
-// re-derived from the CR each call) and it avoids stale-conn lifetime management.
-// Ceiling: at very high request rates the re-dial per call adds gRPC connect
-// latency and churn. Upgrade path: hoist a conn cache into Registry's lifetime,
-// keyed by shard addr, invalidated on the lease sweep's shard-drop.
 func newPeerProxy(reg *Registry) *peerProxy {
 	return &peerProxy{
 		reg:   reg,
@@ -105,15 +99,15 @@ func (p *peerProxy) living(s v1.QueueShardStatus) bool {
 	return time.Since(s.LastHeartbeatAt.Time) <= p.reg.leaseTTL
 }
 
-// fetch fetches the Queue CR and returns it plus its living shard entries.
+// fetch fetches the Queue CR and returns its living shard entries.
 // Returns errShardUnavailable if the queue has no living shards at all.
-func (p *peerProxy) fetch(ctx context.Context, queueName string) (*v1.Queue, []v1.QueueShardStatus, error) {
+func (p *peerProxy) fetch(ctx context.Context, queueName string) ([]v1.QueueShardStatus, error) {
 	q := &v1.Queue{}
 	if err := p.reg.client.Get(ctx, p.reg.key(queueName), q); err != nil {
 		if isNotFound(err) {
-			return nil, nil, errQueueItemNotFound
+			return nil, errQueueItemNotFound
 		}
-		return nil, nil, fmt.Errorf("get queue %s: %w", queueName, err)
+		return nil, fmt.Errorf("get queue %s: %w", queueName, err)
 	}
 	var livingShards []v1.QueueShardStatus
 	for _, s := range q.Status.Shards {
@@ -122,100 +116,13 @@ func (p *peerProxy) fetch(ctx context.Context, queueName string) (*v1.Queue, []v
 		}
 	}
 	if len(livingShards) == 0 {
-		return q, nil, errShardUnavailable
-	}
-	return q, livingShards, nil
-}
-
-// livingClient returns the living QueuePeerService clients for the queue.
-func (p *peerProxy) livingClients(ctx context.Context, queueName string) ([]flowv1.QueuePeerServiceClient, error) {
-	_, shards, err := p.fetch(ctx, queueName)
-	if err != nil {
-		return nil, err
-	}
-	clients := make([]flowv1.QueuePeerServiceClient, 0, len(shards))
-	for _, s := range shards {
-		c, err := p.dial(ctx, s.Addr)
-		if err != nil {
-			slog.Warn("queue-service: peer dial failed", "addr", s.Addr, "error", err)
-			continue
-		}
-		clients = append(clients, c)
-	}
-	if len(clients) == 0 {
 		return nil, errShardUnavailable
 	}
-	return clients, nil
+	return livingShards, nil
 }
 
-// findOwner locates the living shard owning the workitem by fanning out
-// GetLocalQueue over living shards only. Decision rule (pinned): no living
-// owner + any non-living CR shard present ⇒ errShardUnavailable (503); no
-// living owner + all CR shards living ⇒ errQueueItemNotFound (404).
-func (p *peerProxy) findOwner(
-	ctx context.Context, queueName, workitemID string,
-) (flowv1.QueuePeerServiceClient, error) {
-	q, shards, err := p.fetch(ctx, queueName)
-	if err != nil {
-		return nil, err
-	}
-
-	queried := 0
-	queryFailed := false
-	for _, s := range shards {
-		c, err := p.dial(ctx, s.Addr)
-		if err != nil {
-			slog.Warn("queue-service: peer dial failed", "addr", s.Addr, "error", err)
-			continue
-		}
-		resp, err := c.GetLocalQueue(ctx, &flowv1.GetLocalQueueRequest{})
-		if err != nil {
-			// A living shard failed mid-fan-out; the item may sit on it, so
-			// this is a retryable 503, not a 404 (SPEC proxy-write error row).
-			slog.Warn("queue-service: peer GetLocalQueue failed", "addr", s.Addr, "error", err)
-			queryFailed = true
-			continue
-		}
-		queried++
-		for _, pi := range resp.GetItems() {
-			if pi.GetWorkitemId() == workitemID {
-				return c, nil
-			}
-		}
-	}
-
-	// No living shard owns the item. Decision rule (pinned):
-	//   - if we could not successfully query ANY living shard (all living
-	//     shards unreachable), 503 — we cannot distinguish "item on a dead
-	//     shard" from "no such item";
-	//   - else if a living shard failed to respond mid-fan-out, 503 — the item
-	//     may sit on the newly-unreachable shard;
-	//   - else if any CR-registered shard is non-living (stale/evicted), 503 —
-	//     the item may sit on the dead shard;
-	//   - else all CR shards living and none owns it, 404 (genuinely absent).
-	if queried == 0 || queryFailed {
-		return nil, errShardUnavailable
-	}
-	if p.hasNonLiving(q) {
-		return nil, errShardUnavailable
-	}
-	return nil, errQueueItemNotFound
-}
-
-// hasNonLiving reports whether any CR shard entry of the queue is non-living
-// (evicted, or stale beyond the lease TTL). Used to disambiguate the 503/404
-// decision rule: a non-living CR shard means the item may sit on a dead shard.
-func (p *peerProxy) hasNonLiving(q *v1.Queue) bool {
-	for _, s := range q.Status.Shards {
-		if !p.living(s) {
-			return true
-		}
-	}
-	return false
-}
-
-// errQueueItemNotFound is returned when no living shard owns the item and all
-// CR shards are living.
+// errQueueItemNotFound is returned when no living shard holds the item across
+// a scatter-gather read (every living mirror queried and none has it).
 var errQueueItemNotFound = fmt.Errorf("queue item not found")
 
 // errQueueItemAlreadyClaimed / errQueueItemInvalidState mirror the store's
@@ -226,80 +133,335 @@ var (
 	errQueueItemInvalidState   = fmt.Errorf("queue item invalid state transition")
 )
 
-// getItem proxies GetLocalQueue/owner-lookup to return a single item from the
-// living owner.
-func (p *peerProxy) getItem(ctx context.Context, queueName, workitemID string) (*flowv1.QueueItem, error) {
-	owner, err := p.findOwner(ctx, queueName, workitemID)
+// quorumFor returns the quorum ack threshold: ⌊n/2⌋+1 of the full living-shard
+// set (denominator n = the queue's full living-shard count from the CR, per the
+// authored tests). A shard that fails mid-write simply does not count as
+// confirmed and is repaired later by the sweep.
+func quorumFor(n int) int {
+	return n/2 + 1
+}
+
+// mintGenerationID returns a time-ordered parking-event ID: fixed-width hex
+// UnixNano prefix (16 hex digits) + 32-hex crypto/rand suffix. Fixed width ⇒
+// lexicographic order == creation order, so the R-3.6 "max generation wins"
+// dedupe is a deterministic creation-order proxy. Same machinery as the SDK's
+// newGenerationID.
+func mintGenerationID() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		// crypto/rand never fails on supported platforms; fall back to a zero
+		// suffix so the caller still gets a valid, time-ordered ID.
+		return fmt.Sprintf("%016x-00000000000000000000000000000000", time.Now().UnixNano())
+	}
+	return fmt.Sprintf("%016x-%s", time.Now().UnixNano(), hex.EncodeToString(b))
+}
+
+// pickShardID chooses one of the living shards at random to be the owner
+// (R-3.5). Tests assert the owner is one of the living shards, never which one.
+func pickShardID(shards []v1.QueueShardStatus) string {
+	n := len(shards)
+	if n == 0 {
+		return ""
+	}
+	var b [1]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return shards[0].ShardID
+	}
+	return shards[int(b[0])%n].ShardID
+}
+
+// enqueueBroadcast applies a broadcast write (R-3.1/3.2/3.5): mints the
+// generation + owner shard_id at random, fans ApplyItem out to EVERY living
+// shard, acks after ⌊n/2⌋+1 of the full living set confirm (a shard failing
+// mid-write simply does not count as confirmed). Returns the applied item (with
+// owner + choices) or errShardUnavailable if quorum is not met.
+func (p *peerProxy) enqueueBroadcast(
+	ctx context.Context, queueName string, item *flowv1.QueueItem,
+) (*flowv1.QueueItem, error) {
+	shards, err := p.fetch(ctx, queueName)
 	if err != nil {
 		return nil, err
 	}
-	resp, err := owner.GetLocalQueue(ctx, &flowv1.GetLocalQueueRequest{})
-	if err != nil {
-		return nil, fmt.Errorf("get local queue: %w", err)
+	n := len(shards)
+
+	// Construct the applied item fresh rather than copying the caller's struct
+	// (a generated protobuf value carries an internal Mutex, which a struct copy
+	// would shamelessly duplicate). The proto getters are nil-safe.
+	applied := &flowv1.QueueItem{
+		WorkitemId:   item.GetWorkitemId(),
+		Choices:      item.GetChoices(),
+		GenerationId: mintGenerationID(),
+		ShardId:      pickShardID(shards),
+		QueueName:    queueName,
+		EnqueuedAt:   time.Now().UTC().Format(time.RFC3339),
+		Status:       "waiting",
 	}
-	for _, pi := range resp.GetItems() {
-		if pi.GetWorkitemId() == workitemID {
-			return pi, nil
+
+	confirmed := 0
+	for _, s := range shards {
+		c, err := p.dial(ctx, s.Addr)
+		if err != nil {
+			slog.Warn("queue-service: enqueue dial failed", "addr", s.Addr, "error", err)
+			continue
+		}
+		if _, err := c.ApplyItem(ctx, &flowv1.ApplyItemRequest{Item: applied}); err != nil {
+			slog.Warn("queue-service: enqueue apply failed", "addr", s.Addr, "error", err)
+			continue
+		}
+		confirmed++
+	}
+	if confirmed < quorumFor(n) {
+		return nil, errShardUnavailable
+	}
+	return applied, nil
+}
+
+// claimBroadcast broadcasts ClaimItem (waiting→claimed CAS) to every living
+// shard, quorum-acked. A shard confirming the claim counts toward quorum; a
+// shard answering AlreadyExists (already claimed) or failing mid-write does
+// not. If any shard confirms and quorum is met, the claimed item is returned.
+// If NO shard confirms and every shard answered AlreadyExists, the item is
+// already claimed everywhere → errQueueItemAlreadyClaimed. Absent everywhere →
+// errQueueItemNotFound; otherwise quorum not met → errShardUnavailable.
+func (p *peerProxy) claimBroadcast(ctx context.Context, queueName, workitemID string) (*flowv1.QueueItem, error) {
+	shards, err := p.fetch(ctx, queueName)
+	if err != nil {
+		return nil, err
+	}
+	n := len(shards)
+
+	confirmed := 0
+	already := 0
+	notFound := 0
+	var won *flowv1.QueueItem
+	for _, s := range shards {
+		c, err := p.dial(ctx, s.Addr)
+		if err != nil {
+			continue
+		}
+		resp, err := c.ClaimItem(ctx, &flowv1.ClaimItemRequest{WorkitemId: workitemID})
+		if err != nil {
+			switch {
+			case isGRPCAlreadyExists(err):
+				already++
+			case isGRPCNotFound(err):
+				notFound++
+			default:
+				// unavailable or other: silent failure, repaired by the sweep
+			}
+			continue
+		}
+		confirmed++
+		if won == nil && resp.GetItem() != nil {
+			won = resp.GetItem()
 		}
 	}
-	// Owner reported it does not hold the item between findOwner and here.
-	return nil, errQueueItemNotFound
+	if confirmed >= quorumFor(n) {
+		return won, nil
+	}
+	if confirmed == 0 && already == n {
+		return nil, errQueueItemAlreadyClaimed
+	}
+	if confirmed == 0 && notFound == n {
+		return nil, errQueueItemNotFound
+	}
+	return nil, errShardUnavailable
 }
 
-// claim proxies ClaimItem to the living owner.
-func (p *peerProxy) claim(ctx context.Context, queueName, workitemID string) (*flowv1.QueueItem, error) {
-	owner, err := p.findOwner(ctx, queueName, workitemID)
+// releaseBroadcast broadcasts ReleaseItem (claimed→waiting CAS) to every living
+// shard, quorum-acked. A peer FailedPrecondition means the item was not claimed
+// — i.e. it is already in the target waiting state — so it counts as an
+// idempotent confirmation (release is a no-op success on an already-released
+// item). Absent everywhere → errQueueItemNotFound; quorum not met →
+// errShardUnavailable.
+func (p *peerProxy) releaseBroadcast(ctx context.Context, queueName, workitemID string) (*flowv1.QueueItem, error) {
+	shards, err := p.fetch(ctx, queueName)
 	if err != nil {
 		return nil, err
 	}
-	resp, err := owner.ClaimItem(ctx, &flowv1.ClaimItemRequest{WorkitemId: workitemID})
-	if err != nil {
-		return nil, mapPeerError(err)
+	n := len(shards)
+
+	confirmed := 0
+	alreadyReleased := 0
+	notFound := 0
+	var released *flowv1.QueueItem
+	for _, s := range shards {
+		c, err := p.dial(ctx, s.Addr)
+		if err != nil {
+			continue
+		}
+		resp, err := c.ReleaseItem(ctx, &flowv1.ReleaseItemRequest{WorkitemId: workitemID})
+		if err != nil {
+			switch {
+			case isGRPCFailedPrecondition(err):
+				alreadyReleased++
+			case isGRPCNotFound(err):
+				notFound++
+			default:
+				// unavailable or other: silent failure
+			}
+			continue
+		}
+		confirmed++
+		if released == nil && resp.GetItem() != nil {
+			released = resp.GetItem()
+		}
 	}
-	return resp.GetItem(), nil
+	if confirmed+alreadyReleased >= quorumFor(n) {
+		if released == nil {
+			released = &flowv1.QueueItem{WorkitemId: workitemID, Status: "waiting"}
+		}
+		return released, nil
+	}
+	if confirmed+alreadyReleased == 0 && notFound == n {
+		return nil, errQueueItemNotFound
+	}
+	return nil, errShardUnavailable
 }
 
-// release proxies ReleaseItem to the living owner.
-func (p *peerProxy) release(ctx context.Context, queueName, workitemID string) (*flowv1.QueueItem, error) {
-	owner, err := p.findOwner(ctx, queueName, workitemID)
-	if err != nil {
-		return nil, err
-	}
-	resp, err := owner.ReleaseItem(ctx, &flowv1.ReleaseItemRequest{WorkitemId: workitemID})
-	if err != nil {
-		return nil, mapPeerError(err)
-	}
-	return resp.GetItem(), nil
-}
-
-// decide proxies DecideItem (with the human's choice) to the living owner.
-func (p *peerProxy) decide(ctx context.Context, queueName, workitemID, choice string) error {
-	owner, err := p.findOwner(ctx, queueName, workitemID)
+// decideBroadcast fans DecideItem (row delete on every shard) to every living
+// shard, quorum-acked. First it ensures the item is claimable: a broadcast
+// ClaimItem transitions a waiting item to claimed (an AlreadyExists — already
+// claimed — is fine and counts, since it is decidable); a NotFound means no
+// such item. Then the DecideItem fan-out deletes it. The cancel contract is
+// decide with an empty choice (matches how the SDK expresses a cancellation).
+// Returns nil (ack) on quorum of decided shards, errQueueItemNotFound if absent
+// everywhere, errQueueItemInvalidState if every shard rejects the transition,
+// else errShardUnavailable.
+//
+// ponytail: the ensure-claim step is required so a decide on an unclaimed item
+// (the "cancel" and REST decide paths) reaches the claimable state and removes
+// it; it tolerates an AlreadyExists claim, so an already-claimed item is
+// decided normally. If a future pass decides a truly external claimer's item,
+// the upgrade path is a claim-with-owner check.
+func (p *peerProxy) decideBroadcast(ctx context.Context, queueName, workitemID, choice string) error {
+	shards, err := p.fetch(ctx, queueName)
 	if err != nil {
 		return err
 	}
-	_, err = owner.DecideItem(ctx, &flowv1.DecideItemRequest{WorkitemId: workitemID, Choice: choice})
-	return mapPeerError(err)
+	n := len(shards)
+
+	// Ensure-claim: bring the item to the decidable (claimed) state.
+	claimed := 0
+	notFoundClaim := 0
+	for _, s := range shards {
+		c, err := p.dial(ctx, s.Addr)
+		if err != nil {
+			continue
+		}
+		_, err = c.ClaimItem(ctx, &flowv1.ClaimItemRequest{WorkitemId: workitemID})
+		switch {
+		case err == nil, isGRPCAlreadyExists(err):
+			claimed++
+		case isGRPCNotFound(err):
+			notFoundClaim++
+		default:
+			// unavailable or other: silent failure
+		}
+	}
+	if claimed == 0 && notFoundClaim == n {
+		return errQueueItemNotFound
+	}
+
+	confirmed := 0
+	notFound := 0
+	invalid := 0
+	for _, s := range shards {
+		c, err := p.dial(ctx, s.Addr)
+		if err != nil {
+			continue
+		}
+		_, err = c.DecideItem(ctx, &flowv1.DecideItemRequest{WorkitemId: workitemID, Choice: choice})
+		if err == nil {
+			confirmed++
+			continue
+		}
+		switch {
+		case isGRPCNotFound(err):
+			notFound++
+		case isGRPCFailedPrecondition(err):
+			invalid++
+		default:
+			// unavailable or other: silent failure
+		}
+	}
+	if confirmed >= quorumFor(n) {
+		return nil
+	}
+	if confirmed == 0 && notFound == n {
+		return errQueueItemNotFound
+	}
+	if confirmed == 0 && invalid == n {
+		return errQueueItemInvalidState
+	}
+	return errShardUnavailable
 }
 
-// listItems scatter-gathers Item lists from every living shard of the queue.
-// Returns the raw aggregate — a workitem_id present on two living shards
-// appears twice (per-workitem_id dedupe lands in PHASE_04).
-func (p *peerProxy) listItems(ctx context.Context, queueName string) ([]*flowv1.QueueItem, error) {
-	clients, err := p.livingClients(ctx, queueName)
+// listItemsDeduped scatter-gathers GetLocalQueue from every living shard and
+// dedupes by workitem_id: max generation wins (deterministic lexicographic),
+// tie-broken by the owner copy using served_by_shard_id (R-3.6). A living shard
+// that fails to answer (dial or GetLocalQueue error) is unverifiable → the read
+// cannot be trusted → errShardUnavailable (SPEC proxy-write error row).
+func (p *peerProxy) listItemsDeduped(ctx context.Context, queueName, filter string) ([]*flowv1.QueueItem, error) {
+	shards, err := p.fetch(ctx, queueName)
 	if err != nil {
 		return nil, err
 	}
-	var items []*flowv1.QueueItem
-	for _, c := range clients {
-		resp, err := c.GetLocalQueue(ctx, &flowv1.GetLocalQueueRequest{})
+
+	best := map[string]*flowv1.QueueItem{}
+	bestOwner := map[string]bool{} // whether the winning copy is its owner
+	for _, s := range shards {
+		c, err := p.dial(ctx, s.Addr)
 		if err != nil {
-			slog.Warn("queue-service: list items peer failed", "error", err)
-			continue
+			return nil, errShardUnavailable
 		}
-		items = append(items, resp.GetItems()...)
+		resp, err := c.GetLocalQueue(ctx, &flowv1.GetLocalQueueRequest{Status: filter})
+		if err != nil {
+			return nil, errShardUnavailable
+		}
+		served := resp.GetServedByShardId()
+		for _, it := range resp.GetItems() {
+			id := it.GetWorkitemId()
+			cur, ok := best[id]
+			candOwner := it.GetShardId() == served
+			// Store the response item pointer directly (a generation's Copy of
+			// a protobuf struct would duplicate its internal Mutex). Items are
+			// never mutated, so sharing the read-only pointer is safe.
+			if !ok {
+				best[id] = it
+				bestOwner[id] = candOwner
+				continue
+			}
+			if it.GetGenerationId() > cur.GetGenerationId() ||
+				(it.GetGenerationId() == cur.GetGenerationId() && candOwner && !bestOwner[id]) {
+				best[id] = it
+				bestOwner[id] = candOwner
+			}
+		}
 	}
-	return items, nil
+
+	out := make([]*flowv1.QueueItem, 0, len(best))
+	for _, it := range best {
+		out = append(out, it)
+	}
+	return out, nil
+}
+
+// getItemDeduped returns a single item via the scatter-gather + dedupe of
+// listItemsDeduped, filtered to workitemID. errQueueItemNotFound if no living
+// shard holds it (all living shards answered); errShardUnavailable if a living
+// shard fails mid-read.
+func (p *peerProxy) getItemDeduped(ctx context.Context, queueName, workitemID string) (*flowv1.QueueItem, error) {
+	items, err := p.listItemsDeduped(ctx, queueName, "")
+	if err != nil {
+		return nil, err
+	}
+	for _, it := range items {
+		if it.GetWorkitemId() == workitemID {
+			return it, nil
+		}
+	}
+	return nil, errQueueItemNotFound
 }
 
 // mapPeerError converts a QueuePeerService gRPC error into a local sentinel.
