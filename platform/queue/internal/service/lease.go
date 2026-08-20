@@ -71,9 +71,9 @@ func (r *Registry) sweepEvictions(ctx context.Context) error {
 
 // evictQueue performs the three-step eviction transition for the given stale
 // shards of a queue: (1) mark phase=evicted, (2) drop from .status.shards[],
-// (3) fire OnShardEvicted. The NotifyShardDead fan-out (step 4) was deleted in
-// PHASE_03 — mirror-everywhere means surviving shards do not need a death
-// notice; they simply stop hearing from the dead shard and reads always
+// (3) fire OnShardEvicted. The legacy death-notification fan-out (step 4) was
+// deleted in PHASE_03 — mirror-everywhere means surviving shards do not need a
+// death notice; they simply stop hearing from the dead shard and reads always
 // scatter-gather over living shards only.
 func (r *Registry) evictQueue(ctx context.Context, queueName string, stale []v1.QueueShardStatus) error {
 	// Step 1: mark each stale shard phase=evicted (tombstones it for any

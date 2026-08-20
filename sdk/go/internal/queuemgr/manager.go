@@ -30,13 +30,13 @@ const (
 
 // QueueItem is the SDK view of a queue entry.
 type QueueItem struct {
-	WorkitemID string     `json:"workitem_id"`
-	ShardID    string     `json:"shard_id"`
-	QueueName  string     `json:"queue_name"`
+	WorkitemID string      `json:"workitem_id"`
+	ShardID    string      `json:"shard_id"`
+	QueueName  string      `json:"queue_name"`
 	Status     QueueStatus `json:"status"`
-	EnqueuedAt time.Time  `json:"enqueued_at"`
-	ClaimedAt  *time.Time `json:"claimed_at,omitempty"`
-	Generation string     `json:"generation,omitempty"`
+	EnqueuedAt time.Time   `json:"enqueued_at"`
+	ClaimedAt  *time.Time  `json:"claimed_at,omitempty"`
+	Generation string      `json:"generation,omitempty"`
 }
 
 // QueueFilter narrows a global-queue listing.

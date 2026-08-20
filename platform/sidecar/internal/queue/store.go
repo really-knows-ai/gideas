@@ -52,10 +52,8 @@ type Store interface {
 }
 
 // queueStore is the SQLite (":memory:") implementation of Store. It mirrors
-// the moved SDK queueStore with the backup machinery DROPPED (no backup_shard
-// column/index, and listBackups/insertBackup/listBackupsForOwner/promoteBackup/
-// setBackupShard are all GONE). It pins the pool to one connection and enables
-// WAL, matching the SDK approach.
+// the moved SDK queueStore with the backup machinery dropped. It pins the pool
+// to one connection and enables WAL, matching the SDK approach.
 type queueStore struct {
 	db        *sql.DB
 	shardID   string

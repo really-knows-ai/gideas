@@ -12,17 +12,12 @@
 //
 // If no DEADLOCKED feedback is found (edge case), the handler degrades
 // gracefully: stamps "arbitrated" and routes to "accept".
-//
-// The node serves GET /choices with hardcoded accept/reject/cancel choices
-// for the Dashboard.
 package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"os"
 
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
@@ -46,9 +41,7 @@ func main() {
 
 	if err := nodeutil.RunHITLNode("hitl-arbiter", handler,
 		flow.WithQueueName("hitl-arbiter"),
-		flow.WithCustomRoutes(func(mux *http.ServeMux) {
-			mux.HandleFunc("GET /choices", handleChoices)
-		}),
+		flow.WithChoices([]string{choiceAccept, choiceReject, choiceCancel}),
 	); err != nil {
 		slog.Error("hitl-arbiter: server failed", "error", err)
 		os.Exit(1)
@@ -171,20 +164,4 @@ func linkRulingsAndRoute(
 		return fmt.Errorf("hitl-arbiter: route to %s: %w", output, err)
 	}
 	return nil
-}
-
-// handleChoices serves the hardcoded GET /choices response.
-func handleChoices(w http.ResponseWriter, r *http.Request) {
-	resp := nodeutil.ChoicesResponse{
-		Choices: []nodeutil.ChoiceEntry{
-			{Value: choiceAccept, Label: "Accept — Mark as WONT_FIX", Type: "route"},
-			{Value: choiceReject, Label: "Demand Fix — Mark as REJECTED", Type: "route"},
-			{Value: choiceCancel, Label: "Reject Workitem", Type: "cancel"},
-		},
-		HasFeedback: true,
-		HasCancel:   true,
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(resp)
 }

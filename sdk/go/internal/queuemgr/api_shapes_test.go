@@ -18,11 +18,11 @@ import (
 // ---------------------------------------------------------------- constants
 
 func TestQueueStatus_ConstantValues(t *testing.T) {
-	if got := string(queuemgr.QueueStatusWaiting); got != "waiting" {
-		t.Fatalf("QueueStatusWaiting = %q, want %q", got, "waiting")
+	if got := string(queuemgr.QueueStatusWaiting); got != queueStatusWaiting {
+		t.Fatalf("QueueStatusWaiting = %q, want %q", got, queueStatusWaiting)
 	}
-	if got := string(queuemgr.QueueStatusClaimed); got != "claimed" {
-		t.Fatalf("QueueStatusClaimed = %q, want %q", got, "claimed")
+	if got := string(queuemgr.QueueStatusClaimed); got != queueStatusClaimed {
+		t.Fatalf("QueueStatusClaimed = %q, want %q", got, queueStatusClaimed)
 	}
 }
 
@@ -41,7 +41,7 @@ func TestSentinelErrors_AreErrors(t *testing.T) {
 		}
 	}
 	// Distinct sentinels: no two compare equal.
-	for i := 0; i < len(settl); i++ {
+	for i := range settl {
 		for j := i + 1; j < len(settl); j++ {
 			if errors.Is(settl[i], settl[j]) {
 				t.Fatalf("sentinels %v and %v are not distinct", settl[i], settl[j])
@@ -71,7 +71,10 @@ func TestQueueItem_JSONTags(t *testing.T) {
 	if err := json.Unmarshal(b, &decoded); err != nil {
 		t.Fatalf("json.Unmarshal: %v", err)
 	}
-	for _, key := range []string{"workitem_id", "shard_id", "queue_name", "status", "enqueued_at", "claimed_at", "generation"} {
+	for _, key := range []string{
+		"workitem_id", "shard_id", "queue_name", "status",
+		"enqueued_at", "claimed_at", "generation",
+	} {
 		if _, ok := decoded[key]; !ok {
 			t.Errorf("QueueItem JSON missing key %q in %s", key, string(b))
 		}
@@ -114,15 +117,23 @@ func TestQueueFilter_FieldTypes(t *testing.T) {
 // below fails to compile if any method signature drifts.
 type compileQueueManagerStub struct{}
 
-func (compileQueueManagerStub) Enqueue(context.Context, string) error                                   { return nil }
+func (compileQueueManagerStub) Enqueue(context.Context, string) error { return nil }
 func (compileQueueManagerStub) GetGlobalQueue(context.Context, queuemgr.QueueFilter) ([]queuemgr.QueueItem, error) {
 	return nil, nil
 }
-func (compileQueueManagerStub) GetItem(context.Context, string) (*queuemgr.QueueItem, error)            { return nil, nil }
-func (compileQueueManagerStub) Claim(context.Context, string) (*queuemgr.QueueItem, error)              { return nil, nil }
-func (compileQueueManagerStub) Release(context.Context, string) (*queuemgr.QueueItem, error)            { return nil, nil }
-func (compileQueueManagerStub) Decide(context.Context, string, string) error                            { return nil }
-func (compileQueueManagerStub) WaitForDecision(context.Context, string) (string, error)                 { return "", nil }
+func (compileQueueManagerStub) GetItem(context.Context, string) (*queuemgr.QueueItem, error) {
+	return nil, nil
+}
+func (compileQueueManagerStub) Claim(context.Context, string) (*queuemgr.QueueItem, error) {
+	return nil, nil
+}
+func (compileQueueManagerStub) Release(context.Context, string) (*queuemgr.QueueItem, error) {
+	return nil, nil
+}
+func (compileQueueManagerStub) Decide(context.Context, string, string) error { return nil }
+func (compileQueueManagerStub) WaitForDecision(context.Context, string) (string, error) {
+	return "", nil
+}
 
 var _ queuemgr.QueueManager = compileQueueManagerStub{}
 var _ queuemgr.QueueManager = (*queuemgr.Manager)(nil)
@@ -132,6 +143,6 @@ var _ queuemgr.QueueManager = (*queuemgr.Manager)(nil)
 func TestNewManager_OptionSignatures_Compile(t *testing.T) {
 	// Pins the exact functional-option shapes: Option takes *Manager via the
 	// func config pattern, and the constructor accepts variadic options.
-	var _ queuemgr.Option = queuemgr.WithQueueName("qn")
-	var _ queuemgr.Option = queuemgr.WithChoices([]string{"a", "b"})
+	var _ = queuemgr.WithQueueName("qn")
+	var _ = queuemgr.WithChoices([]string{"a", "b"})
 }

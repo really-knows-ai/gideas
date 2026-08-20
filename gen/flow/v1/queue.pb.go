@@ -187,9 +187,6 @@ type QueueItem struct {
 	// Generation UUID disambiguating distinct parking events of the same
 	// workitem. Stale backup copies are superseded by a newer generation.
 	GenerationId string `protobuf:"bytes,7,opt,name=generation_id,json=generationId,proto3" json:"generation_id,omitempty"`
-	// True when this copy is a backup held on a non-owning shard. Owner copy
-	// = false. Routing (findOwner/routeGetItem) matches owner rows only.
-	IsBackup bool `protobuf:"varint,8,opt,name=is_backup,json=isBackup,proto3" json:"is_backup,omitempty"`
 	// Choices is the item's metadata (R-5.2): the routing choices the caller
 	// supplied at enqueue time. Populated via the Enqueue request; the
 	// queue-service serves them generically in item reads. Empty when the
@@ -276,13 +273,6 @@ func (x *QueueItem) GetGenerationId() string {
 		return x.GenerationId
 	}
 	return ""
-}
-
-func (x *QueueItem) GetIsBackup() bool {
-	if x != nil {
-		return x.IsBackup
-	}
-	return false
 }
 
 func (x *QueueItem) GetChoices() []string {
@@ -566,96 +556,6 @@ func (x *DecideItemResponse) GetAcknowledged() bool {
 	return false
 }
 
-// ReplicateItemRequest carries a full QueueItem to be stored as a backup copy
-// on the receiving shard.
-type ReplicateItemRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Item          *QueueItem             `protobuf:"bytes,1,opt,name=item,proto3" json:"item,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *ReplicateItemRequest) Reset() {
-	*x = ReplicateItemRequest{}
-	mi := &file_flow_v1_queue_proto_msgTypes[9]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *ReplicateItemRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*ReplicateItemRequest) ProtoMessage() {}
-
-func (x *ReplicateItemRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_queue_proto_msgTypes[9]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use ReplicateItemRequest.ProtoReflect.Descriptor instead.
-func (*ReplicateItemRequest) Descriptor() ([]byte, []int) {
-	return file_flow_v1_queue_proto_rawDescGZIP(), []int{9}
-}
-
-func (x *ReplicateItemRequest) GetItem() *QueueItem {
-	if x != nil {
-		return x.Item
-	}
-	return nil
-}
-
-type ReplicateItemResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Acknowledged  bool                   `protobuf:"varint,1,opt,name=acknowledged,proto3" json:"acknowledged,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *ReplicateItemResponse) Reset() {
-	*x = ReplicateItemResponse{}
-	mi := &file_flow_v1_queue_proto_msgTypes[10]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *ReplicateItemResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*ReplicateItemResponse) ProtoMessage() {}
-
-func (x *ReplicateItemResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_queue_proto_msgTypes[10]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use ReplicateItemResponse.ProtoReflect.Descriptor instead.
-func (*ReplicateItemResponse) Descriptor() ([]byte, []int) {
-	return file_flow_v1_queue_proto_rawDescGZIP(), []int{10}
-}
-
-func (x *ReplicateItemResponse) GetAcknowledged() bool {
-	if x != nil {
-		return x.Acknowledged
-	}
-	return false
-}
-
 // ApplyItemRequest carries a full QueueItem to be applied (generation-guarded
 // CAS) on the receiving shard. Carries workitem_id, generation_id, owner
 // shard_id, status, timestamps, and choices so a shard can apply the write
@@ -669,7 +569,7 @@ type ApplyItemRequest struct {
 
 func (x *ApplyItemRequest) Reset() {
 	*x = ApplyItemRequest{}
-	mi := &file_flow_v1_queue_proto_msgTypes[11]
+	mi := &file_flow_v1_queue_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -681,7 +581,7 @@ func (x *ApplyItemRequest) String() string {
 func (*ApplyItemRequest) ProtoMessage() {}
 
 func (x *ApplyItemRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_queue_proto_msgTypes[11]
+	mi := &file_flow_v1_queue_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -694,7 +594,7 @@ func (x *ApplyItemRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ApplyItemRequest.ProtoReflect.Descriptor instead.
 func (*ApplyItemRequest) Descriptor() ([]byte, []int) {
-	return file_flow_v1_queue_proto_rawDescGZIP(), []int{11}
+	return file_flow_v1_queue_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *ApplyItemRequest) GetItem() *QueueItem {
@@ -713,7 +613,7 @@ type ApplyItemResponse struct {
 
 func (x *ApplyItemResponse) Reset() {
 	*x = ApplyItemResponse{}
-	mi := &file_flow_v1_queue_proto_msgTypes[12]
+	mi := &file_flow_v1_queue_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -725,7 +625,7 @@ func (x *ApplyItemResponse) String() string {
 func (*ApplyItemResponse) ProtoMessage() {}
 
 func (x *ApplyItemResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_queue_proto_msgTypes[12]
+	mi := &file_flow_v1_queue_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -738,7 +638,7 @@ func (x *ApplyItemResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ApplyItemResponse.ProtoReflect.Descriptor instead.
 func (*ApplyItemResponse) Descriptor() ([]byte, []int) {
-	return file_flow_v1_queue_proto_rawDescGZIP(), []int{12}
+	return file_flow_v1_queue_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *ApplyItemResponse) GetAcknowledged() bool {
@@ -760,7 +660,7 @@ type DropItemRequest struct {
 
 func (x *DropItemRequest) Reset() {
 	*x = DropItemRequest{}
-	mi := &file_flow_v1_queue_proto_msgTypes[13]
+	mi := &file_flow_v1_queue_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -772,7 +672,7 @@ func (x *DropItemRequest) String() string {
 func (*DropItemRequest) ProtoMessage() {}
 
 func (x *DropItemRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_queue_proto_msgTypes[13]
+	mi := &file_flow_v1_queue_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -785,7 +685,7 @@ func (x *DropItemRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DropItemRequest.ProtoReflect.Descriptor instead.
 func (*DropItemRequest) Descriptor() ([]byte, []int) {
-	return file_flow_v1_queue_proto_rawDescGZIP(), []int{13}
+	return file_flow_v1_queue_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *DropItemRequest) GetWorkitemId() string {
@@ -811,7 +711,7 @@ type DropItemResponse struct {
 
 func (x *DropItemResponse) Reset() {
 	*x = DropItemResponse{}
-	mi := &file_flow_v1_queue_proto_msgTypes[14]
+	mi := &file_flow_v1_queue_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -823,7 +723,7 @@ func (x *DropItemResponse) String() string {
 func (*DropItemResponse) ProtoMessage() {}
 
 func (x *DropItemResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_queue_proto_msgTypes[14]
+	mi := &file_flow_v1_queue_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -836,100 +736,10 @@ func (x *DropItemResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DropItemResponse.ProtoReflect.Descriptor instead.
 func (*DropItemResponse) Descriptor() ([]byte, []int) {
-	return file_flow_v1_queue_proto_rawDescGZIP(), []int{14}
+	return file_flow_v1_queue_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *DropItemResponse) GetAcknowledged() bool {
-	if x != nil {
-		return x.Acknowledged
-	}
-	return false
-}
-
-// NotifyShardDeadRequest notifies a surviving shard that the named shard of
-// the queue is dead (lease eviction), triggering its promotion path.
-type NotifyShardDeadRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	ShardId       string                 `protobuf:"bytes,1,opt,name=shard_id,json=shardId,proto3" json:"shard_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *NotifyShardDeadRequest) Reset() {
-	*x = NotifyShardDeadRequest{}
-	mi := &file_flow_v1_queue_proto_msgTypes[15]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *NotifyShardDeadRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*NotifyShardDeadRequest) ProtoMessage() {}
-
-func (x *NotifyShardDeadRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_queue_proto_msgTypes[15]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use NotifyShardDeadRequest.ProtoReflect.Descriptor instead.
-func (*NotifyShardDeadRequest) Descriptor() ([]byte, []int) {
-	return file_flow_v1_queue_proto_rawDescGZIP(), []int{15}
-}
-
-func (x *NotifyShardDeadRequest) GetShardId() string {
-	if x != nil {
-		return x.ShardId
-	}
-	return ""
-}
-
-type NotifyShardDeadResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Acknowledged  bool                   `protobuf:"varint,1,opt,name=acknowledged,proto3" json:"acknowledged,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *NotifyShardDeadResponse) Reset() {
-	*x = NotifyShardDeadResponse{}
-	mi := &file_flow_v1_queue_proto_msgTypes[16]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *NotifyShardDeadResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*NotifyShardDeadResponse) ProtoMessage() {}
-
-func (x *NotifyShardDeadResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_queue_proto_msgTypes[16]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use NotifyShardDeadResponse.ProtoReflect.Descriptor instead.
-func (*NotifyShardDeadResponse) Descriptor() ([]byte, []int) {
-	return file_flow_v1_queue_proto_rawDescGZIP(), []int{16}
-}
-
-func (x *NotifyShardDeadResponse) GetAcknowledged() bool {
 	if x != nil {
 		return x.Acknowledged
 	}
@@ -947,7 +757,7 @@ type RegisterQueueRequest struct {
 
 func (x *RegisterQueueRequest) Reset() {
 	*x = RegisterQueueRequest{}
-	mi := &file_flow_v1_queue_proto_msgTypes[17]
+	mi := &file_flow_v1_queue_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -959,7 +769,7 @@ func (x *RegisterQueueRequest) String() string {
 func (*RegisterQueueRequest) ProtoMessage() {}
 
 func (x *RegisterQueueRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_queue_proto_msgTypes[17]
+	mi := &file_flow_v1_queue_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -972,7 +782,7 @@ func (x *RegisterQueueRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RegisterQueueRequest.ProtoReflect.Descriptor instead.
 func (*RegisterQueueRequest) Descriptor() ([]byte, []int) {
-	return file_flow_v1_queue_proto_rawDescGZIP(), []int{17}
+	return file_flow_v1_queue_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *RegisterQueueRequest) GetQueueName() string {
@@ -1005,7 +815,7 @@ type RegisterQueueResponse struct {
 
 func (x *RegisterQueueResponse) Reset() {
 	*x = RegisterQueueResponse{}
-	mi := &file_flow_v1_queue_proto_msgTypes[18]
+	mi := &file_flow_v1_queue_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1017,7 +827,7 @@ func (x *RegisterQueueResponse) String() string {
 func (*RegisterQueueResponse) ProtoMessage() {}
 
 func (x *RegisterQueueResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_queue_proto_msgTypes[18]
+	mi := &file_flow_v1_queue_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1030,7 +840,7 @@ func (x *RegisterQueueResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RegisterQueueResponse.ProtoReflect.Descriptor instead.
 func (*RegisterQueueResponse) Descriptor() ([]byte, []int) {
-	return file_flow_v1_queue_proto_rawDescGZIP(), []int{18}
+	return file_flow_v1_queue_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *RegisterQueueResponse) GetAcknowledged() bool {
@@ -1051,7 +861,7 @@ type HeartbeatQueueRequest struct {
 
 func (x *HeartbeatQueueRequest) Reset() {
 	*x = HeartbeatQueueRequest{}
-	mi := &file_flow_v1_queue_proto_msgTypes[19]
+	mi := &file_flow_v1_queue_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1063,7 +873,7 @@ func (x *HeartbeatQueueRequest) String() string {
 func (*HeartbeatQueueRequest) ProtoMessage() {}
 
 func (x *HeartbeatQueueRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_queue_proto_msgTypes[19]
+	mi := &file_flow_v1_queue_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1076,7 +886,7 @@ func (x *HeartbeatQueueRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HeartbeatQueueRequest.ProtoReflect.Descriptor instead.
 func (*HeartbeatQueueRequest) Descriptor() ([]byte, []int) {
-	return file_flow_v1_queue_proto_rawDescGZIP(), []int{19}
+	return file_flow_v1_queue_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *HeartbeatQueueRequest) GetQueueName() string {
@@ -1112,7 +922,7 @@ type HeartbeatQueueResponse struct {
 
 func (x *HeartbeatQueueResponse) Reset() {
 	*x = HeartbeatQueueResponse{}
-	mi := &file_flow_v1_queue_proto_msgTypes[20]
+	mi := &file_flow_v1_queue_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1124,7 +934,7 @@ func (x *HeartbeatQueueResponse) String() string {
 func (*HeartbeatQueueResponse) ProtoMessage() {}
 
 func (x *HeartbeatQueueResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_queue_proto_msgTypes[20]
+	mi := &file_flow_v1_queue_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1137,7 +947,7 @@ func (x *HeartbeatQueueResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HeartbeatQueueResponse.ProtoReflect.Descriptor instead.
 func (*HeartbeatQueueResponse) Descriptor() ([]byte, []int) {
-	return file_flow_v1_queue_proto_rawDescGZIP(), []int{20}
+	return file_flow_v1_queue_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *HeartbeatQueueResponse) GetAcknowledged() bool {
@@ -1164,7 +974,7 @@ type DeregisterQueueRequest struct {
 
 func (x *DeregisterQueueRequest) Reset() {
 	*x = DeregisterQueueRequest{}
-	mi := &file_flow_v1_queue_proto_msgTypes[21]
+	mi := &file_flow_v1_queue_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1176,7 +986,7 @@ func (x *DeregisterQueueRequest) String() string {
 func (*DeregisterQueueRequest) ProtoMessage() {}
 
 func (x *DeregisterQueueRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_queue_proto_msgTypes[21]
+	mi := &file_flow_v1_queue_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1189,7 +999,7 @@ func (x *DeregisterQueueRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeregisterQueueRequest.ProtoReflect.Descriptor instead.
 func (*DeregisterQueueRequest) Descriptor() ([]byte, []int) {
-	return file_flow_v1_queue_proto_rawDescGZIP(), []int{21}
+	return file_flow_v1_queue_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *DeregisterQueueRequest) GetQueueName() string {
@@ -1215,7 +1025,7 @@ type DeregisterQueueResponse struct {
 
 func (x *DeregisterQueueResponse) Reset() {
 	*x = DeregisterQueueResponse{}
-	mi := &file_flow_v1_queue_proto_msgTypes[22]
+	mi := &file_flow_v1_queue_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1227,7 +1037,7 @@ func (x *DeregisterQueueResponse) String() string {
 func (*DeregisterQueueResponse) ProtoMessage() {}
 
 func (x *DeregisterQueueResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_queue_proto_msgTypes[22]
+	mi := &file_flow_v1_queue_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1240,7 +1050,7 @@ func (x *DeregisterQueueResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeregisterQueueResponse.ProtoReflect.Descriptor instead.
 func (*DeregisterQueueResponse) Descriptor() ([]byte, []int) {
-	return file_flow_v1_queue_proto_rawDescGZIP(), []int{22}
+	return file_flow_v1_queue_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *DeregisterQueueResponse) GetAcknowledged() bool {
@@ -1258,7 +1068,7 @@ type ListQueuesRequest struct {
 
 func (x *ListQueuesRequest) Reset() {
 	*x = ListQueuesRequest{}
-	mi := &file_flow_v1_queue_proto_msgTypes[23]
+	mi := &file_flow_v1_queue_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1270,7 +1080,7 @@ func (x *ListQueuesRequest) String() string {
 func (*ListQueuesRequest) ProtoMessage() {}
 
 func (x *ListQueuesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_queue_proto_msgTypes[23]
+	mi := &file_flow_v1_queue_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1283,7 +1093,7 @@ func (x *ListQueuesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListQueuesRequest.ProtoReflect.Descriptor instead.
 func (*ListQueuesRequest) Descriptor() ([]byte, []int) {
-	return file_flow_v1_queue_proto_rawDescGZIP(), []int{23}
+	return file_flow_v1_queue_proto_rawDescGZIP(), []int{19}
 }
 
 type ListQueuesResponse struct {
@@ -1295,7 +1105,7 @@ type ListQueuesResponse struct {
 
 func (x *ListQueuesResponse) Reset() {
 	*x = ListQueuesResponse{}
-	mi := &file_flow_v1_queue_proto_msgTypes[24]
+	mi := &file_flow_v1_queue_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1307,7 +1117,7 @@ func (x *ListQueuesResponse) String() string {
 func (*ListQueuesResponse) ProtoMessage() {}
 
 func (x *ListQueuesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_queue_proto_msgTypes[24]
+	mi := &file_flow_v1_queue_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1320,7 +1130,7 @@ func (x *ListQueuesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListQueuesResponse.ProtoReflect.Descriptor instead.
 func (*ListQueuesResponse) Descriptor() ([]byte, []int) {
-	return file_flow_v1_queue_proto_rawDescGZIP(), []int{24}
+	return file_flow_v1_queue_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *ListQueuesResponse) GetQueues() []*QueueRegistration {
@@ -1341,7 +1151,7 @@ type QueueRegistration struct {
 
 func (x *QueueRegistration) Reset() {
 	*x = QueueRegistration{}
-	mi := &file_flow_v1_queue_proto_msgTypes[25]
+	mi := &file_flow_v1_queue_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1353,7 +1163,7 @@ func (x *QueueRegistration) String() string {
 func (*QueueRegistration) ProtoMessage() {}
 
 func (x *QueueRegistration) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_queue_proto_msgTypes[25]
+	mi := &file_flow_v1_queue_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1366,7 +1176,7 @@ func (x *QueueRegistration) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use QueueRegistration.ProtoReflect.Descriptor instead.
 func (*QueueRegistration) Descriptor() ([]byte, []int) {
-	return file_flow_v1_queue_proto_rawDescGZIP(), []int{25}
+	return file_flow_v1_queue_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *QueueRegistration) GetQueueName() string {
@@ -1398,7 +1208,7 @@ type ShardRegistration struct {
 
 func (x *ShardRegistration) Reset() {
 	*x = ShardRegistration{}
-	mi := &file_flow_v1_queue_proto_msgTypes[26]
+	mi := &file_flow_v1_queue_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1410,7 +1220,7 @@ func (x *ShardRegistration) String() string {
 func (*ShardRegistration) ProtoMessage() {}
 
 func (x *ShardRegistration) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_queue_proto_msgTypes[26]
+	mi := &file_flow_v1_queue_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1423,7 +1233,7 @@ func (x *ShardRegistration) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ShardRegistration.ProtoReflect.Descriptor instead.
 func (*ShardRegistration) Descriptor() ([]byte, []int) {
-	return file_flow_v1_queue_proto_rawDescGZIP(), []int{26}
+	return file_flow_v1_queue_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *ShardRegistration) GetShardId() string {
@@ -1464,7 +1274,7 @@ type CancelQueuedItemRequest struct {
 
 func (x *CancelQueuedItemRequest) Reset() {
 	*x = CancelQueuedItemRequest{}
-	mi := &file_flow_v1_queue_proto_msgTypes[27]
+	mi := &file_flow_v1_queue_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1476,7 +1286,7 @@ func (x *CancelQueuedItemRequest) String() string {
 func (*CancelQueuedItemRequest) ProtoMessage() {}
 
 func (x *CancelQueuedItemRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_queue_proto_msgTypes[27]
+	mi := &file_flow_v1_queue_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1489,7 +1299,7 @@ func (x *CancelQueuedItemRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CancelQueuedItemRequest.ProtoReflect.Descriptor instead.
 func (*CancelQueuedItemRequest) Descriptor() ([]byte, []int) {
-	return file_flow_v1_queue_proto_rawDescGZIP(), []int{27}
+	return file_flow_v1_queue_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *CancelQueuedItemRequest) GetQueueName() string {
@@ -1515,7 +1325,7 @@ type CancelQueuedItemResponse struct {
 
 func (x *CancelQueuedItemResponse) Reset() {
 	*x = CancelQueuedItemResponse{}
-	mi := &file_flow_v1_queue_proto_msgTypes[28]
+	mi := &file_flow_v1_queue_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1527,7 +1337,7 @@ func (x *CancelQueuedItemResponse) String() string {
 func (*CancelQueuedItemResponse) ProtoMessage() {}
 
 func (x *CancelQueuedItemResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_queue_proto_msgTypes[28]
+	mi := &file_flow_v1_queue_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1540,7 +1350,7 @@ func (x *CancelQueuedItemResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CancelQueuedItemResponse.ProtoReflect.Descriptor instead.
 func (*CancelQueuedItemResponse) Descriptor() ([]byte, []int) {
-	return file_flow_v1_queue_proto_rawDescGZIP(), []int{28}
+	return file_flow_v1_queue_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *CancelQueuedItemResponse) GetAcknowledged() bool {
@@ -1561,7 +1371,7 @@ type DecideQueuedItemRequest struct {
 
 func (x *DecideQueuedItemRequest) Reset() {
 	*x = DecideQueuedItemRequest{}
-	mi := &file_flow_v1_queue_proto_msgTypes[29]
+	mi := &file_flow_v1_queue_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1573,7 +1383,7 @@ func (x *DecideQueuedItemRequest) String() string {
 func (*DecideQueuedItemRequest) ProtoMessage() {}
 
 func (x *DecideQueuedItemRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_queue_proto_msgTypes[29]
+	mi := &file_flow_v1_queue_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1586,7 +1396,7 @@ func (x *DecideQueuedItemRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DecideQueuedItemRequest.ProtoReflect.Descriptor instead.
 func (*DecideQueuedItemRequest) Descriptor() ([]byte, []int) {
-	return file_flow_v1_queue_proto_rawDescGZIP(), []int{29}
+	return file_flow_v1_queue_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *DecideQueuedItemRequest) GetQueueName() string {
@@ -1619,7 +1429,7 @@ type DecideQueuedItemResponse struct {
 
 func (x *DecideQueuedItemResponse) Reset() {
 	*x = DecideQueuedItemResponse{}
-	mi := &file_flow_v1_queue_proto_msgTypes[30]
+	mi := &file_flow_v1_queue_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1631,7 +1441,7 @@ func (x *DecideQueuedItemResponse) String() string {
 func (*DecideQueuedItemResponse) ProtoMessage() {}
 
 func (x *DecideQueuedItemResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_queue_proto_msgTypes[30]
+	mi := &file_flow_v1_queue_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1644,7 +1454,7 @@ func (x *DecideQueuedItemResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DecideQueuedItemResponse.ProtoReflect.Descriptor instead.
 func (*DecideQueuedItemResponse) Descriptor() ([]byte, []int) {
-	return file_flow_v1_queue_proto_rawDescGZIP(), []int{30}
+	return file_flow_v1_queue_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *DecideQueuedItemResponse) GetAcknowledged() bool {
@@ -1670,7 +1480,7 @@ type EnqueueRequest struct {
 
 func (x *EnqueueRequest) Reset() {
 	*x = EnqueueRequest{}
-	mi := &file_flow_v1_queue_proto_msgTypes[31]
+	mi := &file_flow_v1_queue_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1682,7 +1492,7 @@ func (x *EnqueueRequest) String() string {
 func (*EnqueueRequest) ProtoMessage() {}
 
 func (x *EnqueueRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_queue_proto_msgTypes[31]
+	mi := &file_flow_v1_queue_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1695,7 +1505,7 @@ func (x *EnqueueRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EnqueueRequest.ProtoReflect.Descriptor instead.
 func (*EnqueueRequest) Descriptor() ([]byte, []int) {
-	return file_flow_v1_queue_proto_rawDescGZIP(), []int{31}
+	return file_flow_v1_queue_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *EnqueueRequest) GetWorkitemId() string {
@@ -1728,7 +1538,7 @@ type EnqueueResponse struct {
 
 func (x *EnqueueResponse) Reset() {
 	*x = EnqueueResponse{}
-	mi := &file_flow_v1_queue_proto_msgTypes[32]
+	mi := &file_flow_v1_queue_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1740,7 +1550,7 @@ func (x *EnqueueResponse) String() string {
 func (*EnqueueResponse) ProtoMessage() {}
 
 func (x *EnqueueResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_queue_proto_msgTypes[32]
+	mi := &file_flow_v1_queue_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1753,7 +1563,7 @@ func (x *EnqueueResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EnqueueResponse.ProtoReflect.Descriptor instead.
 func (*EnqueueResponse) Descriptor() ([]byte, []int) {
-	return file_flow_v1_queue_proto_rawDescGZIP(), []int{32}
+	return file_flow_v1_queue_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *EnqueueResponse) GetAcknowledged() bool {
@@ -1774,7 +1584,7 @@ type GetGlobalQueueRequest struct {
 
 func (x *GetGlobalQueueRequest) Reset() {
 	*x = GetGlobalQueueRequest{}
-	mi := &file_flow_v1_queue_proto_msgTypes[33]
+	mi := &file_flow_v1_queue_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1786,7 +1596,7 @@ func (x *GetGlobalQueueRequest) String() string {
 func (*GetGlobalQueueRequest) ProtoMessage() {}
 
 func (x *GetGlobalQueueRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_queue_proto_msgTypes[33]
+	mi := &file_flow_v1_queue_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1799,7 +1609,7 @@ func (x *GetGlobalQueueRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetGlobalQueueRequest.ProtoReflect.Descriptor instead.
 func (*GetGlobalQueueRequest) Descriptor() ([]byte, []int) {
-	return file_flow_v1_queue_proto_rawDescGZIP(), []int{33}
+	return file_flow_v1_queue_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *GetGlobalQueueRequest) GetQueueName() string {
@@ -1825,7 +1635,7 @@ type GetGlobalQueueResponse struct {
 
 func (x *GetGlobalQueueResponse) Reset() {
 	*x = GetGlobalQueueResponse{}
-	mi := &file_flow_v1_queue_proto_msgTypes[34]
+	mi := &file_flow_v1_queue_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1837,7 +1647,7 @@ func (x *GetGlobalQueueResponse) String() string {
 func (*GetGlobalQueueResponse) ProtoMessage() {}
 
 func (x *GetGlobalQueueResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_queue_proto_msgTypes[34]
+	mi := &file_flow_v1_queue_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1850,7 +1660,7 @@ func (x *GetGlobalQueueResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetGlobalQueueResponse.ProtoReflect.Descriptor instead.
 func (*GetGlobalQueueResponse) Descriptor() ([]byte, []int) {
-	return file_flow_v1_queue_proto_rawDescGZIP(), []int{34}
+	return file_flow_v1_queue_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *GetGlobalQueueResponse) GetItems() []*QueueItem {
@@ -1870,7 +1680,7 @@ type GetItemRequest struct {
 
 func (x *GetItemRequest) Reset() {
 	*x = GetItemRequest{}
-	mi := &file_flow_v1_queue_proto_msgTypes[35]
+	mi := &file_flow_v1_queue_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1882,7 +1692,7 @@ func (x *GetItemRequest) String() string {
 func (*GetItemRequest) ProtoMessage() {}
 
 func (x *GetItemRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_queue_proto_msgTypes[35]
+	mi := &file_flow_v1_queue_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1895,7 +1705,7 @@ func (x *GetItemRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetItemRequest.ProtoReflect.Descriptor instead.
 func (*GetItemRequest) Descriptor() ([]byte, []int) {
-	return file_flow_v1_queue_proto_rawDescGZIP(), []int{35}
+	return file_flow_v1_queue_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *GetItemRequest) GetQueueName() string {
@@ -1921,7 +1731,7 @@ type GetItemResponse struct {
 
 func (x *GetItemResponse) Reset() {
 	*x = GetItemResponse{}
-	mi := &file_flow_v1_queue_proto_msgTypes[36]
+	mi := &file_flow_v1_queue_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1933,7 +1743,7 @@ func (x *GetItemResponse) String() string {
 func (*GetItemResponse) ProtoMessage() {}
 
 func (x *GetItemResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_queue_proto_msgTypes[36]
+	mi := &file_flow_v1_queue_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1946,7 +1756,7 @@ func (x *GetItemResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetItemResponse.ProtoReflect.Descriptor instead.
 func (*GetItemResponse) Descriptor() ([]byte, []int) {
-	return file_flow_v1_queue_proto_rawDescGZIP(), []int{36}
+	return file_flow_v1_queue_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *GetItemResponse) GetItem() *QueueItem {
@@ -1966,7 +1776,7 @@ type ClaimRequest struct {
 
 func (x *ClaimRequest) Reset() {
 	*x = ClaimRequest{}
-	mi := &file_flow_v1_queue_proto_msgTypes[37]
+	mi := &file_flow_v1_queue_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1978,7 +1788,7 @@ func (x *ClaimRequest) String() string {
 func (*ClaimRequest) ProtoMessage() {}
 
 func (x *ClaimRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_queue_proto_msgTypes[37]
+	mi := &file_flow_v1_queue_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1991,7 +1801,7 @@ func (x *ClaimRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClaimRequest.ProtoReflect.Descriptor instead.
 func (*ClaimRequest) Descriptor() ([]byte, []int) {
-	return file_flow_v1_queue_proto_rawDescGZIP(), []int{37}
+	return file_flow_v1_queue_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *ClaimRequest) GetQueueName() string {
@@ -2017,7 +1827,7 @@ type ClaimResponse struct {
 
 func (x *ClaimResponse) Reset() {
 	*x = ClaimResponse{}
-	mi := &file_flow_v1_queue_proto_msgTypes[38]
+	mi := &file_flow_v1_queue_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2029,7 +1839,7 @@ func (x *ClaimResponse) String() string {
 func (*ClaimResponse) ProtoMessage() {}
 
 func (x *ClaimResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_queue_proto_msgTypes[38]
+	mi := &file_flow_v1_queue_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2042,7 +1852,7 @@ func (x *ClaimResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClaimResponse.ProtoReflect.Descriptor instead.
 func (*ClaimResponse) Descriptor() ([]byte, []int) {
-	return file_flow_v1_queue_proto_rawDescGZIP(), []int{38}
+	return file_flow_v1_queue_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *ClaimResponse) GetItem() *QueueItem {
@@ -2062,7 +1872,7 @@ type ReleaseRequest struct {
 
 func (x *ReleaseRequest) Reset() {
 	*x = ReleaseRequest{}
-	mi := &file_flow_v1_queue_proto_msgTypes[39]
+	mi := &file_flow_v1_queue_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2074,7 +1884,7 @@ func (x *ReleaseRequest) String() string {
 func (*ReleaseRequest) ProtoMessage() {}
 
 func (x *ReleaseRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_queue_proto_msgTypes[39]
+	mi := &file_flow_v1_queue_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2087,7 +1897,7 @@ func (x *ReleaseRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReleaseRequest.ProtoReflect.Descriptor instead.
 func (*ReleaseRequest) Descriptor() ([]byte, []int) {
-	return file_flow_v1_queue_proto_rawDescGZIP(), []int{39}
+	return file_flow_v1_queue_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *ReleaseRequest) GetQueueName() string {
@@ -2113,7 +1923,7 @@ type ReleaseResponse struct {
 
 func (x *ReleaseResponse) Reset() {
 	*x = ReleaseResponse{}
-	mi := &file_flow_v1_queue_proto_msgTypes[40]
+	mi := &file_flow_v1_queue_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2125,7 +1935,7 @@ func (x *ReleaseResponse) String() string {
 func (*ReleaseResponse) ProtoMessage() {}
 
 func (x *ReleaseResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_queue_proto_msgTypes[40]
+	mi := &file_flow_v1_queue_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2138,7 +1948,7 @@ func (x *ReleaseResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReleaseResponse.ProtoReflect.Descriptor instead.
 func (*ReleaseResponse) Descriptor() ([]byte, []int) {
-	return file_flow_v1_queue_proto_rawDescGZIP(), []int{40}
+	return file_flow_v1_queue_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *ReleaseResponse) GetItem() *QueueItem {
@@ -2161,7 +1971,7 @@ type DecideRequest struct {
 
 func (x *DecideRequest) Reset() {
 	*x = DecideRequest{}
-	mi := &file_flow_v1_queue_proto_msgTypes[41]
+	mi := &file_flow_v1_queue_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2173,7 +1983,7 @@ func (x *DecideRequest) String() string {
 func (*DecideRequest) ProtoMessage() {}
 
 func (x *DecideRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_queue_proto_msgTypes[41]
+	mi := &file_flow_v1_queue_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2186,7 +1996,7 @@ func (x *DecideRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DecideRequest.ProtoReflect.Descriptor instead.
 func (*DecideRequest) Descriptor() ([]byte, []int) {
-	return file_flow_v1_queue_proto_rawDescGZIP(), []int{41}
+	return file_flow_v1_queue_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *DecideRequest) GetQueueName() string {
@@ -2219,7 +2029,7 @@ type DecideResponse struct {
 
 func (x *DecideResponse) Reset() {
 	*x = DecideResponse{}
-	mi := &file_flow_v1_queue_proto_msgTypes[42]
+	mi := &file_flow_v1_queue_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2231,7 +2041,7 @@ func (x *DecideResponse) String() string {
 func (*DecideResponse) ProtoMessage() {}
 
 func (x *DecideResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_flow_v1_queue_proto_msgTypes[42]
+	mi := &file_flow_v1_queue_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2244,7 +2054,7 @@ func (x *DecideResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DecideResponse.ProtoReflect.Descriptor instead.
 func (*DecideResponse) Descriptor() ([]byte, []int) {
-	return file_flow_v1_queue_proto_rawDescGZIP(), []int{42}
+	return file_flow_v1_queue_proto_rawDescGZIP(), []int{38}
 }
 
 func (x *DecideResponse) GetAcknowledged() bool {
@@ -2268,7 +2078,7 @@ const file_flow_v1_queue_proto_rawDesc = "" +
 	"\x05total\x18\x02 \x01(\x05R\x05total\x12\x14\n" +
 	"\x05limit\x18\x03 \x01(\x05R\x05limit\x12\x16\n" +
 	"\x06offset\x18\x04 \x01(\x05R\x06offset\x12+\n" +
-	"\x12served_by_shard_id\x18\x05 \x01(\tR\x0fservedByShardId\"\x9a\x02\n" +
+	"\x12served_by_shard_id\x18\x05 \x01(\tR\x0fservedByShardId\"\xfd\x01\n" +
 	"\tQueueItem\x12\x1f\n" +
 	"\vworkitem_id\x18\x01 \x01(\tR\n" +
 	"workitemId\x12\x19\n" +
@@ -2280,8 +2090,7 @@ const file_flow_v1_queue_proto_rawDesc = "" +
 	"enqueuedAt\x12\x1d\n" +
 	"\n" +
 	"claimed_at\x18\x05 \x01(\tR\tclaimedAt\x12#\n" +
-	"\rgeneration_id\x18\a \x01(\tR\fgenerationId\x12\x1b\n" +
-	"\tis_backup\x18\b \x01(\bR\bisBackup\x12\x18\n" +
+	"\rgeneration_id\x18\a \x01(\tR\fgenerationId\x12\x18\n" +
 	"\achoices\x18\t \x03(\tR\achoices\"3\n" +
 	"\x10ClaimItemRequest\x12\x1f\n" +
 	"\vworkitem_id\x18\x01 \x01(\tR\n" +
@@ -2298,10 +2107,6 @@ const file_flow_v1_queue_proto_rawDesc = "" +
 	"workitemId\x12\x16\n" +
 	"\x06choice\x18\x02 \x01(\tR\x06choice\"8\n" +
 	"\x12DecideItemResponse\x12\"\n" +
-	"\facknowledged\x18\x01 \x01(\bR\facknowledged\">\n" +
-	"\x14ReplicateItemRequest\x12&\n" +
-	"\x04item\x18\x01 \x01(\v2\x12.flow.v1.QueueItemR\x04item\";\n" +
-	"\x15ReplicateItemResponse\x12\"\n" +
 	"\facknowledged\x18\x01 \x01(\bR\facknowledged\":\n" +
 	"\x10ApplyItemRequest\x12&\n" +
 	"\x04item\x18\x01 \x01(\v2\x12.flow.v1.QueueItemR\x04item\"7\n" +
@@ -2312,10 +2117,6 @@ const file_flow_v1_queue_proto_rawDesc = "" +
 	"workitemId\x12#\n" +
 	"\rgeneration_id\x18\x02 \x01(\tR\fgenerationId\"6\n" +
 	"\x10DropItemResponse\x12\"\n" +
-	"\facknowledged\x18\x01 \x01(\bR\facknowledged\"3\n" +
-	"\x16NotifyShardDeadRequest\x12\x19\n" +
-	"\bshard_id\x18\x01 \x01(\tR\ashardId\"=\n" +
-	"\x17NotifyShardDeadResponse\x12\"\n" +
 	"\facknowledged\x18\x01 \x01(\bR\facknowledged\"o\n" +
 	"\x14RegisterQueueRequest\x12\x1d\n" +
 	"\n" +
@@ -2410,16 +2211,14 @@ const file_flow_v1_queue_proto_rawDesc = "" +
 	"workitemId\x12\x16\n" +
 	"\x06choice\x18\x03 \x01(\tR\x06choice\"4\n" +
 	"\x0eDecideResponse\x12\"\n" +
-	"\facknowledged\x18\x01 \x01(\bR\facknowledged2\xe2\x04\n" +
+	"\facknowledged\x18\x01 \x01(\bR\facknowledged2\xbc\x03\n" +
 	"\x10QueuePeerService\x12N\n" +
 	"\rGetLocalQueue\x12\x1d.flow.v1.GetLocalQueueRequest\x1a\x1e.flow.v1.GetLocalQueueResponse\x12B\n" +
 	"\tClaimItem\x12\x19.flow.v1.ClaimItemRequest\x1a\x1a.flow.v1.ClaimItemResponse\x12H\n" +
 	"\vReleaseItem\x12\x1b.flow.v1.ReleaseItemRequest\x1a\x1c.flow.v1.ReleaseItemResponse\x12E\n" +
 	"\n" +
-	"DecideItem\x12\x1a.flow.v1.DecideItemRequest\x1a\x1b.flow.v1.DecideItemResponse\x12N\n" +
-	"\rReplicateItem\x12\x1d.flow.v1.ReplicateItemRequest\x1a\x1e.flow.v1.ReplicateItemResponse\x12?\n" +
-	"\bDropItem\x12\x18.flow.v1.DropItemRequest\x1a\x19.flow.v1.DropItemResponse\x12T\n" +
-	"\x0fNotifyShardDead\x12\x1f.flow.v1.NotifyShardDeadRequest\x1a .flow.v1.NotifyShardDeadResponse\x12B\n" +
+	"DecideItem\x12\x1a.flow.v1.DecideItemRequest\x1a\x1b.flow.v1.DecideItemResponse\x12?\n" +
+	"\bDropItem\x12\x18.flow.v1.DropItemRequest\x1a\x19.flow.v1.DropItemResponse\x12B\n" +
 	"\tApplyItem\x12\x19.flow.v1.ApplyItemRequest\x1a\x1a.flow.v1.ApplyItemResponse2\x88\x04\n" +
 	"\x14QueueRegistryService\x12N\n" +
 	"\rRegisterQueue\x12\x1d.flow.v1.RegisterQueueRequest\x1a\x1e.flow.v1.RegisterQueueResponse\x12Q\n" +
@@ -2451,7 +2250,7 @@ func file_flow_v1_queue_proto_rawDescGZIP() []byte {
 	return file_flow_v1_queue_proto_rawDescData
 }
 
-var file_flow_v1_queue_proto_msgTypes = make([]protoimpl.MessageInfo, 43)
+var file_flow_v1_queue_proto_msgTypes = make([]protoimpl.MessageInfo, 39)
 var file_flow_v1_queue_proto_goTypes = []any{
 	(*GetLocalQueueRequest)(nil),     // 0: flow.v1.GetLocalQueueRequest
 	(*GetLocalQueueResponse)(nil),    // 1: flow.v1.GetLocalQueueResponse
@@ -2462,99 +2261,90 @@ var file_flow_v1_queue_proto_goTypes = []any{
 	(*ReleaseItemResponse)(nil),      // 6: flow.v1.ReleaseItemResponse
 	(*DecideItemRequest)(nil),        // 7: flow.v1.DecideItemRequest
 	(*DecideItemResponse)(nil),       // 8: flow.v1.DecideItemResponse
-	(*ReplicateItemRequest)(nil),     // 9: flow.v1.ReplicateItemRequest
-	(*ReplicateItemResponse)(nil),    // 10: flow.v1.ReplicateItemResponse
-	(*ApplyItemRequest)(nil),         // 11: flow.v1.ApplyItemRequest
-	(*ApplyItemResponse)(nil),        // 12: flow.v1.ApplyItemResponse
-	(*DropItemRequest)(nil),          // 13: flow.v1.DropItemRequest
-	(*DropItemResponse)(nil),         // 14: flow.v1.DropItemResponse
-	(*NotifyShardDeadRequest)(nil),   // 15: flow.v1.NotifyShardDeadRequest
-	(*NotifyShardDeadResponse)(nil),  // 16: flow.v1.NotifyShardDeadResponse
-	(*RegisterQueueRequest)(nil),     // 17: flow.v1.RegisterQueueRequest
-	(*RegisterQueueResponse)(nil),    // 18: flow.v1.RegisterQueueResponse
-	(*HeartbeatQueueRequest)(nil),    // 19: flow.v1.HeartbeatQueueRequest
-	(*HeartbeatQueueResponse)(nil),   // 20: flow.v1.HeartbeatQueueResponse
-	(*DeregisterQueueRequest)(nil),   // 21: flow.v1.DeregisterQueueRequest
-	(*DeregisterQueueResponse)(nil),  // 22: flow.v1.DeregisterQueueResponse
-	(*ListQueuesRequest)(nil),        // 23: flow.v1.ListQueuesRequest
-	(*ListQueuesResponse)(nil),       // 24: flow.v1.ListQueuesResponse
-	(*QueueRegistration)(nil),        // 25: flow.v1.QueueRegistration
-	(*ShardRegistration)(nil),        // 26: flow.v1.ShardRegistration
-	(*CancelQueuedItemRequest)(nil),  // 27: flow.v1.CancelQueuedItemRequest
-	(*CancelQueuedItemResponse)(nil), // 28: flow.v1.CancelQueuedItemResponse
-	(*DecideQueuedItemRequest)(nil),  // 29: flow.v1.DecideQueuedItemRequest
-	(*DecideQueuedItemResponse)(nil), // 30: flow.v1.DecideQueuedItemResponse
-	(*EnqueueRequest)(nil),           // 31: flow.v1.EnqueueRequest
-	(*EnqueueResponse)(nil),          // 32: flow.v1.EnqueueResponse
-	(*GetGlobalQueueRequest)(nil),    // 33: flow.v1.GetGlobalQueueRequest
-	(*GetGlobalQueueResponse)(nil),   // 34: flow.v1.GetGlobalQueueResponse
-	(*GetItemRequest)(nil),           // 35: flow.v1.GetItemRequest
-	(*GetItemResponse)(nil),          // 36: flow.v1.GetItemResponse
-	(*ClaimRequest)(nil),             // 37: flow.v1.ClaimRequest
-	(*ClaimResponse)(nil),            // 38: flow.v1.ClaimResponse
-	(*ReleaseRequest)(nil),           // 39: flow.v1.ReleaseRequest
-	(*ReleaseResponse)(nil),          // 40: flow.v1.ReleaseResponse
-	(*DecideRequest)(nil),            // 41: flow.v1.DecideRequest
-	(*DecideResponse)(nil),           // 42: flow.v1.DecideResponse
+	(*ApplyItemRequest)(nil),         // 9: flow.v1.ApplyItemRequest
+	(*ApplyItemResponse)(nil),        // 10: flow.v1.ApplyItemResponse
+	(*DropItemRequest)(nil),          // 11: flow.v1.DropItemRequest
+	(*DropItemResponse)(nil),         // 12: flow.v1.DropItemResponse
+	(*RegisterQueueRequest)(nil),     // 13: flow.v1.RegisterQueueRequest
+	(*RegisterQueueResponse)(nil),    // 14: flow.v1.RegisterQueueResponse
+	(*HeartbeatQueueRequest)(nil),    // 15: flow.v1.HeartbeatQueueRequest
+	(*HeartbeatQueueResponse)(nil),   // 16: flow.v1.HeartbeatQueueResponse
+	(*DeregisterQueueRequest)(nil),   // 17: flow.v1.DeregisterQueueRequest
+	(*DeregisterQueueResponse)(nil),  // 18: flow.v1.DeregisterQueueResponse
+	(*ListQueuesRequest)(nil),        // 19: flow.v1.ListQueuesRequest
+	(*ListQueuesResponse)(nil),       // 20: flow.v1.ListQueuesResponse
+	(*QueueRegistration)(nil),        // 21: flow.v1.QueueRegistration
+	(*ShardRegistration)(nil),        // 22: flow.v1.ShardRegistration
+	(*CancelQueuedItemRequest)(nil),  // 23: flow.v1.CancelQueuedItemRequest
+	(*CancelQueuedItemResponse)(nil), // 24: flow.v1.CancelQueuedItemResponse
+	(*DecideQueuedItemRequest)(nil),  // 25: flow.v1.DecideQueuedItemRequest
+	(*DecideQueuedItemResponse)(nil), // 26: flow.v1.DecideQueuedItemResponse
+	(*EnqueueRequest)(nil),           // 27: flow.v1.EnqueueRequest
+	(*EnqueueResponse)(nil),          // 28: flow.v1.EnqueueResponse
+	(*GetGlobalQueueRequest)(nil),    // 29: flow.v1.GetGlobalQueueRequest
+	(*GetGlobalQueueResponse)(nil),   // 30: flow.v1.GetGlobalQueueResponse
+	(*GetItemRequest)(nil),           // 31: flow.v1.GetItemRequest
+	(*GetItemResponse)(nil),          // 32: flow.v1.GetItemResponse
+	(*ClaimRequest)(nil),             // 33: flow.v1.ClaimRequest
+	(*ClaimResponse)(nil),            // 34: flow.v1.ClaimResponse
+	(*ReleaseRequest)(nil),           // 35: flow.v1.ReleaseRequest
+	(*ReleaseResponse)(nil),          // 36: flow.v1.ReleaseResponse
+	(*DecideRequest)(nil),            // 37: flow.v1.DecideRequest
+	(*DecideResponse)(nil),           // 38: flow.v1.DecideResponse
 }
 var file_flow_v1_queue_proto_depIdxs = []int32{
 	2,  // 0: flow.v1.GetLocalQueueResponse.items:type_name -> flow.v1.QueueItem
 	2,  // 1: flow.v1.ClaimItemResponse.item:type_name -> flow.v1.QueueItem
 	2,  // 2: flow.v1.ReleaseItemResponse.item:type_name -> flow.v1.QueueItem
-	2,  // 3: flow.v1.ReplicateItemRequest.item:type_name -> flow.v1.QueueItem
-	2,  // 4: flow.v1.ApplyItemRequest.item:type_name -> flow.v1.QueueItem
-	26, // 5: flow.v1.HeartbeatQueueResponse.shards:type_name -> flow.v1.ShardRegistration
-	25, // 6: flow.v1.ListQueuesResponse.queues:type_name -> flow.v1.QueueRegistration
-	26, // 7: flow.v1.QueueRegistration.shards:type_name -> flow.v1.ShardRegistration
-	2,  // 8: flow.v1.GetGlobalQueueResponse.items:type_name -> flow.v1.QueueItem
-	2,  // 9: flow.v1.GetItemResponse.item:type_name -> flow.v1.QueueItem
-	2,  // 10: flow.v1.ClaimResponse.item:type_name -> flow.v1.QueueItem
-	2,  // 11: flow.v1.ReleaseResponse.item:type_name -> flow.v1.QueueItem
-	0,  // 12: flow.v1.QueuePeerService.GetLocalQueue:input_type -> flow.v1.GetLocalQueueRequest
-	3,  // 13: flow.v1.QueuePeerService.ClaimItem:input_type -> flow.v1.ClaimItemRequest
-	5,  // 14: flow.v1.QueuePeerService.ReleaseItem:input_type -> flow.v1.ReleaseItemRequest
-	7,  // 15: flow.v1.QueuePeerService.DecideItem:input_type -> flow.v1.DecideItemRequest
-	9,  // 16: flow.v1.QueuePeerService.ReplicateItem:input_type -> flow.v1.ReplicateItemRequest
-	13, // 17: flow.v1.QueuePeerService.DropItem:input_type -> flow.v1.DropItemRequest
-	15, // 18: flow.v1.QueuePeerService.NotifyShardDead:input_type -> flow.v1.NotifyShardDeadRequest
-	11, // 19: flow.v1.QueuePeerService.ApplyItem:input_type -> flow.v1.ApplyItemRequest
-	17, // 20: flow.v1.QueueRegistryService.RegisterQueue:input_type -> flow.v1.RegisterQueueRequest
-	19, // 21: flow.v1.QueueRegistryService.HeartbeatQueue:input_type -> flow.v1.HeartbeatQueueRequest
-	21, // 22: flow.v1.QueueRegistryService.DeregisterQueue:input_type -> flow.v1.DeregisterQueueRequest
-	23, // 23: flow.v1.QueueRegistryService.ListQueues:input_type -> flow.v1.ListQueuesRequest
-	27, // 24: flow.v1.QueueRegistryService.CancelQueuedItem:input_type -> flow.v1.CancelQueuedItemRequest
-	29, // 25: flow.v1.QueueRegistryService.DecideQueuedItem:input_type -> flow.v1.DecideQueuedItemRequest
-	31, // 26: flow.v1.QueueGatewayService.Enqueue:input_type -> flow.v1.EnqueueRequest
-	33, // 27: flow.v1.QueueGatewayService.GetGlobalQueue:input_type -> flow.v1.GetGlobalQueueRequest
-	35, // 28: flow.v1.QueueGatewayService.GetItem:input_type -> flow.v1.GetItemRequest
-	37, // 29: flow.v1.QueueGatewayService.Claim:input_type -> flow.v1.ClaimRequest
-	39, // 30: flow.v1.QueueGatewayService.Release:input_type -> flow.v1.ReleaseRequest
-	41, // 31: flow.v1.QueueGatewayService.Decide:input_type -> flow.v1.DecideRequest
-	1,  // 32: flow.v1.QueuePeerService.GetLocalQueue:output_type -> flow.v1.GetLocalQueueResponse
-	4,  // 33: flow.v1.QueuePeerService.ClaimItem:output_type -> flow.v1.ClaimItemResponse
-	6,  // 34: flow.v1.QueuePeerService.ReleaseItem:output_type -> flow.v1.ReleaseItemResponse
-	8,  // 35: flow.v1.QueuePeerService.DecideItem:output_type -> flow.v1.DecideItemResponse
-	10, // 36: flow.v1.QueuePeerService.ReplicateItem:output_type -> flow.v1.ReplicateItemResponse
-	14, // 37: flow.v1.QueuePeerService.DropItem:output_type -> flow.v1.DropItemResponse
-	16, // 38: flow.v1.QueuePeerService.NotifyShardDead:output_type -> flow.v1.NotifyShardDeadResponse
-	12, // 39: flow.v1.QueuePeerService.ApplyItem:output_type -> flow.v1.ApplyItemResponse
-	18, // 40: flow.v1.QueueRegistryService.RegisterQueue:output_type -> flow.v1.RegisterQueueResponse
-	20, // 41: flow.v1.QueueRegistryService.HeartbeatQueue:output_type -> flow.v1.HeartbeatQueueResponse
-	22, // 42: flow.v1.QueueRegistryService.DeregisterQueue:output_type -> flow.v1.DeregisterQueueResponse
-	24, // 43: flow.v1.QueueRegistryService.ListQueues:output_type -> flow.v1.ListQueuesResponse
-	28, // 44: flow.v1.QueueRegistryService.CancelQueuedItem:output_type -> flow.v1.CancelQueuedItemResponse
-	30, // 45: flow.v1.QueueRegistryService.DecideQueuedItem:output_type -> flow.v1.DecideQueuedItemResponse
-	32, // 46: flow.v1.QueueGatewayService.Enqueue:output_type -> flow.v1.EnqueueResponse
-	34, // 47: flow.v1.QueueGatewayService.GetGlobalQueue:output_type -> flow.v1.GetGlobalQueueResponse
-	36, // 48: flow.v1.QueueGatewayService.GetItem:output_type -> flow.v1.GetItemResponse
-	38, // 49: flow.v1.QueueGatewayService.Claim:output_type -> flow.v1.ClaimResponse
-	40, // 50: flow.v1.QueueGatewayService.Release:output_type -> flow.v1.ReleaseResponse
-	42, // 51: flow.v1.QueueGatewayService.Decide:output_type -> flow.v1.DecideResponse
-	32, // [32:52] is the sub-list for method output_type
-	12, // [12:32] is the sub-list for method input_type
-	12, // [12:12] is the sub-list for extension type_name
-	12, // [12:12] is the sub-list for extension extendee
-	0,  // [0:12] is the sub-list for field type_name
+	2,  // 3: flow.v1.ApplyItemRequest.item:type_name -> flow.v1.QueueItem
+	22, // 4: flow.v1.HeartbeatQueueResponse.shards:type_name -> flow.v1.ShardRegistration
+	21, // 5: flow.v1.ListQueuesResponse.queues:type_name -> flow.v1.QueueRegistration
+	22, // 6: flow.v1.QueueRegistration.shards:type_name -> flow.v1.ShardRegistration
+	2,  // 7: flow.v1.GetGlobalQueueResponse.items:type_name -> flow.v1.QueueItem
+	2,  // 8: flow.v1.GetItemResponse.item:type_name -> flow.v1.QueueItem
+	2,  // 9: flow.v1.ClaimResponse.item:type_name -> flow.v1.QueueItem
+	2,  // 10: flow.v1.ReleaseResponse.item:type_name -> flow.v1.QueueItem
+	0,  // 11: flow.v1.QueuePeerService.GetLocalQueue:input_type -> flow.v1.GetLocalQueueRequest
+	3,  // 12: flow.v1.QueuePeerService.ClaimItem:input_type -> flow.v1.ClaimItemRequest
+	5,  // 13: flow.v1.QueuePeerService.ReleaseItem:input_type -> flow.v1.ReleaseItemRequest
+	7,  // 14: flow.v1.QueuePeerService.DecideItem:input_type -> flow.v1.DecideItemRequest
+	11, // 15: flow.v1.QueuePeerService.DropItem:input_type -> flow.v1.DropItemRequest
+	9,  // 16: flow.v1.QueuePeerService.ApplyItem:input_type -> flow.v1.ApplyItemRequest
+	13, // 17: flow.v1.QueueRegistryService.RegisterQueue:input_type -> flow.v1.RegisterQueueRequest
+	15, // 18: flow.v1.QueueRegistryService.HeartbeatQueue:input_type -> flow.v1.HeartbeatQueueRequest
+	17, // 19: flow.v1.QueueRegistryService.DeregisterQueue:input_type -> flow.v1.DeregisterQueueRequest
+	19, // 20: flow.v1.QueueRegistryService.ListQueues:input_type -> flow.v1.ListQueuesRequest
+	23, // 21: flow.v1.QueueRegistryService.CancelQueuedItem:input_type -> flow.v1.CancelQueuedItemRequest
+	25, // 22: flow.v1.QueueRegistryService.DecideQueuedItem:input_type -> flow.v1.DecideQueuedItemRequest
+	27, // 23: flow.v1.QueueGatewayService.Enqueue:input_type -> flow.v1.EnqueueRequest
+	29, // 24: flow.v1.QueueGatewayService.GetGlobalQueue:input_type -> flow.v1.GetGlobalQueueRequest
+	31, // 25: flow.v1.QueueGatewayService.GetItem:input_type -> flow.v1.GetItemRequest
+	33, // 26: flow.v1.QueueGatewayService.Claim:input_type -> flow.v1.ClaimRequest
+	35, // 27: flow.v1.QueueGatewayService.Release:input_type -> flow.v1.ReleaseRequest
+	37, // 28: flow.v1.QueueGatewayService.Decide:input_type -> flow.v1.DecideRequest
+	1,  // 29: flow.v1.QueuePeerService.GetLocalQueue:output_type -> flow.v1.GetLocalQueueResponse
+	4,  // 30: flow.v1.QueuePeerService.ClaimItem:output_type -> flow.v1.ClaimItemResponse
+	6,  // 31: flow.v1.QueuePeerService.ReleaseItem:output_type -> flow.v1.ReleaseItemResponse
+	8,  // 32: flow.v1.QueuePeerService.DecideItem:output_type -> flow.v1.DecideItemResponse
+	12, // 33: flow.v1.QueuePeerService.DropItem:output_type -> flow.v1.DropItemResponse
+	10, // 34: flow.v1.QueuePeerService.ApplyItem:output_type -> flow.v1.ApplyItemResponse
+	14, // 35: flow.v1.QueueRegistryService.RegisterQueue:output_type -> flow.v1.RegisterQueueResponse
+	16, // 36: flow.v1.QueueRegistryService.HeartbeatQueue:output_type -> flow.v1.HeartbeatQueueResponse
+	18, // 37: flow.v1.QueueRegistryService.DeregisterQueue:output_type -> flow.v1.DeregisterQueueResponse
+	20, // 38: flow.v1.QueueRegistryService.ListQueues:output_type -> flow.v1.ListQueuesResponse
+	24, // 39: flow.v1.QueueRegistryService.CancelQueuedItem:output_type -> flow.v1.CancelQueuedItemResponse
+	26, // 40: flow.v1.QueueRegistryService.DecideQueuedItem:output_type -> flow.v1.DecideQueuedItemResponse
+	28, // 41: flow.v1.QueueGatewayService.Enqueue:output_type -> flow.v1.EnqueueResponse
+	30, // 42: flow.v1.QueueGatewayService.GetGlobalQueue:output_type -> flow.v1.GetGlobalQueueResponse
+	32, // 43: flow.v1.QueueGatewayService.GetItem:output_type -> flow.v1.GetItemResponse
+	34, // 44: flow.v1.QueueGatewayService.Claim:output_type -> flow.v1.ClaimResponse
+	36, // 45: flow.v1.QueueGatewayService.Release:output_type -> flow.v1.ReleaseResponse
+	38, // 46: flow.v1.QueueGatewayService.Decide:output_type -> flow.v1.DecideResponse
+	29, // [29:47] is the sub-list for method output_type
+	11, // [11:29] is the sub-list for method input_type
+	11, // [11:11] is the sub-list for extension type_name
+	11, // [11:11] is the sub-list for extension extendee
+	0,  // [0:11] is the sub-list for field type_name
 }
 
 func init() { file_flow_v1_queue_proto_init() }
@@ -2568,7 +2358,7 @@ func file_flow_v1_queue_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_flow_v1_queue_proto_rawDesc), len(file_flow_v1_queue_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   43,
+			NumMessages:   39,
 			NumExtensions: 0,
 			NumServices:   3,
 		},

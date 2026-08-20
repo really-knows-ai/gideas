@@ -9,7 +9,8 @@ import (
 	"github.com/foundry/flow/sdk/go/internal/queuemgr"
 )
 
-func ptrStatus(s queuemgr.QueueStatus) *queuemgr.QueueStatus { return &s }
+//go:fix inline
+func ptrStatus(s queuemgr.QueueStatus) *queuemgr.QueueStatus { return new(s) }
 
 func TestManager_GetGlobalQueue_ReturnsMappedItems(t *testing.T) {
 	m, _ := newBufconnManager(t, queuemgr.WithQueueName("hitl"))
@@ -84,7 +85,7 @@ func TestManager_GetGlobalQueue_StatusFilter(t *testing.T) {
 func TestManager_GetItem_ReturnsMappedItem(t *testing.T) {
 	m, _ := newBufconnManager(t,
 		queuemgr.WithQueueName("hitl"),
-		queuemgr.WithChoices([]string{"approve"}),
+		queuemgr.WithChoices([]string{choiceApprove}),
 	)
 	ctx := context.Background()
 	if err := m.Enqueue(ctx, "wi-get"); err != nil {

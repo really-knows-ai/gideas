@@ -24,9 +24,6 @@
 //  5. Validates the choice against the derived valid set.
 //  6. Resumes the timer, optionally stamps, and routes or cancels.
 //
-// The GET /choices endpoint serves the derived choice list so the Dashboard
-// can build the appropriate UI.
-//
 // Configuration (YAML via NODE_CONFIG_PATH, default /etc/foundry/node-config.yaml):
 //
 //	choiceLabels:
@@ -36,11 +33,8 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
-	"maps"
-	"net/http"
 	"os"
 	"strings"
 
@@ -52,13 +46,6 @@ import (
 
 // choiceCancel is the reserved choice value for the cancel action.
 const choiceCancel = "cancel"
-
-// choiceType values classify a choice for the Dashboard. The type field is
-// part of the shared nodeutil.ChoiceEntry wire shape.
-const (
-	choiceTypeRoute  = "route"
-	choiceTypeCancel = "cancel"
-)
 
 // hitlConfig holds the node's configuration, loaded from a
 // ConfigMap-mounted YAML file via nodeconfig.Load.
@@ -110,11 +97,44 @@ func main() {
 		os.Exit(1)
 	}
 
+	// The node's routing choices ride the Enqueue RPC payload (R-5.2). They are
+	// derived from topology and computed once at construction time (PLAN A).
+	// ponytail: computing choices once at boot instead of per workitem assumes
+	// the node's topology is static after startup; per-workitem topology
+	// variation after boot is not supported. If that ever changes, move the
+	// choice derivation back into handleHITL.
+	client, err := flow.NewClient()
+	if err != nil {
+		slog.Error("hitl: create client failed", "error", err)
+		os.Exit(1)
+	}
+	topology, err := client.GetFlow()
+	if err != nil {
+		_ = client.Close()
+		slog.Error("hitl: get topology failed", "error", err)
+		os.Exit(1)
+	}
+	rawTopology, err := client.RawOperator().GetFlowTopology(context.Background(), &flowv1.GetFlowTopologyRequest{})
+	if err != nil {
+		_ = client.Close()
+		slog.Error("hitl: get topology failed", "error", err)
+		os.Exit(1)
+	}
+	_ = client.Close()
+
+	behaviour, err := deriveBehaviour(topology, rawTopology, cfg)
+	if err != nil {
+		slog.Error("hitl: derive behaviour failed", "error", err)
+		os.Exit(1)
+	}
+	choices := behaviour.outputChoices
+	if behaviour.hasCancel {
+		choices = append(choices, choiceCancel)
+	}
+
 	if err := nodeutil.RunHITLNode("hitl", func(qm flow.QueueManager) flow.Handler {
 		return handler(qm, cfg)
-	}, flow.WithCustomRoutes(func(mux *http.ServeMux) {
-		mux.HandleFunc("GET /choices", handleChoices(cfg))
-	})); err != nil {
+	}, flow.WithChoices(choices)); err != nil {
 		slog.Error("hitl: server failed", "error", err)
 		os.Exit(1)
 	}
@@ -252,106 +272,6 @@ func deriveBehaviour(
 	}
 
 	return b, nil
-}
-
-// buildChoicesResponse constructs the GET /choices JSON response from derived
-// behaviour and config labels.
-func buildChoicesResponse(
-	topology *flow.Flow,
-	rawTopology *flowv1.GetFlowTopologyResponse,
-	cfg *hitlConfig,
-) (*nodeutil.ChoicesResponse, error) {
-	behaviour, err := deriveBehaviour(topology, rawTopology, cfg)
-	if err != nil {
-		return nil, err
-	}
-	labels := map[string]string{}
-	maps.Copy(labels, cfg.ChoiceLabels)
-	// choices[].label takes precedence over choiceLabels when present.
-	for _, ce := range cfg.Choices {
-		if ce.Label != "" {
-			labels[ce.Output] = ce.Label
-		}
-	}
-
-	resp := &nodeutil.ChoicesResponse{
-		HasFeedback: behaviour.hasFeedback,
-		HasCancel:   behaviour.hasCancel,
-	}
-
-	// Route choices (one per output).
-	for _, name := range behaviour.outputChoices {
-		label := labels[name]
-		if label == "" {
-			label = name
-		}
-		resp.Choices = append(resp.Choices, nodeutil.ChoiceEntry{
-			Value: name,
-			Label: label,
-			Type:  choiceTypeRoute,
-		})
-	}
-
-	// Cancel choice (if exit-bound).
-	if behaviour.hasCancel {
-		label := labels[choiceCancel]
-		if label == "" {
-			label = "Cancel"
-		}
-		resp.Choices = append(resp.Choices, nodeutil.ChoiceEntry{
-			Value: choiceCancel,
-			Label: label,
-			Type:  choiceTypeCancel,
-		})
-	}
-
-	return resp, nil
-}
-
-// ---------------------------------------------------------------------------
-// GET /choices endpoint
-// ---------------------------------------------------------------------------
-
-// handleChoices returns an HTTP handler that serves the derived choice list.
-// On first invocation the handler calls GetFlowTopology to discover the
-// node's configuration. The result is cached for subsequent requests.
-//
-// If the topology cannot be loaded, the endpoint returns 503 Service
-// Unavailable so the Dashboard knows to retry.
-func handleChoices(cfg *hitlConfig) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		// Create a temporary client to fetch topology.
-		client, err := flow.NewClient()
-		if err != nil {
-			http.Error(w, "hitl: create client failed", http.StatusServiceUnavailable)
-			return
-		}
-		defer func() { _ = client.Close() }()
-
-		// ponytail: GetFlowTopology still takes ctx — the new domain objects
-		// do not yet expose output lists. This HTTP handler uses the request
-		// context (not the workitem handler context), which is appropriate.
-		topology, err := client.GetFlow()
-		if err != nil {
-			http.Error(w, "hitl: get topology failed", http.StatusServiceUnavailable)
-			return
-		}
-		rawTopology, err := client.RawOperator().GetFlowTopology(r.Context(), &flowv1.GetFlowTopologyRequest{})
-		if err != nil {
-			http.Error(w, "hitl: get topology failed", http.StatusServiceUnavailable)
-			return
-		}
-
-		resp, err := buildChoicesResponse(topology, rawTopology, cfg)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		_ = json.NewEncoder(w).Encode(resp)
-	}
 }
 
 // ---------------------------------------------------------------------------

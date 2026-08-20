@@ -49,7 +49,7 @@ func RunHITLNode(
 	if err != nil {
 		return fmt.Errorf("%s: create queue manager failed: %w", name, err)
 	}
-	return flow.Start(newHandler(qm), flow.WithQueueManager(qm))
+	return flow.Start(newHandler(qm))
 }
 
 // AwaitHumanDecision parks the workitem in the HITL queue, pauses the sidecar

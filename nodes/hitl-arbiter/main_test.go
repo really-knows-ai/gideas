@@ -2,18 +2,18 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"net"
-	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
-	"github.com/foundry/flow/nodes/internal/nodeutil"
 	flow "github.com/foundry/flow/sdk/go"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 )
 
 // ---------------------------------------------------------------------------
@@ -307,30 +307,139 @@ func newSpyClient(t *testing.T, spy *hitlArbiterSpy) *flow.Client {
 	return client
 }
 
-// newTestQueueManager creates an in-memory QueueManager for tests.
-func newTestQueueManager(t *testing.T) flow.QueueManager {
-	t.Helper()
-	qm, _ := newTestQueueManagerWithStop(t)
-	return qm
+// ---------------------------------------------------------------------------
+// Fake queue-service (flowv1.QueueGatewayServiceServer)
+// ---------------------------------------------------------------------------
+
+// fakeQueueService is an in-memory, in-process implementation of the
+// queue-service's SDK-facing surface (flowv1.QueueGatewayServiceServer). It is
+// a true unit-test fake: no real I/O, no database, no EventBus. Items are
+// stored in a mutex-guarded map keyed by workitem_id, and the RPCs return the
+// PHASE_01 gRPC status codes the thin client's reverse-mapping expects
+// (NotFound/AlreadyExists/FailedPrecondition). Decisions are delivered
+// client-locally by the thin client's WaitForDecision, so Decide only needs to
+// return success.
+type fakeQueueService struct {
+	flowv1.UnimplementedQueueGatewayServiceServer
+
+	mu    sync.Mutex
+	items map[string]*flowv1.QueueItem
 }
 
-// newTestQueueManagerWithStop creates an in-memory QueueManager and returns
-// both the interface and a stop function.
-func newTestQueueManagerWithStop(t *testing.T) (flow.QueueManager, func() error) {
+const (
+	queueStatusWaiting = "waiting"
+	queueStatusClaimed = "claimed"
+)
+
+func newFakeQueueService() *fakeQueueService {
+	return &fakeQueueService{items: map[string]*flowv1.QueueItem{}}
+}
+
+func (f *fakeQueueService) Enqueue(_ context.Context, req *flowv1.EnqueueRequest) (*flowv1.EnqueueResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.items[req.GetWorkitemId()] = &flowv1.QueueItem{
+		WorkitemId: req.GetWorkitemId(),
+		QueueName:  req.GetQueueName(),
+		Status:     queueStatusWaiting,
+		Choices:    append([]string(nil), req.GetChoices()...),
+	}
+	return &flowv1.EnqueueResponse{Acknowledged: true}, nil
+}
+
+func (f *fakeQueueService) GetGlobalQueue(
+	_ context.Context, _ *flowv1.GetGlobalQueueRequest,
+) (*flowv1.GetGlobalQueueResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]*flowv1.QueueItem, 0, len(f.items))
+	for _, it := range f.items {
+		cp := proto.Clone(it).(*flowv1.QueueItem)
+		out = append(out, cp)
+	}
+	return &flowv1.GetGlobalQueueResponse{Items: out}, nil
+}
+
+func (f *fakeQueueService) GetItem(_ context.Context, req *flowv1.GetItemRequest) (*flowv1.GetItemResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	it, ok := f.items[req.GetWorkitemId()]
+	if !ok {
+		return nil, status.Error(codes.NotFound, "queue item not found")
+	}
+	cp := proto.Clone(it).(*flowv1.QueueItem)
+	return &flowv1.GetItemResponse{Item: cp}, nil
+}
+
+func (f *fakeQueueService) Claim(_ context.Context, req *flowv1.ClaimRequest) (*flowv1.ClaimResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	it, ok := f.items[req.GetWorkitemId()]
+	if !ok {
+		return nil, status.Error(codes.NotFound, "queue item not found")
+	}
+	if it.GetStatus() == queueStatusClaimed {
+		return nil, status.Error(codes.AlreadyExists, "queue item already claimed")
+	}
+	it.Status = queueStatusClaimed
+	cp := proto.Clone(it).(*flowv1.QueueItem)
+	return &flowv1.ClaimResponse{Item: cp}, nil
+}
+
+func (f *fakeQueueService) Release(_ context.Context, req *flowv1.ReleaseRequest) (*flowv1.ReleaseResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	it, ok := f.items[req.GetWorkitemId()]
+	if !ok {
+		return nil, status.Error(codes.NotFound, "queue item not found")
+	}
+	if it.GetStatus() != queueStatusClaimed {
+		return nil, status.Error(codes.FailedPrecondition, "queue item invalid state transition")
+	}
+	it.Status = queueStatusWaiting
+	cp := proto.Clone(it).(*flowv1.QueueItem)
+	return &flowv1.ReleaseResponse{Item: cp}, nil
+}
+
+func (f *fakeQueueService) Decide(_ context.Context, req *flowv1.DecideRequest) (*flowv1.DecideResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	it, ok := f.items[req.GetWorkitemId()]
+	if !ok {
+		return nil, status.Error(codes.NotFound, "queue item not found")
+	}
+	if it.GetStatus() != queueStatusClaimed {
+		return nil, status.Error(codes.FailedPrecondition, "queue item invalid state transition")
+	}
+	delete(f.items, req.GetWorkitemId())
+	return &flowv1.DecideResponse{Acknowledged: true}, nil
+}
+
+// newTestQueueManager starts a fake queue-service on a loopback TCP listener,
+// points FLOW_QUEUE_SERVICE_ADDR at it, and returns a flow.QueueManager thin
+// client that reaches it via the default dialer. The fake server is stopped via
+// t.Cleanup. The thin client has no Start/Stop; a Decide on the returned
+// manager delivers the choice client-locally, unblocking WaitForDecision.
+func newTestQueueManager(t *testing.T) flow.QueueManager {
 	t.Helper()
-	// The storage-path and API-port knobs are configured via environment
-	// variables (the SDK option constructors were deleted as test-only).
-	t.Setenv("FLOW_STORAGE_PATH", ":memory:")
-	t.Setenv("FLOW_HITL_PORT", "0")
+
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to create listener: %v", err)
+	}
+
+	srv := grpc.NewServer()
+	flowv1.RegisterQueueGatewayServiceServer(srv, newFakeQueueService())
+	go func() { _ = srv.Serve(lis) }()
+	t.Cleanup(srv.Stop)
+
+	t.Setenv("FLOW_QUEUE_SERVICE_ADDR", lis.Addr().String())
+
 	qm, err := flow.NewQueueManager()
 	if err != nil {
 		t.Fatalf("NewQueueManager failed: %v", err)
 	}
-	if err := qm.Start(context.Background()); err != nil {
-		t.Fatalf("QueueManager.Start failed: %v", err)
-	}
-	t.Cleanup(func() { _ = qm.Stop() })
-	return qm, qm.Stop
+	return qm
 }
 
 // waitForEnqueue polls until the given workitem appears in the queue.
@@ -709,74 +818,7 @@ func TestHitlArbiter_ContextCancelled(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Test 7: GET /choices returns hardcoded JSON
-// ---------------------------------------------------------------------------
-
-func TestHitlArbiter_ChoicesEndpoint(t *testing.T) {
-	req := httptest.NewRequest("GET", "/choices", nil)
-	rec := httptest.NewRecorder()
-
-	handleChoices(rec, req)
-
-	if rec.Code != 200 {
-		t.Errorf("expected status 200, got %d", rec.Code)
-	}
-
-	var resp nodeutil.ChoicesResponse
-	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("failed to parse response body: %v", err)
-	}
-
-	if !resp.HasFeedback {
-		t.Error("expected HasFeedback=true")
-	}
-	if !resp.HasCancel {
-		t.Error("expected HasCancel=true")
-	}
-
-	if len(resp.Choices) != 3 {
-		t.Fatalf("expected 3 choices, got %d", len(resp.Choices))
-	}
-
-	// Choice 0: accept.
-	c0 := resp.Choices[0]
-	if c0.Value != choiceAccept {
-		t.Errorf("choice[0].Value=%q, want %q", c0.Value, choiceAccept)
-	}
-	if c0.Label != "Accept — Mark as WONT_FIX" {
-		t.Errorf("choice[0].Label=%q, want 'Accept — Mark as WONT_FIX'", c0.Label)
-	}
-	if c0.Type != "route" {
-		t.Errorf("choice[0].Type=%q, want 'route'", c0.Type)
-	}
-
-	// Choice 1: reject.
-	c1 := resp.Choices[1]
-	if c1.Value != choiceReject {
-		t.Errorf("choice[1].Value=%q, want %q", c1.Value, choiceReject)
-	}
-	if c1.Label != "Demand Fix — Mark as REJECTED" {
-		t.Errorf("choice[1].Label=%q, want 'Demand Fix — Mark as REJECTED'", c1.Label)
-	}
-	if c1.Type != "route" {
-		t.Errorf("choice[1].Type=%q, want 'route'", c1.Type)
-	}
-
-	// Choice 2: cancel.
-	c2 := resp.Choices[2]
-	if c2.Value != choiceCancel {
-		t.Errorf("choice[2].Value=%q, want %q", c2.Value, choiceCancel)
-	}
-	if c2.Label != "Reject Workitem" {
-		t.Errorf("choice[2].Label=%q, want 'Reject Workitem'", c2.Label)
-	}
-	if c2.Type != "cancel" {
-		t.Errorf("choice[2].Type=%q, want 'cancel'", c2.Type)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Test 8: Multiple deadlocked items → LinkRuling called for each
+// Test 7: Multiple deadlocked items → LinkRuling called for each
 // ---------------------------------------------------------------------------
 
 func TestHitlArbiter_MultipleDeadlocked(t *testing.T) {

@@ -18,13 +18,13 @@ func TestManager_Decide_Success(t *testing.T) {
 		t.Fatalf("Claim: %v", err)
 	}
 
-	if err := m.Decide(ctx, "wi-dec", "approve"); err != nil {
+	if err := m.Decide(ctx, "wi-dec", choiceApprove); err != nil {
 		t.Fatalf("Decide: %v", err)
 	}
 	if fake.item("wi-dec") != nil {
 		t.Fatal("item should be deleted from the queue after Decide")
 	}
-	if got := fake.decidedChoice("wi-dec"); got != "approve" {
+	if got := fake.decidedChoice("wi-dec"); got != choiceApprove {
 		t.Fatalf("decided choice = %q, want approve", got)
 	}
 }

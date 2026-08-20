@@ -13,7 +13,7 @@ import (
 func TestManager_Enqueue_SendsQueueNameAndChoices(t *testing.T) {
 	m, fake := newBufconnManager(t,
 		queuemgr.WithQueueName("hitl-approval"),
-		queuemgr.WithChoices([]string{"approve", "reject"}),
+		queuemgr.WithChoices([]string{choiceApprove, "reject"}),
 	)
 	ctx := context.Background()
 
@@ -22,7 +22,7 @@ func TestManager_Enqueue_SendsQueueNameAndChoices(t *testing.T) {
 	}
 
 	got := fake.enqueueChoices("wi-1")
-	if len(got) != 2 || got[0] != "approve" || got[1] != "reject" {
+	if len(got) != 2 || got[0] != choiceApprove || got[1] != "reject" {
 		t.Fatalf("enqueue choices = %v, want [approve reject]", got)
 	}
 
@@ -36,7 +36,7 @@ func TestManager_Enqueue_SendsQueueNameAndChoices(t *testing.T) {
 	if item.GetQueueName() != "hitl-approval" {
 		t.Fatalf("QueueName = %q, want hitl-approval", item.GetQueueName())
 	}
-	if item.GetStatus() != "waiting" {
+	if item.GetStatus() != queueStatusWaiting {
 		t.Fatalf("Status = %q, want waiting", item.GetStatus())
 	}
 }

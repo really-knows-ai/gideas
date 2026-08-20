@@ -14,10 +14,9 @@ import (
 // mirror's gRPC surface. It serves the local dumb-mirror store and applies
 // broadcast writes from the queue-service's serialized funnel.
 //
-// ReplicateItem and NotifyShardDead are NOT implemented — the single-backup
-// machinery they served is gone. Because PeerServer embeds
-// flowv1.UnimplementedQueuePeerServiceServer, calling either legacy RPC returns
-// Unimplemented by default.
+// The single-backup machinery is gone; the legacy backup RPCs are not
+// implemented and return Unimplemented (via the embedded
+// flowv1.UnimplementedQueuePeerServiceServer).
 type PeerServer struct {
 	flowv1.UnimplementedQueuePeerServiceServer
 	store     Store

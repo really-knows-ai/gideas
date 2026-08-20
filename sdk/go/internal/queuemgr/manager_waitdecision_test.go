@@ -35,7 +35,7 @@ func TestManager_WaitForDecision_ReturnsChoiceAfterDecide(t *testing.T) {
 	if _, err := m.Claim(ctx, "wi-wd"); err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
-	if err := m.Decide(ctx, "wi-wd", "approve"); err != nil {
+	if err := m.Decide(ctx, "wi-wd", choiceApprove); err != nil {
 		t.Fatalf("Decide: %v", err)
 	}
 
@@ -43,7 +43,7 @@ func TestManager_WaitForDecision_ReturnsChoiceAfterDecide(t *testing.T) {
 	if err != nil {
 		t.Fatalf("WaitForDecision: %v", err)
 	}
-	if choice != "approve" {
+	if choice != choiceApprove {
 		t.Fatalf("choice = %q, want approve", choice)
 	}
 }

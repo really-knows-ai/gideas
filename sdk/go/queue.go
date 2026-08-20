@@ -1,42 +1,35 @@
 package flow
 
 import (
-	"net/http"
-
-	"github.com/foundry/flow/sdk/go/internal/queue"
+	"github.com/foundry/flow/sdk/go/internal/queuemgr"
 )
 
-// Re-exported HITL queue surface. The queue mesh implementation — SQLite
-// store, peer discovery (DNSResolver), QueuePeerService gRPC server,
-// HTTP server, and the QueueManager — lives in the internal/queue package;
+// The HITL QueueManager is now a thin client to the runtime queue-service;
 // these aliases keep the public node-facing names stable on the flow package.
 type (
 	// QueueManager is the HITL queue interface (parking lot, not audit trail).
-	QueueManager = queue.QueueManager
+	QueueManager = queuemgr.QueueManager
 
 	// QueueManagerOption configures NewQueueManager.
-	QueueManagerOption = queue.Option
+	QueueManagerOption = queuemgr.Option
 
 	// queueManagerImpl is the concrete QueueManager returned by NewQueueManager.
-	queueManagerImpl = queue.Manager
+	queueManagerImpl = queuemgr.Manager
 )
 
-// NewQueueManager creates a new QueueManager. Call Start() to initialise
-// the SQLite store, mesh discovery, and HTTP server.
+// NewQueueManager creates a new QueueManager thin client over the queue-service.
 func NewQueueManager(opts ...QueueManagerOption) (*queueManagerImpl, error) {
-	return queue.NewManager(opts...)
+	return queuemgr.NewManager(opts...)
 }
 
 // WithQueueName sets the queue name for scoping queue items.
 // Defaults to FLOW_NODE_ID environment variable, then "default".
 func WithQueueName(name string) QueueManagerOption {
-	return queue.WithQueueName(name)
+	return queuemgr.WithQueueName(name)
 }
 
-// WithCustomRoutes registers additional HTTP routes on the QueueManager's
-// REST API mux. The provided function is called after the standard HITL
-// routes are registered, so it can add node-specific endpoints (e.g. GET
-// /choices for hitl) on the same server without forking the SDK.
-func WithCustomRoutes(fn func(mux *http.ServeMux)) QueueManagerOption {
-	return queue.WithCustomRoutes(fn)
+// WithChoices sets the routing choices sent with each Enqueue. The choices
+// ride the Enqueue RPC payload and are persisted as item metadata (R-5.2).
+func WithChoices(choices []string) QueueManagerOption {
+	return queuemgr.WithChoices(choices)
 }

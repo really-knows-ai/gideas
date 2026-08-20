@@ -12,6 +12,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/foundry/flow/sdk/go/internal/queuemgr"
 )
@@ -22,6 +23,15 @@ import (
 const (
 	fakeEnqueuedAt = "2026-01-02T15:04:05Z"
 	fakeClaimedAt  = "2026-01-02T15:05:00Z"
+)
+
+// Shared status/choice literals for the external test package. Deduplicating
+// the repeated strings satisfies goconst while keeping the assertions
+// meaningful (e.g. TestQueueStatus_ConstantValues still pins the literal value).
+const (
+	queueStatusWaiting = "waiting"
+	queueStatusClaimed = "claimed"
+	choiceApprove      = "approve"
 )
 
 // fakeQueueService is an in-memory, in-process implementation of the
@@ -66,8 +76,7 @@ func (f *fakeQueueService) item(id string) *flowv1.QueueItem {
 	if !ok {
 		return nil
 	}
-	cp := *it
-	return &cp
+	return proto.Clone(it).(*flowv1.QueueItem)
 }
 
 // decidedChoice returns the recorded decision choice for id ("" if none).
@@ -83,7 +92,7 @@ func (f *fakeQueueService) Enqueue(ctx context.Context, req *flowv1.EnqueueReque
 	f.items[req.GetWorkitemId()] = &flowv1.QueueItem{
 		WorkitemId:   req.GetWorkitemId(),
 		QueueName:    req.GetQueueName(),
-		Status:       "waiting",
+		Status:       queueStatusWaiting,
 		EnqueuedAt:   fakeEnqueuedAt,
 		ShardId:      "shard-0",
 		GenerationId: "gen-1",
@@ -93,7 +102,10 @@ func (f *fakeQueueService) Enqueue(ctx context.Context, req *flowv1.EnqueueReque
 	return &flowv1.EnqueueResponse{Acknowledged: true}, nil
 }
 
-func (f *fakeQueueService) GetGlobalQueue(ctx context.Context, req *flowv1.GetGlobalQueueRequest) (*flowv1.GetGlobalQueueResponse, error) {
+func (f *fakeQueueService) GetGlobalQueue(
+	ctx context.Context,
+	req *flowv1.GetGlobalQueueRequest,
+) (*flowv1.GetGlobalQueueResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	out := []*flowv1.QueueItem{}
@@ -101,8 +113,8 @@ func (f *fakeQueueService) GetGlobalQueue(ctx context.Context, req *flowv1.GetGl
 		if req.GetStatus() != "" && it.GetStatus() != req.GetStatus() {
 			continue
 		}
-		cp := *it
-		out = append(out, &cp)
+		cp := proto.Clone(it).(*flowv1.QueueItem)
+		out = append(out, cp)
 	}
 	return &flowv1.GetGlobalQueueResponse{Items: out}, nil
 }
@@ -114,8 +126,8 @@ func (f *fakeQueueService) GetItem(ctx context.Context, req *flowv1.GetItemReque
 	if !ok {
 		return nil, status.Error(codes.NotFound, "queue item not found")
 	}
-	cp := *it
-	return &flowv1.GetItemResponse{Item: &cp}, nil
+	cp := proto.Clone(it).(*flowv1.QueueItem)
+	return &flowv1.GetItemResponse{Item: cp}, nil
 }
 
 func (f *fakeQueueService) Claim(ctx context.Context, req *flowv1.ClaimRequest) (*flowv1.ClaimResponse, error) {
@@ -125,13 +137,13 @@ func (f *fakeQueueService) Claim(ctx context.Context, req *flowv1.ClaimRequest) 
 	if !ok {
 		return nil, status.Error(codes.NotFound, "queue item not found")
 	}
-	if it.GetStatus() == "claimed" {
+	if it.GetStatus() == queueStatusClaimed {
 		return nil, status.Error(codes.AlreadyExists, "queue item already claimed")
 	}
-	it.Status = "claimed"
+	it.Status = queueStatusClaimed
 	it.ClaimedAt = fakeClaimedAt
-	cp := *it
-	return &flowv1.ClaimResponse{Item: &cp}, nil
+	cp := proto.Clone(it).(*flowv1.QueueItem)
+	return &flowv1.ClaimResponse{Item: cp}, nil
 }
 
 func (f *fakeQueueService) Release(ctx context.Context, req *flowv1.ReleaseRequest) (*flowv1.ReleaseResponse, error) {
@@ -141,13 +153,13 @@ func (f *fakeQueueService) Release(ctx context.Context, req *flowv1.ReleaseReque
 	if !ok {
 		return nil, status.Error(codes.NotFound, "queue item not found")
 	}
-	if it.GetStatus() != "claimed" {
+	if it.GetStatus() != queueStatusClaimed {
 		return nil, status.Error(codes.FailedPrecondition, "queue item invalid state transition")
 	}
-	it.Status = "waiting"
+	it.Status = queueStatusWaiting
 	it.ClaimedAt = ""
-	cp := *it
-	return &flowv1.ReleaseResponse{Item: &cp}, nil
+	cp := proto.Clone(it).(*flowv1.QueueItem)
+	return &flowv1.ReleaseResponse{Item: cp}, nil
 }
 
 func (f *fakeQueueService) Decide(ctx context.Context, req *flowv1.DecideRequest) (*flowv1.DecideResponse, error) {
@@ -157,7 +169,7 @@ func (f *fakeQueueService) Decide(ctx context.Context, req *flowv1.DecideRequest
 	if !ok {
 		return nil, status.Error(codes.NotFound, "queue item not found")
 	}
-	if it.GetStatus() != "claimed" {
+	if it.GetStatus() != queueStatusClaimed {
 		return nil, status.Error(codes.FailedPrecondition, "queue item invalid state transition")
 	}
 	delete(f.items, req.GetWorkitemId())

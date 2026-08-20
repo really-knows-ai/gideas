@@ -43,7 +43,9 @@ type hitlAppraiseConfig struct {
 func main() {
 	slog.Info("hitl-appraise: starting")
 
-	if err := nodeutil.RunHITLNode("hitl-appraise", handler); err != nil {
+	if err := nodeutil.RunHITLNode("hitl-appraise", handler,
+		flow.WithChoices(nil), // appraise accepts any decision; no choices ride the Enqueue payload.
+	); err != nil {
 		slog.Error("hitl-appraise: server failed", "error", err)
 		os.Exit(1)
 	}

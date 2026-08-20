@@ -19,14 +19,12 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	QueuePeerService_GetLocalQueue_FullMethodName   = "/flow.v1.QueuePeerService/GetLocalQueue"
-	QueuePeerService_ClaimItem_FullMethodName       = "/flow.v1.QueuePeerService/ClaimItem"
-	QueuePeerService_ReleaseItem_FullMethodName     = "/flow.v1.QueuePeerService/ReleaseItem"
-	QueuePeerService_DecideItem_FullMethodName      = "/flow.v1.QueuePeerService/DecideItem"
-	QueuePeerService_ReplicateItem_FullMethodName   = "/flow.v1.QueuePeerService/ReplicateItem"
-	QueuePeerService_DropItem_FullMethodName        = "/flow.v1.QueuePeerService/DropItem"
-	QueuePeerService_NotifyShardDead_FullMethodName = "/flow.v1.QueuePeerService/NotifyShardDead"
-	QueuePeerService_ApplyItem_FullMethodName       = "/flow.v1.QueuePeerService/ApplyItem"
+	QueuePeerService_GetLocalQueue_FullMethodName = "/flow.v1.QueuePeerService/GetLocalQueue"
+	QueuePeerService_ClaimItem_FullMethodName     = "/flow.v1.QueuePeerService/ClaimItem"
+	QueuePeerService_ReleaseItem_FullMethodName   = "/flow.v1.QueuePeerService/ReleaseItem"
+	QueuePeerService_DecideItem_FullMethodName    = "/flow.v1.QueuePeerService/DecideItem"
+	QueuePeerService_DropItem_FullMethodName      = "/flow.v1.QueuePeerService/DropItem"
+	QueuePeerService_ApplyItem_FullMethodName     = "/flow.v1.QueuePeerService/ApplyItem"
 )
 
 // QueuePeerServiceClient is the client API for QueuePeerService service.
@@ -54,16 +52,9 @@ type QueuePeerServiceClient interface {
 	// Returns QUEUE_ITEM_NOT_FOUND if the item does not exist.
 	// Returns QUEUE_ITEM_INVALID_STATE if the item is not claimed.
 	DecideItem(ctx context.Context, in *DecideItemRequest, opts ...grpc.CallOption) (*DecideItemResponse, error)
-	// Replicates an item to this shard as a backup copy. The owning shard calls
-	// this after Enqueue so exactly one backup holds the item for failover.
-	ReplicateItem(ctx context.Context, in *ReplicateItemRequest, opts ...grpc.CallOption) (*ReplicateItemResponse, error)
 	// Drops a backup copy of an item. Carries the generation UUID so a missed or
 	// raced drop can never destroy a newer parking event's copy.
 	DropItem(ctx context.Context, in *DropItemRequest, opts ...grpc.CallOption) (*DropItemResponse, error)
-	// Notifies this shard that another shard of the queue is dead (lease
-	// eviction). The receiver fires its promotion path for any backup rows it
-	// holds owned by the dead shard.
-	NotifyShardDead(ctx context.Context, in *NotifyShardDeadRequest, opts ...grpc.CallOption) (*NotifyShardDeadResponse, error)
 	// Applies a broadcast write (generation-guarded apply) to this shard's
 	// local store. The queue-service fans ApplyItem out to every living shard
 	// as the single serialized write funnel; each shard CAS-applies only if the
@@ -119,30 +110,10 @@ func (c *queuePeerServiceClient) DecideItem(ctx context.Context, in *DecideItemR
 	return out, nil
 }
 
-func (c *queuePeerServiceClient) ReplicateItem(ctx context.Context, in *ReplicateItemRequest, opts ...grpc.CallOption) (*ReplicateItemResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(ReplicateItemResponse)
-	err := c.cc.Invoke(ctx, QueuePeerService_ReplicateItem_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 func (c *queuePeerServiceClient) DropItem(ctx context.Context, in *DropItemRequest, opts ...grpc.CallOption) (*DropItemResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(DropItemResponse)
 	err := c.cc.Invoke(ctx, QueuePeerService_DropItem_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *queuePeerServiceClient) NotifyShardDead(ctx context.Context, in *NotifyShardDeadRequest, opts ...grpc.CallOption) (*NotifyShardDeadResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(NotifyShardDeadResponse)
-	err := c.cc.Invoke(ctx, QueuePeerService_NotifyShardDead_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -184,16 +155,9 @@ type QueuePeerServiceServer interface {
 	// Returns QUEUE_ITEM_NOT_FOUND if the item does not exist.
 	// Returns QUEUE_ITEM_INVALID_STATE if the item is not claimed.
 	DecideItem(context.Context, *DecideItemRequest) (*DecideItemResponse, error)
-	// Replicates an item to this shard as a backup copy. The owning shard calls
-	// this after Enqueue so exactly one backup holds the item for failover.
-	ReplicateItem(context.Context, *ReplicateItemRequest) (*ReplicateItemResponse, error)
 	// Drops a backup copy of an item. Carries the generation UUID so a missed or
 	// raced drop can never destroy a newer parking event's copy.
 	DropItem(context.Context, *DropItemRequest) (*DropItemResponse, error)
-	// Notifies this shard that another shard of the queue is dead (lease
-	// eviction). The receiver fires its promotion path for any backup rows it
-	// holds owned by the dead shard.
-	NotifyShardDead(context.Context, *NotifyShardDeadRequest) (*NotifyShardDeadResponse, error)
 	// Applies a broadcast write (generation-guarded apply) to this shard's
 	// local store. The queue-service fans ApplyItem out to every living shard
 	// as the single serialized write funnel; each shard CAS-applies only if the
@@ -221,14 +185,8 @@ func (UnimplementedQueuePeerServiceServer) ReleaseItem(context.Context, *Release
 func (UnimplementedQueuePeerServiceServer) DecideItem(context.Context, *DecideItemRequest) (*DecideItemResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DecideItem not implemented")
 }
-func (UnimplementedQueuePeerServiceServer) ReplicateItem(context.Context, *ReplicateItemRequest) (*ReplicateItemResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method ReplicateItem not implemented")
-}
 func (UnimplementedQueuePeerServiceServer) DropItem(context.Context, *DropItemRequest) (*DropItemResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DropItem not implemented")
-}
-func (UnimplementedQueuePeerServiceServer) NotifyShardDead(context.Context, *NotifyShardDeadRequest) (*NotifyShardDeadResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method NotifyShardDead not implemented")
 }
 func (UnimplementedQueuePeerServiceServer) ApplyItem(context.Context, *ApplyItemRequest) (*ApplyItemResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ApplyItem not implemented")
@@ -326,24 +284,6 @@ func _QueuePeerService_DecideItem_Handler(srv interface{}, ctx context.Context, 
 	return interceptor(ctx, in, info, handler)
 }
 
-func _QueuePeerService_ReplicateItem_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ReplicateItemRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(QueuePeerServiceServer).ReplicateItem(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: QueuePeerService_ReplicateItem_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(QueuePeerServiceServer).ReplicateItem(ctx, req.(*ReplicateItemRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 func _QueuePeerService_DropItem_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(DropItemRequest)
 	if err := dec(in); err != nil {
@@ -358,24 +298,6 @@ func _QueuePeerService_DropItem_Handler(srv interface{}, ctx context.Context, de
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(QueuePeerServiceServer).DropItem(ctx, req.(*DropItemRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _QueuePeerService_NotifyShardDead_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(NotifyShardDeadRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(QueuePeerServiceServer).NotifyShardDead(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: QueuePeerService_NotifyShardDead_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(QueuePeerServiceServer).NotifyShardDead(ctx, req.(*NotifyShardDeadRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -422,16 +344,8 @@ var QueuePeerService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _QueuePeerService_DecideItem_Handler,
 		},
 		{
-			MethodName: "ReplicateItem",
-			Handler:    _QueuePeerService_ReplicateItem_Handler,
-		},
-		{
 			MethodName: "DropItem",
 			Handler:    _QueuePeerService_DropItem_Handler,
-		},
-		{
-			MethodName: "NotifyShardDead",
-			Handler:    _QueuePeerService_NotifyShardDead_Handler,
 		},
 		{
 			MethodName: "ApplyItem",

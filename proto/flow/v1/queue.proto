@@ -29,18 +29,9 @@ service QueuePeerService {
   // Returns QUEUE_ITEM_INVALID_STATE if the item is not claimed.
   rpc DecideItem(DecideItemRequest) returns (DecideItemResponse);
 
-  // Replicates an item to this shard as a backup copy. The owning shard calls
-  // this after Enqueue so exactly one backup holds the item for failover.
-  rpc ReplicateItem(ReplicateItemRequest) returns (ReplicateItemResponse);
-
   // Drops a backup copy of an item. Carries the generation UUID so a missed or
   // raced drop can never destroy a newer parking event's copy.
   rpc DropItem(DropItemRequest) returns (DropItemResponse);
-
-  // Notifies this shard that another shard of the queue is dead (lease
-  // eviction). The receiver fires its promotion path for any backup rows it
-  // holds owned by the dead shard.
-  rpc NotifyShardDead(NotifyShardDeadRequest) returns (NotifyShardDeadResponse);
 
   // Applies a broadcast write (generation-guarded apply) to this shard's
   // local store. The queue-service fans ApplyItem out to every living shard
@@ -92,9 +83,6 @@ message QueueItem {
   // Generation UUID disambiguating distinct parking events of the same
   // workitem. Stale backup copies are superseded by a newer generation.
   string generation_id = 7;
-  // True when this copy is a backup held on a non-owning shard. Owner copy
-  // = false. Routing (findOwner/routeGetItem) matches owner rows only.
-  bool is_backup = 8;
   // Choices is the item's metadata (R-5.2): the routing choices the caller
   // supplied at enqueue time. Populated via the Enqueue request; the
   // queue-service serves them generically in item reads. Empty when the
@@ -129,16 +117,6 @@ message DecideItemResponse {
   bool acknowledged = 1;
 }
 
-// ReplicateItemRequest carries a full QueueItem to be stored as a backup copy
-// on the receiving shard.
-message ReplicateItemRequest {
-  QueueItem item = 1;
-}
-
-message ReplicateItemResponse {
-  bool acknowledged = 1;
-}
-
 // ApplyItemRequest carries a full QueueItem to be applied (generation-guarded
 // CAS) on the receiving shard. Carries workitem_id, generation_id, owner
 // shard_id, status, timestamps, and choices so a shard can apply the write
@@ -159,16 +137,6 @@ message DropItemRequest {
 }
 
 message DropItemResponse {
-  bool acknowledged = 1;
-}
-
-// NotifyShardDeadRequest notifies a surviving shard that the named shard of
-// the queue is dead (lease eviction), triggering its promotion path.
-message NotifyShardDeadRequest {
-  string shard_id = 1;
-}
-
-message NotifyShardDeadResponse {
   bool acknowledged = 1;
 }
 
