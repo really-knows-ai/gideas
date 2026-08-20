@@ -376,6 +376,68 @@ func TestREST_PartialShardFailure_Returns503(t *testing.T) {
 	}
 }
 
+// TestREST_ConcurrentClaims_OneWins pins R-3.2's per-item in-flight guard on
+// the REST write path: two CONCURRENT POST /claim requests for the same item
+// are serialized by Registry.lockItem (now acquired by handleClaim), so exactly
+// one returns HTTP 200 with the claimed item and the other returns HTTP 409
+// QUEUE_ITEM_ALREADY_CLAIMED. Without the guard both requests could race the
+// CAS and neither deterministically wins.
+func TestREST_ConcurrentClaims_OneWins(t *testing.T) {
+	h := newRestHarness(t, []string{"say:a", "say:b", "say:c"})
+	seed := &flowv1.QueueItem{
+		WorkitemId: testWorkitemID, QueueName: testQueueName,
+		Status: testStatusWaiting, GenerationId: "0000000000000001",
+	}
+	for _, addr := range []string{"say:a", "say:b", "say:c"} {
+		h.shards[addr].setItem(seed)
+	}
+
+	const claimPath = "/queues/hitl-approval/wi-1/claim"
+	const attempts = 2
+	statuses := make([]int, attempts)
+	errBodies := make([]string, attempts)
+	var wg sync.WaitGroup
+	for i := range attempts {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			req := httptest.NewRequest(http.MethodPost, claimPath, nil)
+			w := httptest.NewRecorder()
+			h.handler.ServeHTTP(w, req)
+			statuses[i] = w.Code
+			errBodies[i] = w.Body.String()
+		}(i)
+	}
+	wg.Wait()
+
+	var ok, conflict int
+	for i := range attempts {
+		switch statuses[i] {
+		case http.StatusOK:
+			ok++
+		case http.StatusConflict:
+			conflict++
+			if !strings.Contains(errBodies[i], "QUEUE_ITEM_ALREADY_CLAIMED") {
+				t.Fatalf("409 body lacks QUEUE_ITEM_ALREADY_CLAIMED: %s", errBodies[i])
+			}
+		default:
+			t.Fatalf("claim attempt %d status = %d, want 200 or 409: %s", i, statuses[i], errBodies[i])
+		}
+	}
+	if ok != 1 || conflict != 1 {
+		t.Fatalf("ok=%d conflict=%d, want exactly one 200 and one 409", ok, conflict)
+	}
+
+	// The guard serialized the two claims into one committed transition, so
+	// every shard ends claimed.
+	for _, addr := range []string{"say:a", "say:b", "say:c"} {
+		got := h.shards[addr].serve()[testWorkitemID]
+		if got == nil || got.GetStatus() != testStatusClaimed {
+			t.Fatalf("shard %s final state = %+v, want claimed", addr, got)
+		}
+	}
+}
+
 func TestREST_Decide_MalformedBody_Returns400(t *testing.T) {
 	h := newRestHarness(t, []string{"say:a"})
 	h.shards["say:a"].setItem(&flowv1.QueueItem{WorkitemId: "wi-1", Status: "waiting", GenerationId: "0000000000000001"})

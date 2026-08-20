@@ -18,6 +18,8 @@ func (r *Registry) CancelQueuedItem(
 ) (*flowv1.CancelQueuedItemResponse, error) {
 	proxy := newPeerProxy(r)
 	defer proxy.close()
+	unlock := r.lockItem(req.GetWorkitemId())
+	defer unlock()
 	if err := proxy.decideBroadcast(ctx, req.GetQueueName(), req.GetWorkitemId(), ""); err != nil {
 		return nil, toItemGRPCError(err)
 	}
@@ -32,6 +34,8 @@ func (r *Registry) DecideQueuedItem(
 ) (*flowv1.DecideQueuedItemResponse, error) {
 	proxy := newPeerProxy(r)
 	defer proxy.close()
+	unlock := r.lockItem(req.GetWorkitemId())
+	defer unlock()
 	if err := proxy.decideBroadcast(ctx, req.GetQueueName(), req.GetWorkitemId(), req.GetChoice()); err != nil {
 		return nil, toItemGRPCError(err)
 	}

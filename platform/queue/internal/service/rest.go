@@ -83,6 +83,8 @@ func (s *RestServer) handleGetItem(w http.ResponseWriter, r *http.Request) {
 func (s *RestServer) handleClaim(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	id := r.PathValue("id")
+	unlock := s.reg.lockItem(id)
+	defer unlock()
 	proxy := newPeerProxy(s.reg)
 	defer proxy.close()
 	item, err := proxy.claimBroadcast(r.Context(), name, id)
@@ -94,7 +96,7 @@ func (s *RestServer) handleClaim(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleDecide broadcasts DecideItem (with optional choice body) to every
-// living shard.
+// living shard (serialized per item).
 func (s *RestServer) handleDecide(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	id := r.PathValue("id")
@@ -111,6 +113,8 @@ func (s *RestServer) handleDecide(w http.ResponseWriter, r *http.Request) {
 		choice = body.Choice
 	}
 
+	unlock := s.reg.lockItem(id)
+	defer unlock()
 	proxy := newPeerProxy(s.reg)
 	defer proxy.close()
 	if err := proxy.decideBroadcast(r.Context(), name, id, choice); err != nil {
@@ -120,10 +124,12 @@ func (s *RestServer) handleDecide(w http.ResponseWriter, r *http.Request) {
 	writeRestJSON(w, map[string]bool{"acknowledged": true})
 }
 
-// handleRelease broadcasts ReleaseItem to every living shard.
+// handleRelease broadcasts ReleaseItem to every living shard (serialized per item).
 func (s *RestServer) handleRelease(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	id := r.PathValue("id")
+	unlock := s.reg.lockItem(id)
+	defer unlock()
 	proxy := newPeerProxy(s.reg)
 	defer proxy.close()
 	item, err := proxy.releaseBroadcast(r.Context(), name, id)
