@@ -26,6 +26,7 @@ const (
 	QueuePeerService_ReplicateItem_FullMethodName   = "/flow.v1.QueuePeerService/ReplicateItem"
 	QueuePeerService_DropItem_FullMethodName        = "/flow.v1.QueuePeerService/DropItem"
 	QueuePeerService_NotifyShardDead_FullMethodName = "/flow.v1.QueuePeerService/NotifyShardDead"
+	QueuePeerService_ApplyItem_FullMethodName       = "/flow.v1.QueuePeerService/ApplyItem"
 )
 
 // QueuePeerServiceClient is the client API for QueuePeerService service.
@@ -63,6 +64,11 @@ type QueuePeerServiceClient interface {
 	// eviction). The receiver fires its promotion path for any backup rows it
 	// holds owned by the dead shard.
 	NotifyShardDead(ctx context.Context, in *NotifyShardDeadRequest, opts ...grpc.CallOption) (*NotifyShardDeadResponse, error)
+	// Applies a broadcast write (generation-guarded apply) to this shard's
+	// local store. The queue-service fans ApplyItem out to every living shard
+	// as the single serialized write funnel; each shard CAS-applies only if the
+	// carried generation supersedes its current one (see QueueItem.generation_id).
+	ApplyItem(ctx context.Context, in *ApplyItemRequest, opts ...grpc.CallOption) (*ApplyItemResponse, error)
 }
 
 type queuePeerServiceClient struct {
@@ -143,6 +149,16 @@ func (c *queuePeerServiceClient) NotifyShardDead(ctx context.Context, in *Notify
 	return out, nil
 }
 
+func (c *queuePeerServiceClient) ApplyItem(ctx context.Context, in *ApplyItemRequest, opts ...grpc.CallOption) (*ApplyItemResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ApplyItemResponse)
+	err := c.cc.Invoke(ctx, QueuePeerService_ApplyItem_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // QueuePeerServiceServer is the server API for QueuePeerService service.
 // All implementations must embed UnimplementedQueuePeerServiceServer
 // for forward compatibility.
@@ -178,6 +194,11 @@ type QueuePeerServiceServer interface {
 	// eviction). The receiver fires its promotion path for any backup rows it
 	// holds owned by the dead shard.
 	NotifyShardDead(context.Context, *NotifyShardDeadRequest) (*NotifyShardDeadResponse, error)
+	// Applies a broadcast write (generation-guarded apply) to this shard's
+	// local store. The queue-service fans ApplyItem out to every living shard
+	// as the single serialized write funnel; each shard CAS-applies only if the
+	// carried generation supersedes its current one (see QueueItem.generation_id).
+	ApplyItem(context.Context, *ApplyItemRequest) (*ApplyItemResponse, error)
 	mustEmbedUnimplementedQueuePeerServiceServer()
 }
 
@@ -208,6 +229,9 @@ func (UnimplementedQueuePeerServiceServer) DropItem(context.Context, *DropItemRe
 }
 func (UnimplementedQueuePeerServiceServer) NotifyShardDead(context.Context, *NotifyShardDeadRequest) (*NotifyShardDeadResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method NotifyShardDead not implemented")
+}
+func (UnimplementedQueuePeerServiceServer) ApplyItem(context.Context, *ApplyItemRequest) (*ApplyItemResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ApplyItem not implemented")
 }
 func (UnimplementedQueuePeerServiceServer) mustEmbedUnimplementedQueuePeerServiceServer() {}
 func (UnimplementedQueuePeerServiceServer) testEmbeddedByValue()                          {}
@@ -356,6 +380,24 @@ func _QueuePeerService_NotifyShardDead_Handler(srv interface{}, ctx context.Cont
 	return interceptor(ctx, in, info, handler)
 }
 
+func _QueuePeerService_ApplyItem_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ApplyItemRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(QueuePeerServiceServer).ApplyItem(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: QueuePeerService_ApplyItem_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(QueuePeerServiceServer).ApplyItem(ctx, req.(*ApplyItemRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // QueuePeerService_ServiceDesc is the grpc.ServiceDesc for QueuePeerService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -390,6 +432,10 @@ var QueuePeerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "NotifyShardDead",
 			Handler:    _QueuePeerService_NotifyShardDead_Handler,
+		},
+		{
+			MethodName: "ApplyItem",
+			Handler:    _QueuePeerService_ApplyItem_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
@@ -706,6 +752,368 @@ var QueueRegistryService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DecideQueuedItem",
 			Handler:    _QueueRegistryService_DecideQueuedItem_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "flow/v1/queue.proto",
+}
+
+const (
+	QueueGatewayService_Enqueue_FullMethodName        = "/flow.v1.QueueGatewayService/Enqueue"
+	QueueGatewayService_GetGlobalQueue_FullMethodName = "/flow.v1.QueueGatewayService/GetGlobalQueue"
+	QueueGatewayService_GetItem_FullMethodName        = "/flow.v1.QueueGatewayService/GetItem"
+	QueueGatewayService_Claim_FullMethodName          = "/flow.v1.QueueGatewayService/Claim"
+	QueueGatewayService_Release_FullMethodName        = "/flow.v1.QueueGatewayService/Release"
+	QueueGatewayService_Decide_FullMethodName         = "/flow.v1.QueueGatewayService/Decide"
+)
+
+// QueueGatewayServiceClient is the client API for QueueGatewayService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// QueueGatewayService is the SDK-facing gRPC surface for queue operations.
+// This is deliberately a SIBLING of QueueRegistryService, not an addition to
+// it: QueueRegistryService is the queue-service's internal registration/lease
+// surface (RegisterQueue/HeartbeatQueue/...), whereas this service is the
+// stable public contract the SDK's thin QueueManager client (PHASE_04) and the
+// write funnel (PHASE_03) compile against. Keeping the two concerns in separate
+// services preserves cohesion and lets the internal registry surface evolve
+// without churning the client-facing contract. Each HITL node replica points
+// its QueueManager at this service when FLOW_QUEUE_SERVICE_ADDR is set.
+//
+// ERROR MAPPING CONTRACT (pinned here, consumed by PHASE_03/04/07):
+//   - item not found            -> QUEUE_ITEM_NOT_FOUND
+//     gRPC NotFound (5)               -> HTTP 404
+//   - already claimed / invalid state     -> QUEUE_ITEM_ALREADY_CLAIMED /
+//     QUEUE_ITEM_INVALID_STATE
+//     gRPC AlreadyExists (6) / FailedPrecondition (9) -> HTTP 409
+//   - quorum not reached        -> QUEUE_UNAVAILABLE
+//     gRPC Unavailable (14)          -> HTTP 503
+//
+// The RPC names and shapes match the SDK QueueManager method set (R-1.3):
+// Enqueue/GetGlobalQueue/GetItem/Claim/Release/Decide.
+type QueueGatewayServiceClient interface {
+	// Parks a Workitem in the queue with the caller's choices.
+	Enqueue(ctx context.Context, in *EnqueueRequest, opts ...grpc.CallOption) (*EnqueueResponse, error)
+	// Returns every item in the queue, optionally filtered by status.
+	GetGlobalQueue(ctx context.Context, in *GetGlobalQueueRequest, opts ...grpc.CallOption) (*GetGlobalQueueResponse, error)
+	// Returns a single item by queue_name + workitem_id.
+	// Returns QUEUE_ITEM_NOT_FOUND if the item does not exist.
+	GetItem(ctx context.Context, in *GetItemRequest, opts ...grpc.CallOption) (*GetItemResponse, error)
+	// Claims a waiting item.
+	// Returns QUEUE_ITEM_NOT_FOUND if the item does not exist.
+	// Returns QUEUE_ITEM_ALREADY_CLAIMED if the item is already claimed.
+	Claim(ctx context.Context, in *ClaimRequest, opts ...grpc.CallOption) (*ClaimResponse, error)
+	// Releases a claimed item back to waiting.
+	// Returns QUEUE_ITEM_NOT_FOUND if the item does not exist.
+	// Returns QUEUE_ITEM_INVALID_STATE if the item is not claimed.
+	Release(ctx context.Context, in *ReleaseRequest, opts ...grpc.CallOption) (*ReleaseResponse, error)
+	// Decides a claimed item (removes it from the queue) and records the choice.
+	// Returns QUEUE_ITEM_NOT_FOUND if the item does not exist.
+	// Returns QUEUE_ITEM_INVALID_STATE if the item is not claimed.
+	Decide(ctx context.Context, in *DecideRequest, opts ...grpc.CallOption) (*DecideResponse, error)
+}
+
+type queueGatewayServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewQueueGatewayServiceClient(cc grpc.ClientConnInterface) QueueGatewayServiceClient {
+	return &queueGatewayServiceClient{cc}
+}
+
+func (c *queueGatewayServiceClient) Enqueue(ctx context.Context, in *EnqueueRequest, opts ...grpc.CallOption) (*EnqueueResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(EnqueueResponse)
+	err := c.cc.Invoke(ctx, QueueGatewayService_Enqueue_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *queueGatewayServiceClient) GetGlobalQueue(ctx context.Context, in *GetGlobalQueueRequest, opts ...grpc.CallOption) (*GetGlobalQueueResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetGlobalQueueResponse)
+	err := c.cc.Invoke(ctx, QueueGatewayService_GetGlobalQueue_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *queueGatewayServiceClient) GetItem(ctx context.Context, in *GetItemRequest, opts ...grpc.CallOption) (*GetItemResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetItemResponse)
+	err := c.cc.Invoke(ctx, QueueGatewayService_GetItem_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *queueGatewayServiceClient) Claim(ctx context.Context, in *ClaimRequest, opts ...grpc.CallOption) (*ClaimResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ClaimResponse)
+	err := c.cc.Invoke(ctx, QueueGatewayService_Claim_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *queueGatewayServiceClient) Release(ctx context.Context, in *ReleaseRequest, opts ...grpc.CallOption) (*ReleaseResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReleaseResponse)
+	err := c.cc.Invoke(ctx, QueueGatewayService_Release_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *queueGatewayServiceClient) Decide(ctx context.Context, in *DecideRequest, opts ...grpc.CallOption) (*DecideResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DecideResponse)
+	err := c.cc.Invoke(ctx, QueueGatewayService_Decide_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// QueueGatewayServiceServer is the server API for QueueGatewayService service.
+// All implementations must embed UnimplementedQueueGatewayServiceServer
+// for forward compatibility.
+//
+// QueueGatewayService is the SDK-facing gRPC surface for queue operations.
+// This is deliberately a SIBLING of QueueRegistryService, not an addition to
+// it: QueueRegistryService is the queue-service's internal registration/lease
+// surface (RegisterQueue/HeartbeatQueue/...), whereas this service is the
+// stable public contract the SDK's thin QueueManager client (PHASE_04) and the
+// write funnel (PHASE_03) compile against. Keeping the two concerns in separate
+// services preserves cohesion and lets the internal registry surface evolve
+// without churning the client-facing contract. Each HITL node replica points
+// its QueueManager at this service when FLOW_QUEUE_SERVICE_ADDR is set.
+//
+// ERROR MAPPING CONTRACT (pinned here, consumed by PHASE_03/04/07):
+//   - item not found            -> QUEUE_ITEM_NOT_FOUND
+//     gRPC NotFound (5)               -> HTTP 404
+//   - already claimed / invalid state     -> QUEUE_ITEM_ALREADY_CLAIMED /
+//     QUEUE_ITEM_INVALID_STATE
+//     gRPC AlreadyExists (6) / FailedPrecondition (9) -> HTTP 409
+//   - quorum not reached        -> QUEUE_UNAVAILABLE
+//     gRPC Unavailable (14)          -> HTTP 503
+//
+// The RPC names and shapes match the SDK QueueManager method set (R-1.3):
+// Enqueue/GetGlobalQueue/GetItem/Claim/Release/Decide.
+type QueueGatewayServiceServer interface {
+	// Parks a Workitem in the queue with the caller's choices.
+	Enqueue(context.Context, *EnqueueRequest) (*EnqueueResponse, error)
+	// Returns every item in the queue, optionally filtered by status.
+	GetGlobalQueue(context.Context, *GetGlobalQueueRequest) (*GetGlobalQueueResponse, error)
+	// Returns a single item by queue_name + workitem_id.
+	// Returns QUEUE_ITEM_NOT_FOUND if the item does not exist.
+	GetItem(context.Context, *GetItemRequest) (*GetItemResponse, error)
+	// Claims a waiting item.
+	// Returns QUEUE_ITEM_NOT_FOUND if the item does not exist.
+	// Returns QUEUE_ITEM_ALREADY_CLAIMED if the item is already claimed.
+	Claim(context.Context, *ClaimRequest) (*ClaimResponse, error)
+	// Releases a claimed item back to waiting.
+	// Returns QUEUE_ITEM_NOT_FOUND if the item does not exist.
+	// Returns QUEUE_ITEM_INVALID_STATE if the item is not claimed.
+	Release(context.Context, *ReleaseRequest) (*ReleaseResponse, error)
+	// Decides a claimed item (removes it from the queue) and records the choice.
+	// Returns QUEUE_ITEM_NOT_FOUND if the item does not exist.
+	// Returns QUEUE_ITEM_INVALID_STATE if the item is not claimed.
+	Decide(context.Context, *DecideRequest) (*DecideResponse, error)
+	mustEmbedUnimplementedQueueGatewayServiceServer()
+}
+
+// UnimplementedQueueGatewayServiceServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedQueueGatewayServiceServer struct{}
+
+func (UnimplementedQueueGatewayServiceServer) Enqueue(context.Context, *EnqueueRequest) (*EnqueueResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Enqueue not implemented")
+}
+func (UnimplementedQueueGatewayServiceServer) GetGlobalQueue(context.Context, *GetGlobalQueueRequest) (*GetGlobalQueueResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetGlobalQueue not implemented")
+}
+func (UnimplementedQueueGatewayServiceServer) GetItem(context.Context, *GetItemRequest) (*GetItemResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetItem not implemented")
+}
+func (UnimplementedQueueGatewayServiceServer) Claim(context.Context, *ClaimRequest) (*ClaimResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Claim not implemented")
+}
+func (UnimplementedQueueGatewayServiceServer) Release(context.Context, *ReleaseRequest) (*ReleaseResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Release not implemented")
+}
+func (UnimplementedQueueGatewayServiceServer) Decide(context.Context, *DecideRequest) (*DecideResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Decide not implemented")
+}
+func (UnimplementedQueueGatewayServiceServer) mustEmbedUnimplementedQueueGatewayServiceServer() {}
+func (UnimplementedQueueGatewayServiceServer) testEmbeddedByValue()                             {}
+
+// UnsafeQueueGatewayServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to QueueGatewayServiceServer will
+// result in compilation errors.
+type UnsafeQueueGatewayServiceServer interface {
+	mustEmbedUnimplementedQueueGatewayServiceServer()
+}
+
+func RegisterQueueGatewayServiceServer(s grpc.ServiceRegistrar, srv QueueGatewayServiceServer) {
+	// If the following call panics, it indicates UnimplementedQueueGatewayServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&QueueGatewayService_ServiceDesc, srv)
+}
+
+func _QueueGatewayService_Enqueue_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(EnqueueRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(QueueGatewayServiceServer).Enqueue(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: QueueGatewayService_Enqueue_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(QueueGatewayServiceServer).Enqueue(ctx, req.(*EnqueueRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _QueueGatewayService_GetGlobalQueue_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetGlobalQueueRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(QueueGatewayServiceServer).GetGlobalQueue(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: QueueGatewayService_GetGlobalQueue_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(QueueGatewayServiceServer).GetGlobalQueue(ctx, req.(*GetGlobalQueueRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _QueueGatewayService_GetItem_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetItemRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(QueueGatewayServiceServer).GetItem(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: QueueGatewayService_GetItem_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(QueueGatewayServiceServer).GetItem(ctx, req.(*GetItemRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _QueueGatewayService_Claim_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ClaimRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(QueueGatewayServiceServer).Claim(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: QueueGatewayService_Claim_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(QueueGatewayServiceServer).Claim(ctx, req.(*ClaimRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _QueueGatewayService_Release_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReleaseRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(QueueGatewayServiceServer).Release(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: QueueGatewayService_Release_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(QueueGatewayServiceServer).Release(ctx, req.(*ReleaseRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _QueueGatewayService_Decide_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DecideRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(QueueGatewayServiceServer).Decide(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: QueueGatewayService_Decide_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(QueueGatewayServiceServer).Decide(ctx, req.(*DecideRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// QueueGatewayService_ServiceDesc is the grpc.ServiceDesc for QueueGatewayService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var QueueGatewayService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "flow.v1.QueueGatewayService",
+	HandlerType: (*QueueGatewayServiceServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "Enqueue",
+			Handler:    _QueueGatewayService_Enqueue_Handler,
+		},
+		{
+			MethodName: "GetGlobalQueue",
+			Handler:    _QueueGatewayService_GetGlobalQueue_Handler,
+		},
+		{
+			MethodName: "GetItem",
+			Handler:    _QueueGatewayService_GetItem_Handler,
+		},
+		{
+			MethodName: "Claim",
+			Handler:    _QueueGatewayService_Claim_Handler,
+		},
+		{
+			MethodName: "Release",
+			Handler:    _QueueGatewayService_Release_Handler,
+		},
+		{
+			MethodName: "Decide",
+			Handler:    _QueueGatewayService_Decide_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

@@ -41,6 +41,12 @@ service QueuePeerService {
   // eviction). The receiver fires its promotion path for any backup rows it
   // holds owned by the dead shard.
   rpc NotifyShardDead(NotifyShardDeadRequest) returns (NotifyShardDeadResponse);
+
+  // Applies a broadcast write (generation-guarded apply) to this shard's
+  // local store. The queue-service fans ApplyItem out to every living shard
+  // as the single serialized write funnel; each shard CAS-applies only if the
+  // carried generation supersedes its current one (see QueueItem.generation_id).
+  rpc ApplyItem(ApplyItemRequest) returns (ApplyItemResponse);
 }
 
 // GetLocalQueueRequest specifies filtering and pagination for queue list queries.
@@ -59,6 +65,11 @@ message GetLocalQueueResponse {
   int32 total = 2;
   int32 limit = 3;
   int32 offset = 4;
+  // Serve-side tie-break tag: the shard_id that served this response. On
+  // scatter-gather reads the queue-service aggregates the same copy from every
+  // shard; this field lets it break ties deterministically by which shard
+  // served each item (R-3.6 owner tie-break).
+  string served_by_shard_id = 5;
 }
 
 // QueueItem represents a Workitem parked in the HITL queue.
@@ -84,6 +95,11 @@ message QueueItem {
   // True when this copy is a backup held on a non-owning shard. Owner copy
   // = false. Routing (findOwner/routeGetItem) matches owner rows only.
   bool is_backup = 8;
+  // Choices is the item's metadata (R-5.2): the routing choices the caller
+  // supplied at enqueue time. Populated via the Enqueue request; the
+  // queue-service serves them generically in item reads. Empty when the
+  // item was enqueued without choices or the caller did not supply any.
+  repeated string choices = 9;
 }
 
 message ClaimItemRequest {
@@ -120,6 +136,18 @@ message ReplicateItemRequest {
 }
 
 message ReplicateItemResponse {
+  bool acknowledged = 1;
+}
+
+// ApplyItemRequest carries a full QueueItem to be applied (generation-guarded
+// CAS) on the receiving shard. Carries workitem_id, generation_id, owner
+// shard_id, status, timestamps, and choices so a shard can apply the write
+// exactly as the queue-service's serialized funnel issued it.
+message ApplyItemRequest {
+  QueueItem item = 1;
+}
+
+message ApplyItemResponse {
   bool acknowledged = 1;
 }
 
@@ -234,5 +262,111 @@ message DecideQueuedItemRequest {
 }
 
 message DecideQueuedItemResponse {
+  bool acknowledged = 1;
+}
+
+// EnqueueRequest parks a Workitem in the queue. The caller supplies the
+// workitem_id, the queue_name it belongs to, and its choices (R-5.2) —
+// the routing choices served to the human when the item is reviewed. Choices
+// ride on this request so the queue-service persists them as item metadata at
+// enqueue time (per the choices-resolution decision).
+message EnqueueRequest {
+  string workitem_id = 1;
+  string queue_name = 2;
+  repeated string choices = 3;
+}
+
+message EnqueueResponse {
+  bool acknowledged = 1;
+}
+
+// QueueGatewayService is the SDK-facing gRPC surface for queue operations.
+// This is deliberately a SIBLING of QueueRegistryService, not an addition to
+// it: QueueRegistryService is the queue-service's internal registration/lease
+// surface (RegisterQueue/HeartbeatQueue/...), whereas this service is the
+// stable public contract the SDK's thin QueueManager client (PHASE_04) and the
+// write funnel (PHASE_03) compile against. Keeping the two concerns in separate
+// services preserves cohesion and lets the internal registry surface evolve
+// without churning the client-facing contract. Each HITL node replica points
+// its QueueManager at this service when FLOW_QUEUE_SERVICE_ADDR is set.
+//
+// ERROR MAPPING CONTRACT (pinned here, consumed by PHASE_03/04/07):
+//   - item not found            -> QUEUE_ITEM_NOT_FOUND
+//         gRPC NotFound (5)               -> HTTP 404
+//   - already claimed / invalid state     -> QUEUE_ITEM_ALREADY_CLAIMED /
+//                                           QUEUE_ITEM_INVALID_STATE
+//         gRPC AlreadyExists (6) / FailedPrecondition (9) -> HTTP 409
+//   - quorum not reached        -> QUEUE_UNAVAILABLE
+//         gRPC Unavailable (14)          -> HTTP 503
+// The RPC names and shapes match the SDK QueueManager method set (R-1.3):
+// Enqueue/GetGlobalQueue/GetItem/Claim/Release/Decide.
+service QueueGatewayService {
+  // Parks a Workitem in the queue with the caller's choices.
+  rpc Enqueue(EnqueueRequest) returns (EnqueueResponse);
+  // Returns every item in the queue, optionally filtered by status.
+  rpc GetGlobalQueue(GetGlobalQueueRequest) returns (GetGlobalQueueResponse);
+  // Returns a single item by queue_name + workitem_id.
+  // Returns QUEUE_ITEM_NOT_FOUND if the item does not exist.
+  rpc GetItem(GetItemRequest) returns (GetItemResponse);
+  // Claims a waiting item.
+  // Returns QUEUE_ITEM_NOT_FOUND if the item does not exist.
+  // Returns QUEUE_ITEM_ALREADY_CLAIMED if the item is already claimed.
+  rpc Claim(ClaimRequest) returns (ClaimResponse);
+  // Releases a claimed item back to waiting.
+  // Returns QUEUE_ITEM_NOT_FOUND if the item does not exist.
+  // Returns QUEUE_ITEM_INVALID_STATE if the item is not claimed.
+  rpc Release(ReleaseRequest) returns (ReleaseResponse);
+  // Decides a claimed item (removes it from the queue) and records the choice.
+  // Returns QUEUE_ITEM_NOT_FOUND if the item does not exist.
+  // Returns QUEUE_ITEM_INVALID_STATE if the item is not claimed.
+  rpc Decide(DecideRequest) returns (DecideResponse);
+}
+
+message GetGlobalQueueRequest {
+  string queue_name = 1;
+  // Optional status filter ("waiting", "claimed"); empty for all.
+  string status = 2;
+}
+
+message GetGlobalQueueResponse {
+  repeated QueueItem items = 1;
+}
+
+message GetItemRequest {
+  string queue_name = 1;
+  string workitem_id = 2;
+}
+
+message GetItemResponse {
+  QueueItem item = 1;
+}
+
+message ClaimRequest {
+  string queue_name = 1;
+  string workitem_id = 2;
+}
+
+message ClaimResponse {
+  QueueItem item = 1;
+}
+
+message ReleaseRequest {
+  string queue_name = 1;
+  string workitem_id = 2;
+}
+
+message ReleaseResponse {
+  QueueItem item = 1;
+}
+
+message DecideRequest {
+  string queue_name = 1;
+  string workitem_id = 2;
+  // The human's routing choice. Empty string if no choice is associated
+  // (e.g. hitl-appraise which uses a fixed output).
+  string choice = 3;
+}
+
+message DecideResponse {
   bool acknowledged = 1;
 }
