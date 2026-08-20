@@ -76,14 +76,14 @@ func TestEnqueueFansOutToAllLivingShards(t *testing.T) {
 		t.Fatal("enqueue not acknowledged")
 	}
 
-	var gens []string
+	gens := make([]string, 0, len(h.addrs))
 	owner := ""
 	for _, addr := range h.addrs {
 		f := h.shards[addr]
 		if applied := f.appliedCalls(); len(applied) != 1 {
 			t.Fatalf("shard %s received %d ApplyItem calls, want exactly 1", f.shardID, len(applied))
 		}
-		item := f.serve("wi-1")
+		item := f.serve()[testWorkitemID]
 		if item == nil {
 			t.Fatalf("shard %s does not hold wi-1 after enqueue", f.shardID)
 		}
@@ -149,7 +149,7 @@ func TestEnqueueQuorumAck(t *testing.T) {
 			t.Fatal("enqueue not acknowledged")
 		}
 		for _, addr := range []string{"addr-shard-a", "addr-shard-b", "addr-shard-c"} {
-			if h.shards[addr].serve("wi-1") == nil {
+			if h.shards[addr].serve()[testWorkitemID] == nil {
 				t.Fatalf("shard %s does not hold wi-1 after quorum ack", h.shards[addr].shardID)
 			}
 		}
@@ -182,7 +182,10 @@ func TestEnqueueQuorumAck(t *testing.T) {
 func TestConcurrentClaims_OneWins(t *testing.T) {
 	h := newFunnelHarness(t, "shard-a", "shard-b", "shard-c")
 	// Seed the pre-enqueued waiting item on every shard.
-	seed := &flowv1.QueueItem{WorkitemId: "wi-1", QueueName: "hitl-approval", Status: "waiting", GenerationId: "0000000000000001"}
+	seed := &flowv1.QueueItem{
+		WorkitemId: testWorkitemID, QueueName: testQueueName,
+		Status: testStatusWaiting, GenerationId: "0000000000000001",
+	}
 	for _, addr := range h.addrs {
 		h.shards[addr].setItem(seed)
 	}
@@ -226,8 +229,8 @@ func TestConcurrentClaims_OneWins(t *testing.T) {
 	// The in-flight guard serialized the two Claims into one committed
 	// transition, so every shard ends in the identical claimed state.
 	for _, addr := range h.addrs {
-		got := h.shards[addr].serve("wi-1")
-		if got == nil || got.GetStatus() != "claimed" {
+		got := h.shards[addr].serve()[testWorkitemID]
+		if got == nil || got.GetStatus() != testStatusClaimed {
 			t.Fatalf("shard %s final state = %+v, want claimed", h.shards[addr].shardID, got)
 		}
 	}
@@ -252,9 +255,10 @@ func TestGenerationGuard_NoDowngrade(t *testing.T) {
 		t.Fatalf("apply older: %v", err)
 	}
 
-	got := f.serve("wi-1")
+	got := f.serve()[testWorkitemID]
 	if got == nil || got.GetGenerationId() != "0000000000000002" {
-		t.Fatalf("after older re-delivery the shard holds generation %q, want the newer 0000000000000002", got.GetGenerationId())
+		t.Fatalf("after older re-delivery the shard holds generation %q, want "+
+			"the newer 0000000000000002", got.GetGenerationId())
 	}
 }
 
@@ -263,25 +267,32 @@ func TestGenerationGuard_NoDowngrade(t *testing.T) {
 // broadcast removes the item from EVERY shard with an ack.
 func TestClaimReleaseDecideBroadcast(t *testing.T) {
 	h := newFunnelHarness(t, "shard-a", "shard-b", "shard-c")
-	seed := &flowv1.QueueItem{WorkitemId: "wi-1", QueueName: "hitl-approval", Status: "waiting", GenerationId: "0000000000000001"}
+	seed := &flowv1.QueueItem{
+		WorkitemId: testWorkitemID, QueueName: testQueueName,
+		Status: testStatusWaiting, GenerationId: "0000000000000001",
+	}
 	for _, addr := range h.addrs {
 		h.shards[addr].setItem(seed)
 	}
 
 	ctx := context.Background()
 	// Claim broadcast: every shard transitions waiting→claimed.
-	if _, err := h.gateway.Claim(ctx, &flowv1.ClaimRequest{QueueName: "hitl-approval", WorkitemId: "wi-1"}); err != nil {
+	if _, err := h.gateway.Claim(ctx, &flowv1.ClaimRequest{
+		QueueName: testQueueName, WorkitemId: testWorkitemID,
+	}); err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
 	for _, addr := range h.addrs {
-		got := h.shards[addr].serve("wi-1")
-		if got == nil || got.GetStatus() != "claimed" {
+		got := h.shards[addr].serve()[testWorkitemID]
+		if got == nil || got.GetStatus() != testStatusClaimed {
 			t.Fatalf("shard %s after claim = %+v, want claimed", h.shards[addr].shardID, got)
 		}
 	}
 
 	// Decide broadcast: the item is removed from EVERY shard and acked.
-	dec, err := h.gateway.Decide(ctx, &flowv1.DecideRequest{QueueName: "hitl-approval", WorkitemId: "wi-1", Choice: "approve"})
+	dec, err := h.gateway.Decide(ctx, &flowv1.DecideRequest{
+		QueueName: testQueueName, WorkitemId: testWorkitemID, Choice: testChoiceApprove,
+	})
 	if err != nil {
 		t.Fatalf("Decide: %v", err)
 	}
@@ -290,8 +301,8 @@ func TestClaimReleaseDecideBroadcast(t *testing.T) {
 	}
 	for _, addr := range h.addrs {
 		f := h.shards[addr]
-		if got := f.serve("wi-1"); got != nil {
-			t.Fatalf("shard %s still holds wi-1 after decide: %+v", f.shardID, got)
+		if got := f.serve()[testWorkitemID]; got != nil {
+			t.Fatalf("shard %s still holds %s after decide: %+v", f.shardID, testWorkitemID, got)
 		}
 		if decided := f.decidedCalls(); len(decided) != 1 {
 			t.Fatalf("shard %s received %d DecideItem calls, want 1", f.shardID, len(decided))

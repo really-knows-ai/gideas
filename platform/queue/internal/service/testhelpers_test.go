@@ -14,6 +14,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
+	"google.golang.org/protobuf/proto"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -48,6 +49,16 @@ const testNamespace = "test"
 const (
 	testShard0     = "shard-0"
 	testShard0Addr = "10.0.0.1:50053"
+)
+
+// Common test constants for queue/workitem/choice literals that recur across
+// tests (goconst).
+const (
+	testQueueName     = "hitl-approval"
+	testWorkitemID    = "wi-1"
+	testChoiceApprove = "approve"
+	testStatusWaiting = "waiting"
+	testStatusClaimed = "claimed"
 )
 
 // newTestScheme builds a scheme with client-go + flowv1 types.
@@ -185,41 +196,6 @@ func (f *fakePeerShard) DecideItem(
 	return &flowv1.DecideItemResponse{Acknowledged: true}, nil
 }
 
-// setItems replaces the fake's served item list.
-func (f *fakePeerShard) setItems(items ...*flowv1.QueueItem) {
-	f.mu.Lock()
-	f.items = items
-	f.mu.Unlock()
-}
-
-// setClaimsError makes ClaimItem return the given error once set (injection
-// knob mirroring the SDK's failBeats pattern).
-func (f *fakePeerShard) setClaimsError(err error) {
-	f.mu.Lock()
-	f.claimErr = err
-	f.mu.Unlock()
-}
-
-// setDecideError makes DecideItem return the given error once set.
-func (f *fakePeerShard) setDecideError(err error) {
-	f.mu.Lock()
-	f.decideErr = err
-	f.mu.Unlock()
-}
-
-// setLocalError makes GetLocalQueue return the given error once set.
-func (f *fakePeerShard) setLocalError(err error) {
-	f.mu.Lock()
-	f.localErr = err
-	f.mu.Unlock()
-}
-
-func (f *fakePeerShard) decidedCalls() []*flowv1.DecideItemRequest {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.decided
-}
-
 // failDialer returns errShardUnavailable immediately without dialing any
 // network. Used by lease tests that only assert CR state changes and must not
 // let any proxy op hit real addresses.
@@ -248,9 +224,7 @@ type fakeMirrorShard struct {
 	mu      sync.Mutex
 	store   map[string]*flowv1.QueueItem
 	applied []*flowv1.QueueItem
-	claimed []string
 	decided []*flowv1.DecideItemRequest
-	dropped []string
 
 	// Error-injection knobs (gRPC status errors, mirrors the SDK's failBeats
 	// pattern). When set the corresponding handler returns the error, letting
@@ -286,7 +260,9 @@ func newFakeMirrorShard(t *testing.T, shardID string) *fakeMirrorShard {
 // only if the carried generation is >= the stored one (fixed-width time-ordered
 // hex so >= is the correct ordering). An older re-delivery is a no-op but still
 // acks. Records every apply for assertions.
-func (f *fakeMirrorShard) ApplyItem(_ context.Context, req *flowv1.ApplyItemRequest) (*flowv1.ApplyItemResponse, error) {
+func (f *fakeMirrorShard) ApplyItem(
+	_ context.Context, req *flowv1.ApplyItemRequest,
+) (*flowv1.ApplyItemResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.applyErr != nil {
@@ -298,8 +274,7 @@ func (f *fakeMirrorShard) ApplyItem(_ context.Context, req *flowv1.ApplyItemRequ
 	}
 	cur, ok := f.store[item.GetWorkitemId()]
 	if !ok || item.GetGenerationId() >= cur.GetGenerationId() {
-		cp := *item
-		f.store[item.GetWorkitemId()] = &cp
+		f.store[item.GetWorkitemId()] = proto.Clone(item).(*flowv1.QueueItem)
 	}
 	f.applied = append(f.applied, item)
 	return &flowv1.ApplyItemResponse{Acknowledged: true}, nil
@@ -307,7 +282,9 @@ func (f *fakeMirrorShard) ApplyItem(_ context.Context, req *flowv1.ApplyItemRequ
 
 // GetLocalQueue returns the stored items (optionally status-filtered) with the
 // response's served_by_shard_id set to this shard's id for the owner tie-break.
-func (f *fakeMirrorShard) GetLocalQueue(_ context.Context, req *flowv1.GetLocalQueueRequest) (*flowv1.GetLocalQueueResponse, error) {
+func (f *fakeMirrorShard) GetLocalQueue(
+	_ context.Context, req *flowv1.GetLocalQueueRequest,
+) (*flowv1.GetLocalQueueResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.localErr != nil {
@@ -318,15 +295,16 @@ func (f *fakeMirrorShard) GetLocalQueue(_ context.Context, req *flowv1.GetLocalQ
 		if req.GetStatus() != "" && it.GetStatus() != req.GetStatus() {
 			continue
 		}
-		cp := *it
-		items = append(items, &cp)
+		items = append(items, proto.Clone(it).(*flowv1.QueueItem))
 	}
 	return &flowv1.GetLocalQueueResponse{Items: items, ServedByShardId: f.shardID}, nil
 }
 
 // ClaimItem is the waiting→claimed CAS. A second claim of an already-claimed
 // item returns gRPC AlreadyExists; an absent item returns NotFound.
-func (f *fakeMirrorShard) ClaimItem(_ context.Context, req *flowv1.ClaimItemRequest) (*flowv1.ClaimItemResponse, error) {
+func (f *fakeMirrorShard) ClaimItem(
+	_ context.Context, req *flowv1.ClaimItemRequest,
+) (*flowv1.ClaimItemResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.claimErr != nil {
@@ -337,19 +315,20 @@ func (f *fakeMirrorShard) ClaimItem(_ context.Context, req *flowv1.ClaimItemRequ
 	if !ok {
 		return nil, status.Error(codes.NotFound, "item not found")
 	}
-	if it.GetStatus() != "waiting" {
+	if it.GetStatus() != testStatusWaiting {
 		return nil, status.Error(codes.AlreadyExists, "item already claimed")
 	}
-	cp := *it
-	cp.Status = "claimed"
-	f.store[id] = &cp
-	f.claimed = append(f.claimed, id)
-	return &flowv1.ClaimItemResponse{Item: &cp}, nil
+	cp := proto.Clone(it).(*flowv1.QueueItem)
+	cp.Status = testStatusClaimed
+	f.store[id] = cp
+	return &flowv1.ClaimItemResponse{Item: cp}, nil
 }
 
 // ReleaseItem is the claimed→waiting CAS. Invalid (non-claimed) → FailedPrecondition;
 // absent → NotFound.
-func (f *fakeMirrorShard) ReleaseItem(_ context.Context, req *flowv1.ReleaseItemRequest) (*flowv1.ReleaseItemResponse, error) {
+func (f *fakeMirrorShard) ReleaseItem(
+	_ context.Context, req *flowv1.ReleaseItemRequest,
+) (*flowv1.ReleaseItemResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	id := req.GetWorkitemId()
@@ -357,18 +336,20 @@ func (f *fakeMirrorShard) ReleaseItem(_ context.Context, req *flowv1.ReleaseItem
 	if !ok {
 		return nil, status.Error(codes.NotFound, "item not found")
 	}
-	if it.GetStatus() != "claimed" {
+	if it.GetStatus() != testStatusClaimed {
 		return nil, status.Error(codes.FailedPrecondition, "item not claimed")
 	}
-	cp := *it
-	cp.Status = "waiting"
-	f.store[id] = &cp
-	return &flowv1.ReleaseItemResponse{Item: &cp}, nil
+	cp := proto.Clone(it).(*flowv1.QueueItem)
+	cp.Status = testStatusWaiting
+	f.store[id] = cp
+	return &flowv1.ReleaseItemResponse{Item: cp}, nil
 }
 
 // DecideItem deletes the claimed row. Invalid (non-claimed) → FailedPrecondition;
 // absent → NotFound.
-func (f *fakeMirrorShard) DecideItem(_ context.Context, req *flowv1.DecideItemRequest) (*flowv1.DecideItemResponse, error) {
+func (f *fakeMirrorShard) DecideItem(
+	_ context.Context, req *flowv1.DecideItemRequest,
+) (*flowv1.DecideItemResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.decideErr != nil {
@@ -379,7 +360,7 @@ func (f *fakeMirrorShard) DecideItem(_ context.Context, req *flowv1.DecideItemRe
 	if !ok {
 		return nil, status.Error(codes.NotFound, "item not found")
 	}
-	if it.GetStatus() != "claimed" {
+	if it.GetStatus() != testStatusClaimed {
 		return nil, status.Error(codes.FailedPrecondition, "item not claimed")
 	}
 	delete(f.store, id)
@@ -395,29 +376,26 @@ func (f *fakeMirrorShard) DropItem(_ context.Context, req *flowv1.DropItemReques
 	if it, ok := f.store[req.GetWorkitemId()]; ok && it.GetGenerationId() == req.GetGenerationId() {
 		delete(f.store, req.GetWorkitemId())
 	}
-	f.dropped = append(f.dropped, req.GetWorkitemId())
 	return &flowv1.DropItemResponse{Acknowledged: true}, nil
 }
 
-// serve returns the item this shard holds for workitemID (nil if absent). Test
+// serve returns a copy of this shard's store, keyed by workitem id. Test
 // helper for "every shard holds it" checks.
-func (f *fakeMirrorShard) serve(workitemID string) *flowv1.QueueItem {
+func (f *fakeMirrorShard) serve() map[string]*flowv1.QueueItem {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	it, ok := f.store[workitemID]
-	if !ok {
-		return nil
+	out := make(map[string]*flowv1.QueueItem, len(f.store))
+	for id, it := range f.store {
+		out[id] = proto.Clone(it).(*flowv1.QueueItem)
 	}
-	cp := *it
-	return &cp
+	return out
 }
 
 // setItem directly seeds the store (test setup, bypassing the wire).
 func (f *fakeMirrorShard) setItem(item *flowv1.QueueItem) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	cp := *item
-	f.store[item.GetWorkitemId()] = &cp
+	f.store[item.GetWorkitemId()] = proto.Clone(item).(*flowv1.QueueItem)
 }
 
 func (f *fakeMirrorShard) appliedCalls() []*flowv1.QueueItem {
@@ -426,22 +404,10 @@ func (f *fakeMirrorShard) appliedCalls() []*flowv1.QueueItem {
 	return f.applied
 }
 
-func (f *fakeMirrorShard) claimedCalls() []string {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.claimed
-}
-
 func (f *fakeMirrorShard) decidedCalls() []*flowv1.DecideItemRequest {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.decided
-}
-
-func (f *fakeMirrorShard) droppedCalls() []string {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.dropped
 }
 
 func (f *fakeMirrorShard) setApplyError(err error) {

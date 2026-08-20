@@ -76,7 +76,7 @@ func TestREST_GetQueues_ListsRegistered(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &names); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if len(names) != 1 || names[0] != "hitl-approval" {
+	if len(names) != 1 || names[0] != testQueueName {
 		t.Fatalf("queues = %v, want [hitl-approval]", names)
 	}
 }
@@ -127,7 +127,7 @@ func TestREST_GetItem_ProxiesToLivingShard(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &item); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if item.GetWorkitemId() != "wi-1" {
+	if item.GetWorkitemId() != testWorkitemID {
 		t.Fatalf("item = %v", item)
 	}
 }
@@ -157,7 +157,7 @@ func TestREST_ClaimDecideRelease_ProxyPath(t *testing.T) {
 				if len(got) != 1 {
 					t.Fatalf("decide reached the shard %d times, want 1", len(got))
 				}
-				if got[0].GetChoice() != "approve" {
+				if got[0].GetChoice() != testChoiceApprove {
 					t.Fatalf("decide choice = %q, want %q", got[0].GetChoice(), "approve")
 				}
 			}
