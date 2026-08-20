@@ -295,6 +295,10 @@ func (m *Manager) Decide(ctx context.Context, workitemID, choice string) error {
 // only works when Enqueue/Decide/WaitForDecision all run on the same Manager
 // instance. PHASE_06 replaces this with EventBus pub/sub so decisions can be
 // observed across processes and shards.
+//
+// ponytail: the decCh map grows by one buffered channel per workitemID and is
+// never reclaimed, so a long-running HITL node leaks one entry per enqueued
+// workitem over time — slow but real until PHASE_06 drops WaitForDecision.
 func (m *Manager) WaitForDecision(ctx context.Context, workitemID string) (string, error) {
 	m.mu.Lock()
 	ch, ok := m.decCh[workitemID]

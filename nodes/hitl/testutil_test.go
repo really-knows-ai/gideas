@@ -12,7 +12,9 @@ import (
 	flow "github.com/foundry/flow/sdk/go"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
+	"google.golang.org/grpc/test/bufconn"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -400,42 +402,52 @@ func (f *fakeQueueService) Decide(_ context.Context, req *flowv1.DecideRequest) 
 	return &flowv1.DecideResponse{Acknowledged: true}, nil
 }
 
-// newTestQueueManager starts a fake queue-service on a loopback TCP listener,
-// points FLOW_QUEUE_SERVICE_ADDR at it, and returns a flow.QueueManager thin
-// client that reaches it via the default dialer. The fake server is stopped via
-// t.Cleanup. The thin client has no Start/Stop; a Decide on the returned
-// manager delivers the choice client-locally, unblocking WaitForDecision.
+// newTestQueueManager starts a fake queue-service behind an in-process bufconn
+// listener and returns a flow.QueueManager thin client whose injected dialer
+// reaches that listener. No real network I/O, no FLOW_QUEUE_SERVICE_ADDR. The
+// fake server is stopped via t.Cleanup. The thin client has no Start/Stop; a
+// Decide on the returned manager delivers the choice client-locally, unblocking
+// WaitForDecision.
 func newTestQueueManager(t *testing.T) flow.QueueManager {
 	t.Helper()
 
-	lis, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("failed to create listener: %v", err)
-	}
-
+	lis := bufconn.Listen(1024 * 1024)
 	srv := grpc.NewServer()
 	flowv1.RegisterQueueGatewayServiceServer(srv, newFakeQueueService())
 	go func() { _ = srv.Serve(lis) }()
 	t.Cleanup(srv.Stop)
 
-	t.Setenv("FLOW_QUEUE_SERVICE_ADDR", lis.Addr().String())
-
-	qm, err := flow.NewQueueManager()
+	qm, err := flow.NewQueueManager(flow.WithDialer(func(ctx context.Context, _ string) (grpc.ClientConnInterface, error) {
+		conn, err := grpc.NewClient(
+			"passthrough:///bufconn-queue",
+			grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) {
+				return lis.DialContext(ctx)
+			}),
+			grpc.WithTransportCredentials(insecure.NewCredentials()),
+		)
+		if err != nil {
+			return nil, err
+		}
+		t.Cleanup(func() { _ = conn.Close() })
+		return conn, nil
+	}))
 	if err != nil {
 		t.Fatalf("NewQueueManager failed: %v", err)
 	}
 	return qm
 }
 
-// waitForEnqueue polls until the given workitem appears in the queue.
+// waitForEnqueue retries GetItem until the given workitem appears in the queue.
+// The fake enqueues synchronously inside the handler goroutine, so the item
+// appears as soon as that goroutine runs; this tight bounded retry (no sleep)
+// succeeds within microseconds of the handler enqueueing.
 func waitForEnqueue(t *testing.T, qm flow.QueueManager, workitemID string) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(100 * time.Millisecond)
 	for time.Now().Before(deadline) {
 		if _, err := qm.GetItem(context.Background(), workitemID); err == nil {
 			return
 		}
-		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for %s to appear in queue", workitemID)
 }

@@ -141,15 +141,17 @@ func TestHITLAppraise_ContextCancellation(t *testing.T) {
 	}
 }
 
-// waitForEnqueue polls until the given workitem appears in the queue.
+// waitForEnqueue retries GetItem until the given workitem appears in the queue.
+// The fake enqueues synchronously inside the handler goroutine, so the item
+// appears as soon as that goroutine runs; this tight bounded retry (no sleep)
+// succeeds within microseconds of the handler enqueueing.
 func waitForEnqueue(t *testing.T, qm flow.QueueManager, workitemID string) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(100 * time.Millisecond)
 	for time.Now().Before(deadline) {
 		if _, err := qm.GetItem(context.Background(), workitemID); err == nil {
 			return
 		}
-		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for %s to appear in queue", workitemID)
 }

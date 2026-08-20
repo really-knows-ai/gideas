@@ -33,3 +33,9 @@ func WithQueueName(name string) QueueManagerOption {
 func WithChoices(choices []string) QueueManagerOption {
 	return queuemgr.WithChoices(choices)
 }
+
+// WithDialer overrides how the QueueManager connects to the queue-service.
+// Production uses grpc.NewClient against FLOW_QUEUE_SERVICE_ADDR; tests inject
+// a bufconn dialer. Test-only seam retained on the public API so node test
+// harnesses can run the thin client over bufconn without real network I/O.
+func WithDialer(d queuemgr.DialFunc) QueueManagerOption { return queuemgr.WithDialer(d) }

@@ -50,6 +50,11 @@ type fakeQueueService struct {
 	items      map[string]*flowv1.QueueItem
 	decided    map[string]string
 	enqChoices map[string][]string
+
+	// claimUnavailable makes Claim return gRPC codes.Unavailable so tests can
+	// exercise the thin client's ErrShardUnavailable reverse-mapping. Set it
+	// before any Claim RPC.
+	claimUnavailable bool
 }
 
 func newFakeQueueService() *fakeQueueService {
@@ -133,6 +138,9 @@ func (f *fakeQueueService) GetItem(ctx context.Context, req *flowv1.GetItemReque
 func (f *fakeQueueService) Claim(ctx context.Context, req *flowv1.ClaimRequest) (*flowv1.ClaimResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.claimUnavailable {
+		return nil, status.Error(codes.Unavailable, "queue shard unavailable")
+	}
 	it, ok := f.items[req.GetWorkitemId()]
 	if !ok {
 		return nil, status.Error(codes.NotFound, "queue item not found")
