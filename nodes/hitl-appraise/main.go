@@ -82,9 +82,7 @@ func handleAppraise(
 	workitemID := wctx.GetWorkitemId()
 
 	// Discover stamp capability from topology.
-	// ponytail: uses client.GetFlowTopology(ctx) for raw proto access to capabilities
-	// (not yet exposed on *flow.Flow or *flow.Node for discoverStamp).
-	governedArtefact, stampName, err := discoverStamp(ctx, client)
+	governedArtefact, stampName, err := nodeutil.DiscoverStamp(ctx, client)
 	if err != nil {
 		return fmt.Errorf("hitl-appraise: %w", err)
 	}
@@ -117,24 +115,4 @@ func handleAppraise(
 		"hitl-appraise",
 		"default",
 	)
-}
-
-// discoverStamp queries the flow topology and extracts the node's stamp
-// capability. Returns the governed artefact kind and stamp name.
-func discoverStamp(ctx context.Context, client *flow.Client) (string, string, error) {
-	// ponytail: uses RawOperator escape hatch for proto access to capabilities.
-	topology, err := client.RawOperator().GetFlowTopology(ctx, &flowv1.GetFlowTopologyRequest{})
-	if err != nil {
-		return "", "", fmt.Errorf("get flow topology: %w", err)
-	}
-
-	stamps := flow.ParseStampCapabilities(topology.GetSelf().GetCapabilities())
-	if len(stamps) == 0 {
-		return "", "", fmt.Errorf("no STAMP:artefact capability found in topology")
-	}
-
-	// Use the first stamp capability. A node should have exactly one
-	// in the appraise role, but we take the first defensively.
-	sc := stamps[0]
-	return sc.GovernedArtefact, sc.StampName, nil
 }

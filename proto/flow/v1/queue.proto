@@ -28,6 +28,19 @@ service QueuePeerService {
   // Returns QUEUE_ITEM_NOT_FOUND if the item does not exist.
   // Returns QUEUE_ITEM_INVALID_STATE if the item is not claimed.
   rpc DecideItem(DecideItemRequest) returns (DecideItemResponse);
+
+  // Replicates an item to this shard as a backup copy. The owning shard calls
+  // this after Enqueue so exactly one backup holds the item for failover.
+  rpc ReplicateItem(ReplicateItemRequest) returns (ReplicateItemResponse);
+
+  // Drops a backup copy of an item. Carries the generation UUID so a missed or
+  // raced drop can never destroy a newer parking event's copy.
+  rpc DropItem(DropItemRequest) returns (DropItemResponse);
+
+  // Notifies this shard that another shard of the queue is dead (lease
+  // eviction). The receiver fires its promotion path for any backup rows it
+  // holds owned by the dead shard.
+  rpc NotifyShardDead(NotifyShardDeadRequest) returns (NotifyShardDeadResponse);
 }
 
 // GetLocalQueueRequest specifies filtering and pagination for queue list queries.
@@ -57,7 +70,7 @@ message QueueItem {
   string workitem_id = 1;
   // Owning pod identity (e.g., "review-queue-0").
   string shard_id = 2;
-  // Queue name scoping (e.g., "human-arbiter"). Defaults to FLOW_NODE_ID.
+  // Queue name scoping (e.g., "hitl-arbiter"). Defaults to FLOW_NODE_ID.
   string queue_name = 6;
   // Queue status: "waiting" or "claimed".
   string status = 3;
@@ -65,6 +78,12 @@ message QueueItem {
   string enqueued_at = 4;
   // RFC3339 timestamp when the item was claimed. Empty if not claimed.
   string claimed_at = 5;
+  // Generation UUID disambiguating distinct parking events of the same
+  // workitem. Stale backup copies are superseded by a newer generation.
+  string generation_id = 7;
+  // True when this copy is a backup held on a non-owning shard. Owner copy
+  // = false. Routing (findOwner/routeGetItem) matches owner rows only.
+  bool is_backup = 8;
 }
 
 message ClaimItemRequest {
@@ -91,5 +110,129 @@ message DecideItemRequest {
 }
 
 message DecideItemResponse {
+  bool acknowledged = 1;
+}
+
+// ReplicateItemRequest carries a full QueueItem to be stored as a backup copy
+// on the receiving shard.
+message ReplicateItemRequest {
+  QueueItem item = 1;
+}
+
+message ReplicateItemResponse {
+  bool acknowledged = 1;
+}
+
+// DropItemRequest drops a backup copy of an item. generation_id guards against
+// a missed/raced drop destroying a newer parking event's copy.
+message DropItemRequest {
+  string workitem_id = 1;
+  string generation_id = 2;
+}
+
+message DropItemResponse {
+  bool acknowledged = 1;
+}
+
+// NotifyShardDeadRequest notifies a surviving shard that the named shard of
+// the queue is dead (lease eviction), triggering its promotion path.
+message NotifyShardDeadRequest {
+  string shard_id = 1;
+}
+
+message NotifyShardDeadResponse {
+  bool acknowledged = 1;
+}
+
+// QueueRegistryService is the queue-service's own gRPC surface: queue
+// registration, lease/heartbeat, deregistration, listing, and single-item
+// internal operations. Each HITL node replica registers its queue+shard and
+// heartbeats against it when FLOW_QUEUE_SERVICE_ADDR is set.
+service QueueRegistryService {
+  // Registers a shard of a queue with the queue-service.
+  rpc RegisterQueue(RegisterQueueRequest) returns (RegisterQueueResponse);
+  // Idempotent lease/heartbeat upsert. The response carries the queue's current
+  // living shard set so each shard refreshes its local "who else is alive" view.
+  rpc HeartbeatQueue(HeartbeatQueueRequest) returns (HeartbeatQueueResponse);
+  // Deregisters a shard on clean shutdown.
+  rpc DeregisterQueue(DeregisterQueueRequest) returns (DeregisterQueueResponse);
+  // Lists the registered queues and their living shards.
+  rpc ListQueues(ListQueuesRequest) returns (ListQueuesResponse);
+  // Cancels a specific queued item for an internal caller.
+  rpc CancelQueuedItem(CancelQueuedItemRequest) returns (CancelQueuedItemResponse);
+  // Decides a specific queued item for an internal caller.
+  rpc DecideQueuedItem(DecideQueuedItemRequest) returns (DecideQueuedItemResponse);
+}
+
+message RegisterQueueRequest {
+  string queue_name = 1;
+  string shard_id = 2;
+  string shard_addr = 3;
+}
+
+message RegisterQueueResponse {
+  bool acknowledged = 1;
+}
+
+message HeartbeatQueueRequest {
+  string queue_name = 1;
+  string shard_id = 2;
+  string shard_addr = 3;
+}
+
+// HeartbeatQueueResponse carries the queue's current living shard set so each
+// shard learns its candidate backup set on every beat, without cluster access.
+message HeartbeatQueueResponse {
+  bool acknowledged = 1;
+  repeated ShardRegistration shards = 2;
+}
+
+message DeregisterQueueRequest {
+  string queue_name = 1;
+  string shard_id = 2;
+}
+
+message DeregisterQueueResponse {
+  bool acknowledged = 1;
+}
+
+message ListQueuesRequest {}
+
+message ListQueuesResponse {
+  repeated QueueRegistration queues = 1;
+}
+
+// QueueRegistration is one registered queue and its living shards.
+message QueueRegistration {
+  string queue_name = 1;
+  repeated ShardRegistration shards = 2;
+}
+
+// ShardRegistration mirrors the Queue CR .status.shards[] shape. phase is a
+// free string on the wire ("active"/"evicted") vs the CRD's Enum; timestamp is
+// an RFC3339 string on the wire vs metav1.Time in the CRD.
+message ShardRegistration {
+  string shard_id = 1;
+  string shard_addr = 2;
+  string last_heartbeat_at = 3;
+  string phase = 4;
+}
+
+message CancelQueuedItemRequest {
+  string queue_name = 1;
+  string workitem_id = 2;
+}
+
+message CancelQueuedItemResponse {
+  bool acknowledged = 1;
+}
+
+message DecideQueuedItemRequest {
+  string queue_name = 1;
+  string workitem_id = 2;
+  string choice = 3;
+}
+
+message DecideQueuedItemResponse {
   bool acknowledged = 1;
 }

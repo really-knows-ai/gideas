@@ -38,11 +38,11 @@ func TestQueueStore_Enqueue(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 
-	if err := s.enqueue(ctx, testWorkitemID); err != nil {
+	if err := s.enqueue(ctx, testWorkitemID, "", ""); err != nil {
 		t.Fatalf("enqueue failed: %v", err)
 	}
 
-	items, total, err := s.getLocal(ctx, QueueFilter{})
+	items, total, err := s.listOwnerRows(ctx, QueueFilter{})
 	if err != nil {
 		t.Fatalf("getLocal failed: %v", err)
 	}
@@ -67,10 +67,10 @@ func TestQueueStore_Enqueue_Duplicate(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 
-	if err := s.enqueue(ctx, testWorkitemID); err != nil {
+	if err := s.enqueue(ctx, testWorkitemID, "", ""); err != nil {
 		t.Fatalf("first enqueue failed: %v", err)
 	}
-	if err := s.enqueue(ctx, testWorkitemID); err == nil {
+	if err := s.enqueue(ctx, testWorkitemID, "", ""); err == nil {
 		t.Fatal("expected error on duplicate enqueue, got nil")
 	}
 }
@@ -79,7 +79,7 @@ func TestQueueStore_Claim_HappyPath(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 
-	if err := s.enqueue(ctx, testWorkitemID); err != nil {
+	if err := s.enqueue(ctx, testWorkitemID, "", ""); err != nil {
 		t.Fatalf("enqueue failed: %v", err)
 	}
 
@@ -109,7 +109,7 @@ func TestQueueStore_Claim_AlreadyClaimed(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 
-	if err := s.enqueue(ctx, testWorkitemID); err != nil {
+	if err := s.enqueue(ctx, testWorkitemID, "", ""); err != nil {
 		t.Fatalf("enqueue failed: %v", err)
 	}
 	if _, err := s.claim(ctx, testWorkitemID); err != nil {
@@ -126,7 +126,7 @@ func TestQueueStore_Release_HappyPath(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 
-	if err := s.enqueue(ctx, testWorkitemID); err != nil {
+	if err := s.enqueue(ctx, testWorkitemID, "", ""); err != nil {
 		t.Fatalf("enqueue failed: %v", err)
 	}
 	if _, err := s.claim(ctx, testWorkitemID); err != nil {
@@ -149,7 +149,7 @@ func TestQueueStore_Release_NotClaimed(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 
-	if err := s.enqueue(ctx, testWorkitemID); err != nil {
+	if err := s.enqueue(ctx, testWorkitemID, "", ""); err != nil {
 		t.Fatalf("enqueue failed: %v", err)
 	}
 
@@ -163,19 +163,23 @@ func TestQueueStore_Decide_HappyPath(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 
-	if err := s.enqueue(ctx, testWorkitemID); err != nil {
+	if err := s.enqueue(ctx, testWorkitemID, "", ""); err != nil {
 		t.Fatalf("enqueue failed: %v", err)
 	}
 	if _, err := s.claim(ctx, testWorkitemID); err != nil {
 		t.Fatalf("claim failed: %v", err)
 	}
 
-	if err := s.decide(ctx, testWorkitemID); err != nil {
+	item, err := s.decideWithRow(ctx, testWorkitemID)
+	if err != nil {
 		t.Fatalf("decide failed: %v", err)
+	}
+	if item.WorkitemID != testWorkitemID {
+		t.Fatalf("decideWithRow returned wrong row: %+v", item)
 	}
 
 	// Verify item is deleted.
-	_, err := s.getByID(ctx, testWorkitemID)
+	_, err = s.getByID(ctx, testWorkitemID)
 	if !errors.Is(err, ErrQueueItemNotFound) {
 		t.Fatalf("expected item to be deleted, got: %v", err)
 	}
@@ -185,11 +189,11 @@ func TestQueueStore_Decide_NotClaimed(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 
-	if err := s.enqueue(ctx, testWorkitemID); err != nil {
+	if err := s.enqueue(ctx, testWorkitemID, "", ""); err != nil {
 		t.Fatalf("enqueue failed: %v", err)
 	}
 
-	err := s.decide(ctx, testWorkitemID)
+	_, err := s.decideWithRow(ctx, testWorkitemID)
 	if !errors.Is(err, ErrQueueItemInvalidState) {
 		t.Fatalf("expected ErrQueueItemInvalidState, got %v", err)
 	}
@@ -201,7 +205,7 @@ func TestQueueStore_GetLocal_StatusFilter(t *testing.T) {
 
 	// Enqueue 3 items, claim 1.
 	for _, id := range []string{testWorkitemID, "wi-2", "wi-3"} {
-		if err := s.enqueue(ctx, id); err != nil {
+		if err := s.enqueue(ctx, id, "", ""); err != nil {
 			t.Fatalf("enqueue %s failed: %v", id, err)
 		}
 	}
@@ -211,7 +215,7 @@ func TestQueueStore_GetLocal_StatusFilter(t *testing.T) {
 
 	// Filter waiting.
 	waiting := QueueStatusWaiting
-	items, total, err := s.getLocal(ctx, QueueFilter{Status: &waiting})
+	items, total, err := s.listOwnerRows(ctx, QueueFilter{Status: &waiting})
 	if err != nil {
 		t.Fatalf("getLocal waiting failed: %v", err)
 	}
@@ -224,7 +228,7 @@ func TestQueueStore_GetLocal_StatusFilter(t *testing.T) {
 
 	// Filter claimed.
 	claimed := QueueStatusClaimed
-	items, total, err = s.getLocal(ctx, QueueFilter{Status: &claimed})
+	items, total, err = s.listOwnerRows(ctx, QueueFilter{Status: &claimed})
 	if err != nil {
 		t.Fatalf("getLocal claimed failed: %v", err)
 	}
@@ -241,13 +245,13 @@ func TestQueueStore_GetLocal_Pagination(t *testing.T) {
 	ctx := context.Background()
 
 	for i := range 5 {
-		if err := s.enqueue(ctx, fmt.Sprintf("wi-%d", i)); err != nil {
+		if err := s.enqueue(ctx, fmt.Sprintf("wi-%d", i), "", ""); err != nil {
 			t.Fatalf("enqueue wi-%d failed: %v", i, err)
 		}
 	}
 
 	// Page 1: limit=2, offset=0.
-	items, total, err := s.getLocal(ctx, QueueFilter{Limit: 2, Offset: 0})
+	items, total, err := s.listOwnerRows(ctx, QueueFilter{Limit: 2, Offset: 0})
 	if err != nil {
 		t.Fatalf("getLocal page 1 failed: %v", err)
 	}
@@ -259,7 +263,7 @@ func TestQueueStore_GetLocal_Pagination(t *testing.T) {
 	}
 
 	// Page 2: limit=2, offset=2.
-	items, _, err = s.getLocal(ctx, QueueFilter{Limit: 2, Offset: 2})
+	items, _, err = s.listOwnerRows(ctx, QueueFilter{Limit: 2, Offset: 2})
 	if err != nil {
 		t.Fatalf("getLocal page 2 failed: %v", err)
 	}
@@ -268,7 +272,7 @@ func TestQueueStore_GetLocal_Pagination(t *testing.T) {
 	}
 
 	// Page 3: limit=2, offset=4.
-	items, _, err = s.getLocal(ctx, QueueFilter{Limit: 2, Offset: 4})
+	items, _, err = s.listOwnerRows(ctx, QueueFilter{Limit: 2, Offset: 4})
 	if err != nil {
 		t.Fatalf("getLocal page 3 failed: %v", err)
 	}

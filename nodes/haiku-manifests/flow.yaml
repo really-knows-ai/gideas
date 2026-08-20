@@ -19,7 +19,7 @@
 #      - Both are satisfied by ATTEST:.../law-* (catch-all)
 #      - First node in nodeOrder whose ATTEST: capability matches wins
 #   3. Unresolved feedback?               → route to Refine
-#   4. Missing "approval" stamp?          → route to human-approval
+#   4. Missing "approval" stamp?          → route to hitl-approval
 #   5. All clear?                         → Complete()
 #
 # Stamp vocabulary vs exit contract:
@@ -108,8 +108,8 @@ spec:
         - appraisal
         - appraiser
         - refine
-        - human-arbiter
-        - human-approval
+        - hitl-arbiter
+        - hitl-approval
   governancePolicy:
     maxVisits: 20
     defaultTimeout: "10m"
@@ -152,10 +152,10 @@ spec:
       target: "appraisal"
     - name: "refine"
       target: "refine"
-    - name: "human-arbiter"
-      target: "human-arbiter"
-    - name: "human-approval"
-      target: "human-approval"
+    - name: "hitl-arbiter"
+      target: "hitl-arbiter"
+    - name: "hitl-approval"
+      target: "hitl-approval"
   capabilities:
     - "READ:artefact"
     - "READ:artefact/haiku"
@@ -250,12 +250,12 @@ spec:
 apiVersion: flow.foundry.io/v1
 kind: FoundryNode
 metadata:
-  name: human-arbiter
+  name: hitl-arbiter
   namespace: haiku-flow
   labels:
     flow.foundry.io/flow-name: haiku-flow
 spec:
-  image: human-arbiter:latest
+  image: hitl-arbiter:latest
   exit: "standard-exit"
   outputs:
     - name: "accept"
@@ -272,12 +272,12 @@ spec:
 apiVersion: flow.foundry.io/v1
 kind: FoundryNode
 metadata:
-  name: human-approval
+  name: hitl-approval
   namespace: haiku-flow
   labels:
     flow.foundry.io/flow-name: haiku-flow
 spec:
-  image: human-approval:latest
+  image: hitl:latest
   exit: "standard-exit"
   outputs:
     - name: "approve"

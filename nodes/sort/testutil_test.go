@@ -102,8 +102,8 @@ func defaultTopology() *flowv1.GetFlowTopologyResponse {
 				{Name: "quench", Target: "quench"},
 				{Name: "appraisal", Target: "appraisal"},
 				{Name: "refine", Target: "refine"},
-				{Name: "human-arbiter", Target: "human-arbiter"},
-				{Name: "human-approval", Target: "human-approval"},
+				{Name: "hitl-arbiter", Target: "hitl-arbiter"},
+				{Name: "hitl-approval", Target: "hitl-approval"},
 			},
 		},
 		Nodes: map[string]*flowv1.FlowNode{
@@ -123,11 +123,11 @@ func defaultTopology() *flowv1.GetFlowTopologyResponse {
 			"refine": {
 				Name: "refine",
 			},
-			"human-arbiter": {
-				Name: "human-arbiter",
+			"hitl-arbiter": {
+				Name: "hitl-arbiter",
 			},
-			"human-approval": {
-				Name:         "human-approval",
+			"hitl-approval": {
+				Name:         "hitl-approval",
 				Capabilities: []string{"STAMP:artefact/haiku/approval"},
 			},
 		},

@@ -78,7 +78,7 @@ docker build -t flow-frictionledger:latest -f platform/frictionledger/Dockerfile
 docker build -t flow-monitor:latest        -f platform/monitor/Dockerfile .
 
 # Haiku demo nodes
-for node in forge haiku-quench sort appraisal appraiser refine human-arbiter human-approval embassy; do
+for node in forge haiku-quench sort appraisal appraiser refine hitl hitl-appraise hitl-arbiter embassy; do
   docker build -t "$node:latest" --build-arg NODE="$node" -f nodes/Dockerfile .
 done
 ```

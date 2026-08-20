@@ -36,9 +36,9 @@ func TestQueueManager_EnqueueAndList(t *testing.T) {
 		t.Fatalf("Enqueue failed: %v", err)
 	}
 
-	items, _, err := qm.store.getLocal(ctx, QueueFilter{})
+	items, _, err := qm.store.listOwnerRows(ctx, QueueFilter{})
 	if err != nil {
-		t.Fatalf("store.getLocal failed: %v", err)
+		t.Fatalf("store.listOwnerRows failed: %v", err)
 	}
 	if len(items) != 1 {
 		t.Fatalf("expected 1 item, got %d", len(items))

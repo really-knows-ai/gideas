@@ -15,6 +15,7 @@ use (
 	./platform/pkg/metadata
 	./platform/pkg/randid
 	./platform/pkg/relay
+	./platform/queue
 	./platform/sidecar
 	./sdk/go
 	./tools/flowctl

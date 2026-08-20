@@ -109,7 +109,8 @@ nodes:
   - name: law-applicator
     image: law-applicator:latest
     librarian: true
-  - name: human-arbiter
-    image: human-arbiter:latest
-  - name: human-approval
-    image: human-approval:latest
+  - name: hitl-arbiter
+    image: hitl-arbiter:latest
+  - name: hitl-approval
+    image: hitl:latest
+    configMap: hitl-approval-config

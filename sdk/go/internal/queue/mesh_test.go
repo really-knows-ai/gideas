@@ -105,16 +105,17 @@ func TestQueueMesh_ScatterGather(t *testing.T) {
 	shard1 := newMeshTestShard(t, "shard-1")
 	shard2 := newMeshTestShard(t, "shard-2")
 
-	_ = shard0.store.enqueue(ctx, "wi-0")
-	_ = shard1.store.enqueue(ctx, "wi-1")
-	_ = shard2.store.enqueue(ctx, "wi-2")
+	_ = shard0.store.enqueue(ctx, "wi-0", "", "")
+	_ = shard1.store.enqueue(ctx, "wi-1", "", "")
+	_ = shard2.store.enqueue(ctx, "wi-2", "", "")
 
 	// Create a mesh with shard-0 as local, peer clients for shard-1 and shard-2.
 	mesh := newQueueMesh(shard0.store, "shard-0", &mockResolver{}, "50053")
 
-	// Manually inject peer clients (bypassing DNS discovery).
-	mesh.peers["shard-1"] = connectToShard(t, shard1)
-	mesh.peers["shard-2"] = connectToShard(t, shard2)
+	// Manually inject peer clients (bypassing DNS discovery). peers is keyed by
+	// addr (identity<->addr seam), so use the bufconn addrs.
+	mesh.peers[shard1.addr] = connectToShard(t, shard1)
+	mesh.peers[shard2.addr] = connectToShard(t, shard2)
 
 	items, err := mesh.getGlobalQueue(ctx, QueueFilter{})
 	if err != nil {
@@ -143,16 +144,16 @@ func TestQueueMesh_ScatterGather_PartialFailure(t *testing.T) {
 	shard1 := newMeshTestShard(t, "shard-1")
 	shard2 := newMeshTestShard(t, "shard-2")
 
-	_ = shard0.store.enqueue(ctx, "wi-0")
-	_ = shard1.store.enqueue(ctx, "wi-1")
-	_ = shard2.store.enqueue(ctx, "wi-2")
+	_ = shard0.store.enqueue(ctx, "wi-0", "", "")
+	_ = shard1.store.enqueue(ctx, "wi-1", "", "")
+	_ = shard2.store.enqueue(ctx, "wi-2", "", "")
 
 	// Stop shard-2 to simulate partial failure.
 	shard2.srv.GracefulStop()
 
 	mesh := newQueueMesh(shard0.store, "shard-0", &mockResolver{}, "50053")
-	mesh.peers["shard-1"] = connectToShard(t, shard1)
-	mesh.peers["shard-2"] = connectToShard(t, shard2) // Will fail.
+	mesh.peers[shard1.addr] = connectToShard(t, shard1)
+	mesh.peers[shard2.addr] = connectToShard(t, shard2) // Will fail.
 
 	items, err := mesh.getGlobalQueue(ctx, QueueFilter{})
 	if err != nil {
@@ -173,7 +174,7 @@ func TestQueueMesh_GetItem_Local(t *testing.T) {
 	ctx := context.Background()
 
 	shard0 := newMeshTestShard(t, "shard-0")
-	_ = shard0.store.enqueue(ctx, "wi-local")
+	_ = shard0.store.enqueue(ctx, "wi-local", "", "")
 
 	mesh := newQueueMesh(shard0.store, "shard-0", &mockResolver{}, "50053")
 
@@ -191,10 +192,10 @@ func TestQueueMesh_GetItem_Remote(t *testing.T) {
 
 	shard0 := newMeshTestShard(t, "shard-0")
 	shard1 := newMeshTestShard(t, "shard-1")
-	_ = shard1.store.enqueue(ctx, "wi-remote")
+	_ = shard1.store.enqueue(ctx, "wi-remote", "", "")
 
 	mesh := newQueueMesh(shard0.store, "shard-0", &mockResolver{}, "50053")
-	mesh.peers["shard-1"] = connectToShard(t, shard1)
+	mesh.peers[shard1.addr] = connectToShard(t, shard1)
 
 	item, err := mesh.routeGetItem(ctx, "wi-remote")
 	if err != nil {
@@ -212,7 +213,7 @@ func TestQueueMesh_GetItem_NotFound(t *testing.T) {
 	shard1 := newMeshTestShard(t, "shard-1")
 
 	mesh := newQueueMesh(shard0.store, "shard-0", &mockResolver{}, "50053")
-	mesh.peers["shard-1"] = connectToShard(t, shard1)
+	mesh.peers[shard1.addr] = connectToShard(t, shard1)
 
 	_, err := mesh.routeGetItem(ctx, "nonexistent")
 	if !errors.Is(err, ErrQueueItemNotFound) {
@@ -228,7 +229,7 @@ func TestQueueMesh_ProxyClaim_Local(t *testing.T) {
 	ctx := context.Background()
 
 	shard0 := newMeshTestShard(t, "shard-0")
-	_ = shard0.store.enqueue(ctx, "wi-local")
+	_ = shard0.store.enqueue(ctx, "wi-local", "", "")
 
 	mesh := newQueueMesh(shard0.store, "shard-0", &mockResolver{}, "50053")
 
@@ -246,10 +247,10 @@ func TestQueueMesh_ProxyClaim_Remote(t *testing.T) {
 
 	shard0 := newMeshTestShard(t, "shard-0")
 	shard1 := newMeshTestShard(t, "shard-1")
-	_ = shard1.store.enqueue(ctx, "wi-remote")
+	_ = shard1.store.enqueue(ctx, "wi-remote", "", "")
 
 	mesh := newQueueMesh(shard0.store, "shard-0", &mockResolver{}, "50053")
-	mesh.peers["shard-1"] = connectToShard(t, shard1)
+	mesh.peers[shard1.addr] = connectToShard(t, shard1)
 
 	item, err := mesh.routeClaim(ctx, "wi-remote")
 	if err != nil {
@@ -279,11 +280,11 @@ func TestQueueMesh_ProxyRelease_Remote(t *testing.T) {
 
 	shard0 := newMeshTestShard(t, "shard-0")
 	shard1 := newMeshTestShard(t, "shard-1")
-	_ = shard1.store.enqueue(ctx, "wi-remote")
+	_ = shard1.store.enqueue(ctx, "wi-remote", "", "")
 	_, _ = shard1.store.claim(ctx, "wi-remote") // Claim it first.
 
 	mesh := newQueueMesh(shard0.store, "shard-0", &mockResolver{}, "50053")
-	mesh.peers["shard-1"] = connectToShard(t, shard1)
+	mesh.peers[shard1.addr] = connectToShard(t, shard1)
 
 	item, err := mesh.routeRelease(ctx, "wi-remote")
 	if err != nil {
@@ -299,11 +300,11 @@ func TestQueueMesh_ProxyDecide_Remote(t *testing.T) {
 
 	shard0 := newMeshTestShard(t, "shard-0")
 	shard1 := newMeshTestShard(t, "shard-1")
-	_ = shard1.store.enqueue(ctx, "wi-remote")
+	_ = shard1.store.enqueue(ctx, "wi-remote", "", "")
 	_, _ = shard1.store.claim(ctx, "wi-remote")
 
 	mesh := newQueueMesh(shard0.store, "shard-0", &mockResolver{}, "50053")
-	mesh.peers["shard-1"] = connectToShard(t, shard1)
+	mesh.peers[shard1.addr] = connectToShard(t, shard1)
 
 	err := mesh.routeDecide(ctx, "wi-remote", "")
 	if err != nil {

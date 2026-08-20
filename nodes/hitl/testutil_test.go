@@ -339,6 +339,12 @@ func configWithLabels(labels map[string]string) *hitlConfig {
 	return &hitlConfig{ChoiceLabels: labels}
 }
 
+// configWithChoices returns a hitlConfig restricting the presented choices to
+// the given output/label pairs (in order).
+func configWithChoices(choices ...choiceEntry) *hitlConfig {
+	return &hitlConfig{Choices: choices}
+}
+
 // newWorkitemContext creates a WorkitemContext for testing.
 func newWorkitemContext(workitemID string) *flowv1.WorkitemContext {
 	return &flowv1.WorkitemContext{
@@ -354,7 +360,7 @@ func runHandler(
 	ctx context.Context,
 	client *flow.Client,
 	qm flow.QueueManager,
-	_ *hitlConfig,
+	cfg *hitlConfig,
 	wctx *flowv1.WorkitemContext,
 ) <-chan error {
 	errCh := make(chan error, 1)
@@ -364,7 +370,7 @@ func runHandler(
 			errCh <- fmt.Errorf("runHandler: get workitem: %w", wiErr)
 			return
 		}
-		errCh <- handleHITL(ctx, client, wi, qm, wctx)
+		errCh <- handleHITL(ctx, client, wi, qm, cfg, wctx)
 	}()
 	return errCh
 }
@@ -418,6 +424,53 @@ func newMultiStampSpy() *hitlSpy {
 				Outputs: []*flowv1.FlowOutput{
 					{Name: "done", Target: "next-node"},
 				},
+			},
+		},
+	}
+}
+
+// newThreeOutputSpy returns a spy with three routing outputs and no exit
+// contract. Used to test the choices restriction against a config subset.
+func newThreeOutputSpy() *hitlSpy {
+	return &hitlSpy{
+		Topology: &flowv1.GetFlowTopologyResponse{
+			Self: &flowv1.FlowNode{
+				Name:         "hitl-three-output",
+				Capabilities: []string{"READ:flow"},
+				Outputs: []*flowv1.FlowOutput{
+					{Name: "a", Target: "node-a"},
+					{Name: "b", Target: "node-b"},
+					{Name: "c", Target: "node-c"},
+				},
+			},
+		},
+	}
+}
+
+// newApprovalSpy returns a spy configured as a hitl:latest approval CRD
+// instance: output "approve" → sort, READ:artefact/haiku + petition,
+// STAMP:artefact/haiku/approval, exit-bound.
+func newApprovalSpy() *hitlSpy {
+	return &hitlSpy{
+		ArtefactContents: map[string]string{
+			"haiku":    "test-haiku-content",
+			"petition": "test-petition-content",
+		},
+		Topology: &flowv1.GetFlowTopologyResponse{
+			Self: &flowv1.FlowNode{
+				Name: "hitl-approval",
+				Capabilities: []string{
+					"READ:flow",
+					"READ:artefact/haiku",
+					"READ:artefact/petition",
+					"STAMP:artefact/haiku/approval",
+				},
+				Outputs: []*flowv1.FlowOutput{
+					{Name: "approve", Target: "sort"},
+				},
+			},
+			ExitContract: map[string]*flowv1.StampRequirements{
+				"haiku": {Stamps: []string{"approval"}},
 			},
 		},
 	}

@@ -19,10 +19,13 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	QueuePeerService_GetLocalQueue_FullMethodName = "/flow.v1.QueuePeerService/GetLocalQueue"
-	QueuePeerService_ClaimItem_FullMethodName     = "/flow.v1.QueuePeerService/ClaimItem"
-	QueuePeerService_ReleaseItem_FullMethodName   = "/flow.v1.QueuePeerService/ReleaseItem"
-	QueuePeerService_DecideItem_FullMethodName    = "/flow.v1.QueuePeerService/DecideItem"
+	QueuePeerService_GetLocalQueue_FullMethodName   = "/flow.v1.QueuePeerService/GetLocalQueue"
+	QueuePeerService_ClaimItem_FullMethodName       = "/flow.v1.QueuePeerService/ClaimItem"
+	QueuePeerService_ReleaseItem_FullMethodName     = "/flow.v1.QueuePeerService/ReleaseItem"
+	QueuePeerService_DecideItem_FullMethodName      = "/flow.v1.QueuePeerService/DecideItem"
+	QueuePeerService_ReplicateItem_FullMethodName   = "/flow.v1.QueuePeerService/ReplicateItem"
+	QueuePeerService_DropItem_FullMethodName        = "/flow.v1.QueuePeerService/DropItem"
+	QueuePeerService_NotifyShardDead_FullMethodName = "/flow.v1.QueuePeerService/NotifyShardDead"
 )
 
 // QueuePeerServiceClient is the client API for QueuePeerService service.
@@ -50,6 +53,16 @@ type QueuePeerServiceClient interface {
 	// Returns QUEUE_ITEM_NOT_FOUND if the item does not exist.
 	// Returns QUEUE_ITEM_INVALID_STATE if the item is not claimed.
 	DecideItem(ctx context.Context, in *DecideItemRequest, opts ...grpc.CallOption) (*DecideItemResponse, error)
+	// Replicates an item to this shard as a backup copy. The owning shard calls
+	// this after Enqueue so exactly one backup holds the item for failover.
+	ReplicateItem(ctx context.Context, in *ReplicateItemRequest, opts ...grpc.CallOption) (*ReplicateItemResponse, error)
+	// Drops a backup copy of an item. Carries the generation UUID so a missed or
+	// raced drop can never destroy a newer parking event's copy.
+	DropItem(ctx context.Context, in *DropItemRequest, opts ...grpc.CallOption) (*DropItemResponse, error)
+	// Notifies this shard that another shard of the queue is dead (lease
+	// eviction). The receiver fires its promotion path for any backup rows it
+	// holds owned by the dead shard.
+	NotifyShardDead(ctx context.Context, in *NotifyShardDeadRequest, opts ...grpc.CallOption) (*NotifyShardDeadResponse, error)
 }
 
 type queuePeerServiceClient struct {
@@ -100,6 +113,36 @@ func (c *queuePeerServiceClient) DecideItem(ctx context.Context, in *DecideItemR
 	return out, nil
 }
 
+func (c *queuePeerServiceClient) ReplicateItem(ctx context.Context, in *ReplicateItemRequest, opts ...grpc.CallOption) (*ReplicateItemResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReplicateItemResponse)
+	err := c.cc.Invoke(ctx, QueuePeerService_ReplicateItem_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *queuePeerServiceClient) DropItem(ctx context.Context, in *DropItemRequest, opts ...grpc.CallOption) (*DropItemResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DropItemResponse)
+	err := c.cc.Invoke(ctx, QueuePeerService_DropItem_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *queuePeerServiceClient) NotifyShardDead(ctx context.Context, in *NotifyShardDeadRequest, opts ...grpc.CallOption) (*NotifyShardDeadResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(NotifyShardDeadResponse)
+	err := c.cc.Invoke(ctx, QueuePeerService_NotifyShardDead_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // QueuePeerServiceServer is the server API for QueuePeerService service.
 // All implementations must embed UnimplementedQueuePeerServiceServer
 // for forward compatibility.
@@ -125,6 +168,16 @@ type QueuePeerServiceServer interface {
 	// Returns QUEUE_ITEM_NOT_FOUND if the item does not exist.
 	// Returns QUEUE_ITEM_INVALID_STATE if the item is not claimed.
 	DecideItem(context.Context, *DecideItemRequest) (*DecideItemResponse, error)
+	// Replicates an item to this shard as a backup copy. The owning shard calls
+	// this after Enqueue so exactly one backup holds the item for failover.
+	ReplicateItem(context.Context, *ReplicateItemRequest) (*ReplicateItemResponse, error)
+	// Drops a backup copy of an item. Carries the generation UUID so a missed or
+	// raced drop can never destroy a newer parking event's copy.
+	DropItem(context.Context, *DropItemRequest) (*DropItemResponse, error)
+	// Notifies this shard that another shard of the queue is dead (lease
+	// eviction). The receiver fires its promotion path for any backup rows it
+	// holds owned by the dead shard.
+	NotifyShardDead(context.Context, *NotifyShardDeadRequest) (*NotifyShardDeadResponse, error)
 	mustEmbedUnimplementedQueuePeerServiceServer()
 }
 
@@ -146,6 +199,15 @@ func (UnimplementedQueuePeerServiceServer) ReleaseItem(context.Context, *Release
 }
 func (UnimplementedQueuePeerServiceServer) DecideItem(context.Context, *DecideItemRequest) (*DecideItemResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DecideItem not implemented")
+}
+func (UnimplementedQueuePeerServiceServer) ReplicateItem(context.Context, *ReplicateItemRequest) (*ReplicateItemResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReplicateItem not implemented")
+}
+func (UnimplementedQueuePeerServiceServer) DropItem(context.Context, *DropItemRequest) (*DropItemResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DropItem not implemented")
+}
+func (UnimplementedQueuePeerServiceServer) NotifyShardDead(context.Context, *NotifyShardDeadRequest) (*NotifyShardDeadResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method NotifyShardDead not implemented")
 }
 func (UnimplementedQueuePeerServiceServer) mustEmbedUnimplementedQueuePeerServiceServer() {}
 func (UnimplementedQueuePeerServiceServer) testEmbeddedByValue()                          {}
@@ -240,6 +302,60 @@ func _QueuePeerService_DecideItem_Handler(srv interface{}, ctx context.Context, 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _QueuePeerService_ReplicateItem_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReplicateItemRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(QueuePeerServiceServer).ReplicateItem(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: QueuePeerService_ReplicateItem_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(QueuePeerServiceServer).ReplicateItem(ctx, req.(*ReplicateItemRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _QueuePeerService_DropItem_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DropItemRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(QueuePeerServiceServer).DropItem(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: QueuePeerService_DropItem_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(QueuePeerServiceServer).DropItem(ctx, req.(*DropItemRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _QueuePeerService_NotifyShardDead_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(NotifyShardDeadRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(QueuePeerServiceServer).NotifyShardDead(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: QueuePeerService_NotifyShardDead_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(QueuePeerServiceServer).NotifyShardDead(ctx, req.(*NotifyShardDeadRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // QueuePeerService_ServiceDesc is the grpc.ServiceDesc for QueuePeerService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -262,6 +378,334 @@ var QueuePeerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DecideItem",
 			Handler:    _QueuePeerService_DecideItem_Handler,
+		},
+		{
+			MethodName: "ReplicateItem",
+			Handler:    _QueuePeerService_ReplicateItem_Handler,
+		},
+		{
+			MethodName: "DropItem",
+			Handler:    _QueuePeerService_DropItem_Handler,
+		},
+		{
+			MethodName: "NotifyShardDead",
+			Handler:    _QueuePeerService_NotifyShardDead_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "flow/v1/queue.proto",
+}
+
+const (
+	QueueRegistryService_RegisterQueue_FullMethodName    = "/flow.v1.QueueRegistryService/RegisterQueue"
+	QueueRegistryService_HeartbeatQueue_FullMethodName   = "/flow.v1.QueueRegistryService/HeartbeatQueue"
+	QueueRegistryService_DeregisterQueue_FullMethodName  = "/flow.v1.QueueRegistryService/DeregisterQueue"
+	QueueRegistryService_ListQueues_FullMethodName       = "/flow.v1.QueueRegistryService/ListQueues"
+	QueueRegistryService_CancelQueuedItem_FullMethodName = "/flow.v1.QueueRegistryService/CancelQueuedItem"
+	QueueRegistryService_DecideQueuedItem_FullMethodName = "/flow.v1.QueueRegistryService/DecideQueuedItem"
+)
+
+// QueueRegistryServiceClient is the client API for QueueRegistryService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// QueueRegistryService is the queue-service's own gRPC surface: queue
+// registration, lease/heartbeat, deregistration, listing, and single-item
+// internal operations. Each HITL node replica registers its queue+shard and
+// heartbeats against it when FLOW_QUEUE_SERVICE_ADDR is set.
+type QueueRegistryServiceClient interface {
+	// Registers a shard of a queue with the queue-service.
+	RegisterQueue(ctx context.Context, in *RegisterQueueRequest, opts ...grpc.CallOption) (*RegisterQueueResponse, error)
+	// Idempotent lease/heartbeat upsert. The response carries the queue's current
+	// living shard set so each shard refreshes its local "who else is alive" view.
+	HeartbeatQueue(ctx context.Context, in *HeartbeatQueueRequest, opts ...grpc.CallOption) (*HeartbeatQueueResponse, error)
+	// Deregisters a shard on clean shutdown.
+	DeregisterQueue(ctx context.Context, in *DeregisterQueueRequest, opts ...grpc.CallOption) (*DeregisterQueueResponse, error)
+	// Lists the registered queues and their living shards.
+	ListQueues(ctx context.Context, in *ListQueuesRequest, opts ...grpc.CallOption) (*ListQueuesResponse, error)
+	// Cancels a specific queued item for an internal caller.
+	CancelQueuedItem(ctx context.Context, in *CancelQueuedItemRequest, opts ...grpc.CallOption) (*CancelQueuedItemResponse, error)
+	// Decides a specific queued item for an internal caller.
+	DecideQueuedItem(ctx context.Context, in *DecideQueuedItemRequest, opts ...grpc.CallOption) (*DecideQueuedItemResponse, error)
+}
+
+type queueRegistryServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewQueueRegistryServiceClient(cc grpc.ClientConnInterface) QueueRegistryServiceClient {
+	return &queueRegistryServiceClient{cc}
+}
+
+func (c *queueRegistryServiceClient) RegisterQueue(ctx context.Context, in *RegisterQueueRequest, opts ...grpc.CallOption) (*RegisterQueueResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RegisterQueueResponse)
+	err := c.cc.Invoke(ctx, QueueRegistryService_RegisterQueue_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *queueRegistryServiceClient) HeartbeatQueue(ctx context.Context, in *HeartbeatQueueRequest, opts ...grpc.CallOption) (*HeartbeatQueueResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(HeartbeatQueueResponse)
+	err := c.cc.Invoke(ctx, QueueRegistryService_HeartbeatQueue_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *queueRegistryServiceClient) DeregisterQueue(ctx context.Context, in *DeregisterQueueRequest, opts ...grpc.CallOption) (*DeregisterQueueResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DeregisterQueueResponse)
+	err := c.cc.Invoke(ctx, QueueRegistryService_DeregisterQueue_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *queueRegistryServiceClient) ListQueues(ctx context.Context, in *ListQueuesRequest, opts ...grpc.CallOption) (*ListQueuesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListQueuesResponse)
+	err := c.cc.Invoke(ctx, QueueRegistryService_ListQueues_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *queueRegistryServiceClient) CancelQueuedItem(ctx context.Context, in *CancelQueuedItemRequest, opts ...grpc.CallOption) (*CancelQueuedItemResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CancelQueuedItemResponse)
+	err := c.cc.Invoke(ctx, QueueRegistryService_CancelQueuedItem_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *queueRegistryServiceClient) DecideQueuedItem(ctx context.Context, in *DecideQueuedItemRequest, opts ...grpc.CallOption) (*DecideQueuedItemResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DecideQueuedItemResponse)
+	err := c.cc.Invoke(ctx, QueueRegistryService_DecideQueuedItem_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// QueueRegistryServiceServer is the server API for QueueRegistryService service.
+// All implementations must embed UnimplementedQueueRegistryServiceServer
+// for forward compatibility.
+//
+// QueueRegistryService is the queue-service's own gRPC surface: queue
+// registration, lease/heartbeat, deregistration, listing, and single-item
+// internal operations. Each HITL node replica registers its queue+shard and
+// heartbeats against it when FLOW_QUEUE_SERVICE_ADDR is set.
+type QueueRegistryServiceServer interface {
+	// Registers a shard of a queue with the queue-service.
+	RegisterQueue(context.Context, *RegisterQueueRequest) (*RegisterQueueResponse, error)
+	// Idempotent lease/heartbeat upsert. The response carries the queue's current
+	// living shard set so each shard refreshes its local "who else is alive" view.
+	HeartbeatQueue(context.Context, *HeartbeatQueueRequest) (*HeartbeatQueueResponse, error)
+	// Deregisters a shard on clean shutdown.
+	DeregisterQueue(context.Context, *DeregisterQueueRequest) (*DeregisterQueueResponse, error)
+	// Lists the registered queues and their living shards.
+	ListQueues(context.Context, *ListQueuesRequest) (*ListQueuesResponse, error)
+	// Cancels a specific queued item for an internal caller.
+	CancelQueuedItem(context.Context, *CancelQueuedItemRequest) (*CancelQueuedItemResponse, error)
+	// Decides a specific queued item for an internal caller.
+	DecideQueuedItem(context.Context, *DecideQueuedItemRequest) (*DecideQueuedItemResponse, error)
+	mustEmbedUnimplementedQueueRegistryServiceServer()
+}
+
+// UnimplementedQueueRegistryServiceServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedQueueRegistryServiceServer struct{}
+
+func (UnimplementedQueueRegistryServiceServer) RegisterQueue(context.Context, *RegisterQueueRequest) (*RegisterQueueResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RegisterQueue not implemented")
+}
+func (UnimplementedQueueRegistryServiceServer) HeartbeatQueue(context.Context, *HeartbeatQueueRequest) (*HeartbeatQueueResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method HeartbeatQueue not implemented")
+}
+func (UnimplementedQueueRegistryServiceServer) DeregisterQueue(context.Context, *DeregisterQueueRequest) (*DeregisterQueueResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DeregisterQueue not implemented")
+}
+func (UnimplementedQueueRegistryServiceServer) ListQueues(context.Context, *ListQueuesRequest) (*ListQueuesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListQueues not implemented")
+}
+func (UnimplementedQueueRegistryServiceServer) CancelQueuedItem(context.Context, *CancelQueuedItemRequest) (*CancelQueuedItemResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CancelQueuedItem not implemented")
+}
+func (UnimplementedQueueRegistryServiceServer) DecideQueuedItem(context.Context, *DecideQueuedItemRequest) (*DecideQueuedItemResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DecideQueuedItem not implemented")
+}
+func (UnimplementedQueueRegistryServiceServer) mustEmbedUnimplementedQueueRegistryServiceServer() {}
+func (UnimplementedQueueRegistryServiceServer) testEmbeddedByValue()                              {}
+
+// UnsafeQueueRegistryServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to QueueRegistryServiceServer will
+// result in compilation errors.
+type UnsafeQueueRegistryServiceServer interface {
+	mustEmbedUnimplementedQueueRegistryServiceServer()
+}
+
+func RegisterQueueRegistryServiceServer(s grpc.ServiceRegistrar, srv QueueRegistryServiceServer) {
+	// If the following call panics, it indicates UnimplementedQueueRegistryServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&QueueRegistryService_ServiceDesc, srv)
+}
+
+func _QueueRegistryService_RegisterQueue_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RegisterQueueRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(QueueRegistryServiceServer).RegisterQueue(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: QueueRegistryService_RegisterQueue_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(QueueRegistryServiceServer).RegisterQueue(ctx, req.(*RegisterQueueRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _QueueRegistryService_HeartbeatQueue_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(HeartbeatQueueRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(QueueRegistryServiceServer).HeartbeatQueue(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: QueueRegistryService_HeartbeatQueue_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(QueueRegistryServiceServer).HeartbeatQueue(ctx, req.(*HeartbeatQueueRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _QueueRegistryService_DeregisterQueue_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeregisterQueueRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(QueueRegistryServiceServer).DeregisterQueue(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: QueueRegistryService_DeregisterQueue_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(QueueRegistryServiceServer).DeregisterQueue(ctx, req.(*DeregisterQueueRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _QueueRegistryService_ListQueues_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListQueuesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(QueueRegistryServiceServer).ListQueues(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: QueueRegistryService_ListQueues_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(QueueRegistryServiceServer).ListQueues(ctx, req.(*ListQueuesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _QueueRegistryService_CancelQueuedItem_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CancelQueuedItemRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(QueueRegistryServiceServer).CancelQueuedItem(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: QueueRegistryService_CancelQueuedItem_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(QueueRegistryServiceServer).CancelQueuedItem(ctx, req.(*CancelQueuedItemRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _QueueRegistryService_DecideQueuedItem_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DecideQueuedItemRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(QueueRegistryServiceServer).DecideQueuedItem(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: QueueRegistryService_DecideQueuedItem_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(QueueRegistryServiceServer).DecideQueuedItem(ctx, req.(*DecideQueuedItemRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// QueueRegistryService_ServiceDesc is the grpc.ServiceDesc for QueueRegistryService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var QueueRegistryService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "flow.v1.QueueRegistryService",
+	HandlerType: (*QueueRegistryServiceServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "RegisterQueue",
+			Handler:    _QueueRegistryService_RegisterQueue_Handler,
+		},
+		{
+			MethodName: "HeartbeatQueue",
+			Handler:    _QueueRegistryService_HeartbeatQueue_Handler,
+		},
+		{
+			MethodName: "DeregisterQueue",
+			Handler:    _QueueRegistryService_DeregisterQueue_Handler,
+		},
+		{
+			MethodName: "ListQueues",
+			Handler:    _QueueRegistryService_ListQueues_Handler,
+		},
+		{
+			MethodName: "CancelQueuedItem",
+			Handler:    _QueueRegistryService_CancelQueuedItem_Handler,
+		},
+		{
+			MethodName: "DecideQueuedItem",
+			Handler:    _QueueRegistryService_DecideQueuedItem_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

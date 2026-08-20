@@ -5,12 +5,31 @@ package queue
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
+	"fmt"
 	"time"
 )
 
 // QueueStatus represents the state of a queue item.
 type QueueStatus string
+
+// newGenerationID returns a time-ordered parking-event ID.
+// Fixed-width hex UnixNano prefix (16 hex digits, zero-padded) + 32-hex
+// crypto/rand suffix (16 bytes). Fixed width => lexicographic order ==
+// creation order, so the R-C3 "max generation wins" dedupe is a
+// deterministic creation-order proxy, not a coin flip. Same crypto/rand
+// machinery as platform/pkg/randid, minus the platform dependency.
+func newGenerationID() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		// crypto/rand never fails on supported platforms; fall back to a
+		// zero suffix so the caller still gets a valid, time-ordered ID.
+		return fmt.Sprintf("%016x-00000000000000000000000000000000", time.Now().UnixNano())
+	}
+	return fmt.Sprintf("%016x-%s", time.Now().UnixNano(), hex.EncodeToString(b))
+}
 
 const (
 	// QueueStatusWaiting indicates the item is awaiting human review.
@@ -29,6 +48,17 @@ type QueueItem struct {
 	Status     QueueStatus `json:"status"`
 	EnqueuedAt time.Time   `json:"enqueued_at"`
 	ClaimedAt  *time.Time  `json:"claimed_at,omitempty"`
+	// Generation is the time-ordered parking-event ID (R-C2/R-C3). Distinct
+	// parking events of the same workitem carry distinct, strictly-increasing
+	// generations; the R-C3 dedupe "max generation wins" is deterministic.
+	Generation string `json:"generation,omitempty"`
+	// IsBackup is true when this copy is a backup held on a non-owning shard.
+	// Owner copy = false (R-C3/R-C6). Computed by shard-aware call sites as
+	// item.ShardID != self — there is no schema column.
+	IsBackup bool `json:"is_backup,omitempty"`
+	// BackupShard is the store-local recorded backup identity (R-C4/R-C5).
+	// Never crosses the wire (json:"-").
+	BackupShard string `json:"-"`
 }
 
 // QueueFilter specifies filtering and pagination for queue list queries.

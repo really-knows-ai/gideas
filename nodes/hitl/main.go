@@ -39,6 +39,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
 	"os"
 	"strings"
@@ -65,6 +66,17 @@ type hitlConfig struct {
 	// ChoiceLabels maps output names to human-friendly display labels.
 	// If an output has no entry, the output name is used as-is.
 	ChoiceLabels map[string]string `yaml:"choiceLabels"`
+
+	// Choices optionally restricts the presented routing choices to exactly
+	// the listed outputs (in the given order). When empty, all topology
+	// outputs are presented (current behavior).
+	Choices []choiceEntry `yaml:"choices"`
+}
+
+// choiceEntry maps a topology output name to a human-friendly display label.
+type choiceEntry struct {
+	Output string `yaml:"output"`
+	Label  string `yaml:"label"`
 }
 
 // derivedBehaviour holds everything the node needs at runtime, computed
@@ -98,7 +110,9 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := nodeutil.RunHITLNode("hitl", handler, flow.WithCustomRoutes(func(mux *http.ServeMux) {
+	if err := nodeutil.RunHITLNode("hitl", func(qm flow.QueueManager) flow.Handler {
+		return handler(qm, cfg)
+	}, flow.WithCustomRoutes(func(mux *http.ServeMux) {
 		mux.HandleFunc("GET /choices", handleChoices(cfg))
 	})); err != nil {
 		slog.Error("hitl: server failed", "error", err)
@@ -108,8 +122,16 @@ func main() {
 
 // handler returns a flow.Handler that parks the Workitem in the HITL queue,
 // waits for a human decision, and routes or cancels accordingly.
-func handler(qm flow.QueueManager) flow.Handler {
-	return nodeutil.NewHITLHandler(qm, "hitl", handleHITL)
+func handler(qm flow.QueueManager, cfg *hitlConfig) flow.Handler {
+	return nodeutil.NewHITLHandler(qm, "hitl", func(
+		ctx context.Context,
+		client *flow.Client,
+		workitem *flow.Workitem,
+		qm flow.QueueManager,
+		wctx *flowv1.WorkitemContext,
+	) error {
+		return handleHITL(ctx, client, workitem, qm, cfg, wctx)
+	})
 }
 
 // handleHITL is the core handler logic, extracted for testability.
@@ -118,6 +140,7 @@ func handleHITL(
 	client *flow.Client,
 	workitem *flow.Workitem,
 	qm flow.QueueManager,
+	cfg *hitlConfig,
 	wctx *flowv1.WorkitemContext,
 ) error {
 	workitemID := wctx.GetWorkitemId()
@@ -138,7 +161,10 @@ func handleHITL(
 		return fmt.Errorf("hitl: get raw topology: %w", err)
 	}
 
-	behaviour := deriveBehaviour(topology, rawTopology)
+	behaviour, err := deriveBehaviour(topology, rawTopology, cfg)
+	if err != nil {
+		return err
+	}
 
 	slog.Info("hitl: handling workitem",
 		"workitem_id", workitemID,
@@ -183,7 +209,8 @@ func handleHITL(
 func deriveBehaviour(
 	topology *flow.Flow,
 	rawTopology *flowv1.GetFlowTopologyResponse,
-) *derivedBehaviour {
+	cfg *hitlConfig,
+) (*derivedBehaviour, error) {
 	self := rawTopology.GetSelf()
 	capabilities := self.GetCapabilities()
 
@@ -194,9 +221,25 @@ func deriveBehaviour(
 		hasCancel:     len(topology.GetExitContract()) > 0,
 	}
 
-	// Build output choices from topology outputs.
+	// Build the available output set from topology.
+	available := make(map[string]bool, len(self.GetOutputs()))
 	for _, out := range self.GetOutputs() {
-		b.outputChoices = append(b.outputChoices, out.GetName())
+		available[out.GetName()] = true
+	}
+
+	// Build output choices. A configured choices list restricts the set to
+	// exactly the listed outputs (config order).
+	if cfg != nil && len(cfg.Choices) > 0 {
+		for _, ce := range cfg.Choices {
+			if !available[ce.Output] {
+				return nil, fmt.Errorf("hitl: configured choice %q is not a valid output in topology", ce.Output)
+			}
+			b.outputChoices = append(b.outputChoices, ce.Output)
+		}
+	} else {
+		for _, out := range self.GetOutputs() {
+			b.outputChoices = append(b.outputChoices, out.GetName())
+		}
 	}
 
 	// Build valid choice set.
@@ -208,7 +251,7 @@ func deriveBehaviour(
 		b.validChoices[choiceCancel] = true
 	}
 
-	return b
+	return b, nil
 }
 
 // buildChoicesResponse constructs the GET /choices JSON response from derived
@@ -217,11 +260,18 @@ func buildChoicesResponse(
 	topology *flow.Flow,
 	rawTopology *flowv1.GetFlowTopologyResponse,
 	cfg *hitlConfig,
-) *nodeutil.ChoicesResponse {
-	behaviour := deriveBehaviour(topology, rawTopology)
-	labels := cfg.ChoiceLabels
-	if labels == nil {
-		labels = map[string]string{}
+) (*nodeutil.ChoicesResponse, error) {
+	behaviour, err := deriveBehaviour(topology, rawTopology, cfg)
+	if err != nil {
+		return nil, err
+	}
+	labels := map[string]string{}
+	maps.Copy(labels, cfg.ChoiceLabels)
+	// choices[].label takes precedence over choiceLabels when present.
+	for _, ce := range cfg.Choices {
+		if ce.Label != "" {
+			labels[ce.Output] = ce.Label
+		}
 	}
 
 	resp := &nodeutil.ChoicesResponse{
@@ -255,7 +305,7 @@ func buildChoicesResponse(
 		})
 	}
 
-	return resp
+	return resp, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -292,7 +342,11 @@ func handleChoices(cfg *hitlConfig) http.HandlerFunc {
 			return
 		}
 
-		resp := buildChoicesResponse(topology, rawTopology, cfg)
+		resp, err := buildChoicesResponse(topology, rawTopology, cfg)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)

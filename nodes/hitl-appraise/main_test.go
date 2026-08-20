@@ -141,69 +141,6 @@ func TestHITLAppraise_ContextCancellation(t *testing.T) {
 	}
 }
 
-func TestDiscoverStamp(t *testing.T) {
-	tests := []struct {
-		name         string
-		capabilities []string
-		wantKind     string
-		wantStamp    string
-		wantErr      bool
-	}{
-		{
-			name:         "single stamp capability",
-			capabilities: []string{"READ:flow", "STAMP:artefact/haiku/review"},
-			wantKind:     "haiku",
-			wantStamp:    "review",
-		},
-		{
-			name:         "multiple stamps uses first",
-			capabilities: []string{"STAMP:artefact/haiku/review", "STAMP:artefact/doc/linter"},
-			wantKind:     "haiku",
-			wantStamp:    "review",
-		},
-		{
-			name:         "no stamp capability",
-			capabilities: []string{"READ:flow", "WRITE:feedback/new"},
-			wantErr:      true,
-		},
-		{
-			name:         "empty capabilities",
-			capabilities: nil,
-			wantErr:      true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			spy := newHITLAppraiseSpy()
-			spy.Topology = &flowv1.GetFlowTopologyResponse{
-				Self: &flowv1.FlowNode{
-					Name:         "test-node",
-					Capabilities: tt.capabilities,
-				},
-			}
-			client := newSpyClient(t, spy)
-
-			kind, stamp, err := discoverStamp(context.Background(), client)
-			if tt.wantErr {
-				if err == nil {
-					t.Fatal("expected error, got nil")
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if kind != tt.wantKind {
-				t.Errorf("kind=%q, want %q", kind, tt.wantKind)
-			}
-			if stamp != tt.wantStamp {
-				t.Errorf("stamp=%q, want %q", stamp, tt.wantStamp)
-			}
-		})
-	}
-}
-
 // waitForEnqueue polls until the given workitem appears in the queue.
 func waitForEnqueue(t *testing.T, qm flow.QueueManager, workitemID string) {
 	t.Helper()

@@ -26,7 +26,7 @@ ladybug-lib: ## Provision the LadybugDB C library and headers for CGo linking.
 CGO_TEST_SERVICES = archivist monitor eventbus frictionledger librarian cartographer
 
 .PHONY: test
-test: test-sdk test-sidecar test-flowctl $(addprefix test-,$(CGO_TEST_SERVICES)) test-nodes ## Run all unit tests.
+test: test-sdk test-sidecar test-flowctl test-queue $(addprefix test-,$(CGO_TEST_SERVICES)) test-nodes ## Run all unit tests.
 
 .PHONY: test-sdk
 test-sdk: ## Run SDK unit tests.
@@ -39,6 +39,12 @@ test-sidecar: ## Run Sidecar unit tests.
 .PHONY: test-flowctl
 test-flowctl: ## Run flowctl unit tests.
 	go test -v ./tools/flowctl/...
+
+# The queue-service suite needs no CGO (the service is non-storage — no
+# SQLite anywhere in the module).
+.PHONY: test-queue
+test-queue: ## Run queue-service unit tests.
+	go test -v ./platform/queue/...
 
 $(foreach srv,$(CGO_TEST_SERVICES),$(eval .PHONY: test-$(srv)))
 # The CGO service suites (especially cartographer) exceed Go's default 10m
@@ -81,13 +87,13 @@ test-all: test test-operator ## Run every test suite including the operator.
 # ---------------------------------------------------------------------------
 
 # CGO-enabled node binaries (built from ./nodes/<name>/).
-CGO_NODE_BINS = appraisal appraiser arbiter codification codify-smt embassy facilitator forge friction-watcher haiku-quench hitl hitl-appraise hitl-sort human-approval human-arbiter juror law-applicator petition-watcher refine rule-router sort tribunal ttl-watcher
+CGO_NODE_BINS = appraisal appraiser arbiter codification codify-smt embassy facilitator forge friction-watcher haiku-quench hitl hitl-appraise hitl-arbiter juror law-applicator petition-watcher refine rule-router sort tribunal ttl-watcher
 
 # CGO-enabled platform service binaries (built from ./platform/<name>/cmd/).
 CGO_PLATFORM_BINS = archivist monitor eventbus frictionledger librarian cartographer
 
 .PHONY: build
-build: build-sidecar build-null-node build-flowctl $(addprefix build-,$(CGO_NODE_BINS)) $(addprefix build-,$(CGO_PLATFORM_BINS)) ## Build all binaries.
+build: build-sidecar build-null-node build-flowctl build-queue $(addprefix build-,$(CGO_NODE_BINS)) $(addprefix build-,$(CGO_PLATFORM_BINS)) ## Build all binaries.
 
 .PHONY: build-sidecar
 build-sidecar: ## Build the Sidecar binary.
@@ -108,6 +114,12 @@ $(foreach bin,$(CGO_PLATFORM_BINS),$(eval .PHONY: build-$(bin)))
 $(foreach bin,$(CGO_PLATFORM_BINS),$(eval build-$(bin): ; $(if $(filter cartographer,$(bin)),GOWORK="$(CURDIR)/.cache/ladybug/go.work" )CGO_ENABLED=1 go build -o bin/$(bin) ./platform/$(bin)/cmd))
 
 build-cartographer: ladybug-lib
+
+# The queue-service binary is named queue-service (≠ the module name queue),
+# so it gets its own discrete target rather than shoehorning into CGO_PLATFORM_BINS.
+.PHONY: build-queue
+build-queue: ## Build the queue-service binary.
+	go build -o bin/queue-service ./platform/queue/cmd
 
 vet lint lint-fix: ladybug-lib
 
@@ -141,15 +153,15 @@ fmt: ## Run go fmt across the workspace.
 
 .PHONY: vet
 vet: ## Run go vet across the workspace.
-	GOWORK="$(CURDIR)/.cache/ladybug/go.work" go vet ./sdk/go/... ./platform/sidecar/... ./platform/archivist/... ./platform/cartographer/... ./platform/monitor/... ./platform/eventbus/... ./platform/federation/... ./platform/frictionledger/... ./platform/librarian/... ./nodes/...
+	GOWORK="$(CURDIR)/.cache/ladybug/go.work" go vet ./sdk/go/... ./platform/sidecar/... ./platform/archivist/... ./platform/cartographer/... ./platform/monitor/... ./platform/eventbus/... ./platform/federation/... ./platform/frictionledger/... ./platform/librarian/... ./platform/queue/... ./nodes/...
 
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint across the workspace (excludes operator).
-	GOWORK="$(CURDIR)/.cache/ladybug/go.work" "$(GOLANGCI_LINT)" run ./sdk/go/... ./platform/sidecar/... ./platform/archivist/... ./platform/cartographer/... ./platform/monitor/... ./platform/eventbus/... ./platform/federation/... ./platform/frictionledger/... ./platform/librarian/... ./nodes/...
+	GOWORK="$(CURDIR)/.cache/ladybug/go.work" "$(GOLANGCI_LINT)" run ./sdk/go/... ./platform/sidecar/... ./platform/archivist/... ./platform/cartographer/... ./platform/monitor/... ./platform/eventbus/... ./platform/federation/... ./platform/frictionledger/... ./platform/librarian/... ./platform/queue/... ./nodes/...
 
 .PHONY: lint-fix
 lint-fix: golangci-lint ## Run golangci-lint with auto-fix (excludes operator).
-	GOWORK="$(CURDIR)/.cache/ladybug/go.work" "$(GOLANGCI_LINT)" run --fix ./sdk/go/... ./platform/sidecar/... ./platform/archivist/... ./platform/cartographer/... ./platform/monitor/... ./platform/eventbus/... ./platform/federation/... ./platform/frictionledger/... ./platform/librarian/... ./nodes/...
+	GOWORK="$(CURDIR)/.cache/ladybug/go.work" "$(GOLANGCI_LINT)" run --fix ./sdk/go/... ./platform/sidecar/... ./platform/archivist/... ./platform/cartographer/... ./platform/monitor/... ./platform/eventbus/... ./platform/federation/... ./platform/frictionledger/... ./platform/librarian/... ./platform/queue/... ./nodes/...
 
 .PHONY: lint-operator
 lint-operator: ## Run golangci-lint for the operator (delegates to operator/Makefile).
@@ -218,7 +230,7 @@ clean: ## Remove build artefacts.
 
 .PHONY: tidy
 tidy: ## Run go mod tidy in every workspace module.
-	@for mod in gen sdk/go platform/sidecar platform/archivist platform/cartographer platform/monitor platform/eventbus platform/federation platform/frictionledger platform/librarian platform/pkg/eventbus platform/pkg/metadata platform/pkg/relay nodes platform/operator tools/flowctl; do \
+	@for mod in gen sdk/go platform/sidecar platform/archivist platform/cartographer platform/monitor platform/eventbus platform/federation platform/frictionledger platform/librarian platform/pkg/eventbus platform/pkg/metadata platform/pkg/relay platform/queue nodes platform/operator tools/flowctl; do \
 		echo "==> tidy $$mod"; \
 		(cd $$mod && go mod tidy); \
 	done

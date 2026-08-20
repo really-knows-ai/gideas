@@ -28,6 +28,8 @@ func TestConfigMap_FieldPresence(t *testing.T) {
 			configMap: "arbiter-hitl-resolve-config", fields: []string{"choiceLabels"}},
 		{name: "tribunal-hitl-resolve-config/choiceLabels",
 			configMap: "tribunal-hitl-resolve-config", fields: []string{"choiceLabels"}},
+		{name: "hitl-approval-config/choiceLabels",
+			configMap: "hitl-approval-config", fields: []string{"choiceLabels"}},
 		{name: "clerk-forge-config/systemPrompt+queryTemplate",
 			configMap: "clerk-forge-config", fields: []string{"systemPrompt", "queryTemplate"}},
 		{name: "clerk-sort-config/nodeOrder", configMap: "clerk-sort-config", fields: []string{"nodeOrder"}},

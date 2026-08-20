@@ -32,9 +32,9 @@ type stampRecord struct {
 	StampName  string
 }
 
-// humanArbiterSpy captures calls to all Foundry Flow service operations
-// for test assertions on the human-arbiter handler.
-type humanArbiterSpy struct {
+// hitlArbiterSpy captures calls to all Foundry Flow service operations
+// for test assertions on the hitl-arbiter handler.
+type hitlArbiterSpy struct {
 	flowv1.UnimplementedSidecarServiceServer
 	flowv1.UnimplementedOperatorServiceServer
 	flowv1.UnimplementedArchivistServiceServer
@@ -62,11 +62,11 @@ type humanArbiterSpy struct {
 // Spy factories
 // ---------------------------------------------------------------------------
 
-// newHumanArbiterSpy returns a spy with one DEADLOCKED feedback item,
+// newHitlArbiterSpy returns a spy with one DEADLOCKED feedback item,
 // both haiku and petition artefacts, and a topology matching the
-// human-arbiter FoundryNode.
-func newHumanArbiterSpy() *humanArbiterSpy {
-	return &humanArbiterSpy{
+// hitl-arbiter FoundryNode.
+func newHitlArbiterSpy() *hitlArbiterSpy {
+	return &hitlArbiterSpy{
 		ArtefactContents: map[string]string{
 			"haiku":    "test-haiku-content",
 			"petition": "test-petition-content",
@@ -79,7 +79,7 @@ func newHumanArbiterSpy() *humanArbiterSpy {
 		},
 		Topology: &flowv1.GetFlowTopologyResponse{
 			Self: &flowv1.FlowNode{
-				Name: "human-arbiter",
+				Name: "hitl-arbiter",
 				Capabilities: []string{
 					"READ:flow",
 					"READ:artefact/haiku",
@@ -95,10 +95,10 @@ func newHumanArbiterSpy() *humanArbiterSpy {
 	}
 }
 
-// newHumanArbiterSpyNoDeadlocked returns a spy with a RESOLVED feedback
+// newHitlArbiterSpyNoDeadlocked returns a spy with a RESOLVED feedback
 // item (no DEADLOCKED items), to test graceful degradation.
-func newHumanArbiterSpyNoDeadlocked() *humanArbiterSpy {
-	s := newHumanArbiterSpy()
+func newHitlArbiterSpyNoDeadlocked() *hitlArbiterSpy {
+	s := newHitlArbiterSpy()
 	s.FeedbackItems = []*flowv1.FeedbackItem{
 		{
 			Id:    "fb-resolved-1",
@@ -108,10 +108,10 @@ func newHumanArbiterSpyNoDeadlocked() *humanArbiterSpy {
 	return s
 }
 
-// newHumanArbiterSpyMultipleDeadlocked returns a spy with two DEADLOCKED
+// newHitlArbiterSpyMultipleDeadlocked returns a spy with two DEADLOCKED
 // feedback items, to test multi-item ruling.
-func newHumanArbiterSpyMultipleDeadlocked() *humanArbiterSpy {
-	s := newHumanArbiterSpy()
+func newHitlArbiterSpyMultipleDeadlocked() *hitlArbiterSpy {
+	s := newHitlArbiterSpy()
 	s.FeedbackItems = []*flowv1.FeedbackItem{
 		{
 			Id:    "fb-deadlocked-1",
@@ -129,9 +129,9 @@ func newHumanArbiterSpyMultipleDeadlocked() *humanArbiterSpy {
 // Spy gRPC server
 // ---------------------------------------------------------------------------
 
-// newSpyGRPCServer creates a gRPC server with the humanArbiterSpy registered
+// newSpyGRPCServer creates a gRPC server with the hitlArbiterSpy registered
 // for all five Foundry Flow service interfaces.
-func newSpyGRPCServer(spy *humanArbiterSpy) *grpc.Server {
+func newSpyGRPCServer(spy *hitlArbiterSpy) *grpc.Server {
 	srv := grpc.NewServer()
 	flowv1.RegisterSidecarServiceServer(srv, spy)
 	flowv1.RegisterOperatorServiceServer(srv, spy)
@@ -145,13 +145,13 @@ func newSpyGRPCServer(spy *humanArbiterSpy) *grpc.Server {
 // Sidecar methods
 // ---------------------------------------------------------------------------
 
-func (s *humanArbiterSpy) Heartbeat(
+func (s *hitlArbiterSpy) Heartbeat(
 	_ context.Context, _ *flowv1.HeartbeatRequest,
 ) (*flowv1.HeartbeatResponse, error) {
 	return &flowv1.HeartbeatResponse{Acknowledged: true}, nil
 }
 
-func (s *humanArbiterSpy) PauseTimer(
+func (s *hitlArbiterSpy) PauseTimer(
 	_ context.Context, _ *flowv1.PauseTimerRequest,
 ) (*flowv1.PauseTimerResponse, error) {
 	s.mu.Lock()
@@ -160,7 +160,7 @@ func (s *humanArbiterSpy) PauseTimer(
 	return &flowv1.PauseTimerResponse{Acknowledged: true}, nil
 }
 
-func (s *humanArbiterSpy) ResumeTimer(
+func (s *hitlArbiterSpy) ResumeTimer(
 	_ context.Context, _ *flowv1.ResumeTimerRequest,
 ) (*flowv1.ResumeTimerResponse, error) {
 	s.mu.Lock()
@@ -169,7 +169,7 @@ func (s *humanArbiterSpy) ResumeTimer(
 	return &flowv1.ResumeTimerResponse{Acknowledged: true}, nil
 }
 
-func (s *humanArbiterSpy) SubmitResult(
+func (s *hitlArbiterSpy) SubmitResult(
 	_ context.Context, req *flowv1.SubmitResultRequest,
 ) (*flowv1.SubmitResultResponse, error) {
 	s.mu.Lock()
@@ -195,7 +195,7 @@ func (s *humanArbiterSpy) SubmitResult(
 // Operator methods
 // ---------------------------------------------------------------------------
 
-func (s *humanArbiterSpy) GetFlowTopology(
+func (s *hitlArbiterSpy) GetFlowTopology(
 	_ context.Context, _ *flowv1.GetFlowTopologyRequest,
 ) (*flowv1.GetFlowTopologyResponse, error) {
 	s.mu.Lock()
@@ -207,7 +207,7 @@ func (s *humanArbiterSpy) GetFlowTopology(
 // Archivist methods
 // ---------------------------------------------------------------------------
 
-func (s *humanArbiterSpy) GetArtefact(
+func (s *hitlArbiterSpy) GetArtefact(
 	_ context.Context, req *flowv1.GetArtefactRequest,
 ) (*flowv1.GetArtefactResponse, error) {
 	s.mu.Lock()
@@ -226,7 +226,7 @@ func (s *humanArbiterSpy) GetArtefact(
 	}, nil
 }
 
-func (s *humanArbiterSpy) StampArtefact(
+func (s *hitlArbiterSpy) StampArtefact(
 	_ context.Context, req *flowv1.StampArtefactRequest,
 ) (*flowv1.StampArtefactResponse, error) {
 	s.mu.Lock()
@@ -238,7 +238,7 @@ func (s *humanArbiterSpy) StampArtefact(
 	return &flowv1.StampArtefactResponse{Stamp: &flowv1.Stamp{Name: req.GetStampName()}}, nil
 }
 
-func (s *humanArbiterSpy) GetFeedback(
+func (s *hitlArbiterSpy) GetFeedback(
 	_ context.Context, _ *flowv1.GetFeedbackRequest,
 ) (*flowv1.GetFeedbackResponse, error) {
 	s.mu.Lock()
@@ -252,7 +252,7 @@ func (s *humanArbiterSpy) GetFeedback(
 	}, nil
 }
 
-func (s *humanArbiterSpy) LinkRuling(
+func (s *hitlArbiterSpy) LinkRuling(
 	_ context.Context, req *flowv1.LinkRulingRequest,
 ) (*flowv1.LinkRulingResponse, error) {
 	s.mu.Lock()
@@ -274,7 +274,7 @@ func (s *humanArbiterSpy) LinkRuling(
 // FrictionLedger methods
 // ---------------------------------------------------------------------------
 
-func (s *humanArbiterSpy) RecordTelemetry(
+func (s *hitlArbiterSpy) RecordTelemetry(
 	_ context.Context, _ *flowv1.RecordTelemetryRequest,
 ) (*flowv1.RecordTelemetryResponse, error) {
 	return &flowv1.RecordTelemetryResponse{Acknowledged: true}, nil
@@ -285,8 +285,8 @@ func (s *humanArbiterSpy) RecordTelemetry(
 // ---------------------------------------------------------------------------
 
 // newSpyClient creates a flow.Client backed by a local gRPC server with
-// the humanArbiterSpy registered for all five service interfaces.
-func newSpyClient(t *testing.T, spy *humanArbiterSpy) *flow.Client {
+// the hitlArbiterSpy registered for all five service interfaces.
+func newSpyClient(t *testing.T, spy *hitlArbiterSpy) *flow.Client {
 	t.Helper()
 
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
@@ -351,7 +351,7 @@ func newWorkitemContext(workitemID string) *flowv1.WorkitemContext {
 	return &flowv1.WorkitemContext{
 		WorkitemId:    workitemID,
 		FlowNamespace: "test-flow",
-		NodeId:        "human-arbiter",
+		NodeId:        "hitl-arbiter",
 	}
 }
 
@@ -391,8 +391,8 @@ func simulateDecision(t *testing.T, ctx context.Context, qm flow.QueueManager, w
 // Test 1: Accept decision → LinkRuling WONT_FIX
 // ---------------------------------------------------------------------------
 
-func TestHumanArbiter_Accept_Decision(t *testing.T) {
-	spy := newHumanArbiterSpy()
+func TestHitlArbiter_Accept_Decision(t *testing.T) {
+	spy := newHitlArbiterSpy()
 	client := newSpyClient(t, spy)
 	qm := newTestQueueManager(t)
 	ctx := context.Background()
@@ -473,8 +473,8 @@ func TestHumanArbiter_Accept_Decision(t *testing.T) {
 // Test 2: Reject decision → LinkRuling REJECTED
 // ---------------------------------------------------------------------------
 
-func TestHumanArbiter_Reject_Decision(t *testing.T) {
-	spy := newHumanArbiterSpy()
+func TestHitlArbiter_Reject_Decision(t *testing.T) {
+	spy := newHitlArbiterSpy()
 	client := newSpyClient(t, spy)
 	qm := newTestQueueManager(t)
 	ctx := context.Background()
@@ -525,8 +525,8 @@ func TestHumanArbiter_Reject_Decision(t *testing.T) {
 // Test 3: Cancel decision → Complete(CANCELLED)
 // ---------------------------------------------------------------------------
 
-func TestHumanArbiter_Cancel_Decision(t *testing.T) {
-	spy := newHumanArbiterSpy()
+func TestHitlArbiter_Cancel_Decision(t *testing.T) {
+	spy := newHitlArbiterSpy()
 	client := newSpyClient(t, spy)
 	qm := newTestQueueManager(t)
 	ctx := context.Background()
@@ -578,8 +578,8 @@ func TestHumanArbiter_Cancel_Decision(t *testing.T) {
 // Test 4: Invalid choice → error
 // ---------------------------------------------------------------------------
 
-func TestHumanArbiter_InvalidChoice(t *testing.T) {
-	spy := newHumanArbiterSpy()
+func TestHitlArbiter_InvalidChoice(t *testing.T) {
+	spy := newHitlArbiterSpy()
 	client := newSpyClient(t, spy)
 	qm := newTestQueueManager(t)
 	ctx := context.Background()
@@ -623,8 +623,8 @@ func TestHumanArbiter_InvalidChoice(t *testing.T) {
 // Test 5: No deadlocked feedback → graceful degradation
 // ---------------------------------------------------------------------------
 
-func TestHumanArbiter_NoDeadlockedFeedback(t *testing.T) {
-	spy := newHumanArbiterSpyNoDeadlocked()
+func TestHitlArbiter_NoDeadlockedFeedback(t *testing.T) {
+	spy := newHitlArbiterSpyNoDeadlocked()
 	client := newSpyClient(t, spy)
 	qm := newTestQueueManager(t)
 	ctx := context.Background()
@@ -668,8 +668,8 @@ func TestHumanArbiter_NoDeadlockedFeedback(t *testing.T) {
 // Test 6: Context cancelled during WaitForDecision → error
 // ---------------------------------------------------------------------------
 
-func TestHumanArbiter_ContextCancelled(t *testing.T) {
-	spy := newHumanArbiterSpy()
+func TestHitlArbiter_ContextCancelled(t *testing.T) {
+	spy := newHitlArbiterSpy()
 	client := newSpyClient(t, spy)
 	qm := newTestQueueManager(t)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -712,7 +712,7 @@ func TestHumanArbiter_ContextCancelled(t *testing.T) {
 // Test 7: GET /choices returns hardcoded JSON
 // ---------------------------------------------------------------------------
 
-func TestHumanArbiter_ChoicesEndpoint(t *testing.T) {
+func TestHitlArbiter_ChoicesEndpoint(t *testing.T) {
 	req := httptest.NewRequest("GET", "/choices", nil)
 	rec := httptest.NewRecorder()
 
@@ -779,8 +779,8 @@ func TestHumanArbiter_ChoicesEndpoint(t *testing.T) {
 // Test 8: Multiple deadlocked items → LinkRuling called for each
 // ---------------------------------------------------------------------------
 
-func TestHumanArbiter_MultipleDeadlocked(t *testing.T) {
-	spy := newHumanArbiterSpyMultipleDeadlocked()
+func TestHitlArbiter_MultipleDeadlocked(t *testing.T) {
+	spy := newHitlArbiterSpyMultipleDeadlocked()
 	client := newSpyClient(t, spy)
 	qm := newTestQueueManager(t)
 	ctx := context.Background()

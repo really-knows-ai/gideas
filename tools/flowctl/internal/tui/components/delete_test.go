@@ -117,7 +117,7 @@ func TestDeleteViewActiveItems(t *testing.T) {
 	m.Items = []api.WorkitemSummary{
 		{Name: "wi-running", State: "Running", Node: "sort"},
 		{Name: "wi-pending", State: "Pending", Node: "forge"},
-		{Name: "wi-suspended", State: "Suspended", Node: "human-approval"},
+		{Name: "wi-suspended", State: "Suspended", Node: "hitl-approval"},
 	}
 	m.Namespace = "test-ns"
 

@@ -120,8 +120,8 @@ func TestDeployment_NodeImage(t *testing.T) {
 		{name: "clerk-forge", nodeID: "clerk-forge", image: "forge:latest"},
 		{name: "clerk-done-router", nodeID: "clerk-done-router", image: "rule-router:latest"},
 		{name: "hitl-gate", nodeID: "hitl-gate", image: "rule-router:latest"},
-		{name: "human-arbiter", nodeID: "human-arbiter", image: "human-arbiter:latest"},
-		{name: "human-approval", nodeID: "human-approval", image: "human-approval:latest"},
+		{name: "hitl-arbiter", nodeID: "hitl-arbiter", image: "hitl-arbiter:latest"},
+		{name: "hitl-approval", nodeID: "hitl-approval", image: "hitl:latest"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -151,6 +151,7 @@ func TestDeployment_ConfigMapMount(t *testing.T) {
 	}{
 		{name: "arbiter", nodeID: "arbiter", volumeName: "node-config", configMapName: "arbiter-config"},
 		{name: "codification", nodeID: "codification", volumeName: "node-config", configMapName: "codification-config"},
+		{name: "hitl-approval", nodeID: "hitl-approval", volumeName: "node-config", configMapName: "hitl-approval-config"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -181,8 +182,7 @@ func TestDeployment_NoConfigMapMount(t *testing.T) {
 	}{
 		{name: "friction-watcher", nodeID: "friction-watcher"},
 		{name: "law-applicator", nodeID: "law-applicator"},
-		{name: "human-arbiter", nodeID: "human-arbiter"},
-		{name: "human-approval", nodeID: "human-approval"},
+		{name: "hitl-arbiter", nodeID: "hitl-arbiter"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

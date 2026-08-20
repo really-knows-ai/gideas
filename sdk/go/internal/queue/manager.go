@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -44,7 +45,7 @@ func WithQueueName(name string) Option {
 // WithCustomRoutes registers additional HTTP routes on the QueueManager's
 // REST API mux. The provided function is called after the standard HITL
 // routes are registered, so it can add node-specific endpoints (e.g. GET
-// /choices for hitl-sort) on the same server without forking the SDK.
+// /choices for hitl) on the same server without forking the SDK.
 func WithCustomRoutes(fn func(mux *http.ServeMux)) Option {
 	return func(c *config) { c.customRoutes = fn }
 }
@@ -59,6 +60,22 @@ type Manager struct {
 	httpSrv   *http.Server
 	peer      *queuePeerServer
 	decisions sync.Map // workitemID → chan string
+
+	// queueServiceAddr is the FLOW_QUEUE_SERVICE_ADDR value read once at
+	// NewManager time. Empty ⇒ standalone (no registration) — current behavior.
+	queueServiceAddr string
+	// registry is non-nil when queueServiceAddr is set and Start succeeded in
+	// registering. It owns the heartbeat loop.
+	registry *queueRegistryClient
+	// hbCancel cancels the heartbeat loop; hbWG tracks its goroutine.
+	hbCancel context.CancelFunc
+	hbWG     sync.WaitGroup
+	// heartbeatInterval defaults to defaultHeartbeatInterval; settable by
+	// same-package tests for a sub-second tick.
+	heartbeatInterval time.Duration
+	// registryDial dials the queue-service. nil ⇒ the production dialer;
+	// settable by same-package tests to inject a bufconn dialer.
+	registryDial registryDialer
 }
 
 // NewManager creates a new QueueManager. Call Start() to initialise
@@ -99,10 +116,17 @@ func NewManager(opts ...Option) (*Manager, error) {
 		cfg.queueName = "default"
 	}
 
+	// FLOW_QUEUE_SERVICE_ADDR is read exactly once, at construction time, not
+	// at Start: a t.Setenv after NewManager but before Start registers nothing.
+	// Empty ⇒ standalone (no dial, no client).
+	queueServiceAddr := os.Getenv("FLOW_QUEUE_SERVICE_ADDR")
+
 	return &Manager{
-		shardID:   cfg.shardID,
-		queueName: cfg.queueName,
-		apiPort:   cfg.apiPort,
+		shardID:           cfg.shardID,
+		queueName:         cfg.queueName,
+		apiPort:           cfg.apiPort,
+		queueServiceAddr:  queueServiceAddr,
+		heartbeatInterval: defaultHeartbeatInterval,
 	}, nil
 }
 
@@ -178,6 +202,7 @@ func (qm *Manager) Start(ctx context.Context, opts ...Option) error {
 	qm.mesh = newQueueMesh(store, qm.shardID, resolver, cfg.peerPort)
 	qm.peer = &queuePeerServer{
 		store: store,
+		mesh:  qm.mesh,
 		onDecide: func(workitemID, choice string) {
 			// Signal any local WaitForDecision callers. Uses Load so
 			// WaitForDecision always finds the channel; it cleans up after
@@ -194,8 +219,50 @@ func (qm *Manager) Start(ctx context.Context, opts ...Option) error {
 			}
 		},
 	}
+	// Wire the promotion path (R-C4): the queuePeerServer.NotifyShardDead
+	// handler invokes this hook on every surviving shard (tests drive it
+	// directly). It runs outside the mesh lock; handleShardDead's markDead is
+	// its only lock call.
+	qm.mesh.onShardDead = func(dead string) {
+		qm.mesh.handleShardDead(context.Background(), dead)
+	}
 
 	qm.mesh.start(ctx)
+
+	// If a queue-service address was captured at construction, register this
+	// shard and begin the heartbeat loop. Registration/heartbeat failures are
+	// logged and retried — they must never fail the owning node (standalone
+	// parity). The registered shard addr derives from the already-resolved
+	// shardID, never from a second HOSTNAME read.
+	if qm.queueServiceAddr != "" {
+		shardAddr := net.JoinHostPort(qm.shardID, cfg.peerPort)
+		interval := qm.heartbeatInterval
+		if interval <= 0 {
+			interval = defaultHeartbeatInterval
+		}
+		// The mesh's backup-selection view is the heartbeat-derived living set
+		// (R-B3) — refreshed on each HeartbeatQueue response, corrected down by
+		// deadShards on the mesh side. The SDK never reads the Queue CR.
+		heartbeats := &heartbeatShardRegistry{}
+		qm.mesh.registry = heartbeats
+		reg, err := newQueueRegistryClient(
+			qm.queueServiceAddr, qm.registryDial,
+			qm.shardID, qm.queueName, shardAddr, interval,
+		)
+		if err != nil {
+			slog.Warn("flow hitl: failed to connect to queue-service", "addr", qm.queueServiceAddr, "error", err)
+		} else {
+			qm.registry = reg
+			reg.onHeartbeat = func(shards []Shard) { heartbeats.update(shards) }
+			if err := reg.register(ctx); err != nil {
+				slog.Warn("flow hitl: queue-service registration failed", "error", err)
+			}
+			hbCtx, hbCancel := context.WithCancel(ctx)
+			qm.hbCancel = hbCancel
+			qm.hbWG.Add(1)
+			go reg.heartbeatLoop(hbCtx, &qm.hbWG)
+		}
+	}
 
 	// Start HTTP server.
 	mux := newRouter(qm)
@@ -234,6 +301,22 @@ func (qm *Manager) Stop() error {
 		qm.decisions.Delete(key)
 		return true
 	})
+	// Stop the heartbeat loop and wait for the in-flight tick to complete
+	// (per the agent pattern), then deregister best-effort before the mesh
+	// tears down so a peer teardown never races the registry goroutine.
+	if qm.hbCancel != nil {
+		qm.hbCancel()
+		qm.hbWG.Wait()
+	}
+	if qm.registry != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := qm.registry.deregister(ctx); err != nil {
+			slog.Warn("flow hitl: queue-service deregistration failed", "error", err)
+		}
+		cancel()
+		_ = qm.registry.close()
+		qm.registry = nil
+	}
 	if qm.mesh != nil {
 		_ = qm.mesh.stop()
 	}
@@ -253,8 +336,21 @@ func (qm *Manager) RegisterGRPC(srv *grpc.Server) {
 // --- QueueManager interface implementation ---
 
 func (qm *Manager) Enqueue(ctx context.Context, workitemID string) error {
-	if err := qm.store.enqueue(ctx, workitemID); err != nil {
+	// R-C2: one time-ordered parking-event ID per enqueue.
+	gen := newGenerationID()
+	// R-C1: pick one random backup from the living set (excluding self).
+	backup := qm.mesh.chooseBackup([]string{qm.shardID})
+	if err := qm.store.enqueue(ctx, workitemID, gen, backup); err != nil {
 		return err
+	}
+	// R-C1: replicate to the chosen backup (records backup_shard on success,
+	// resets to '' on failure = backfill-eligible).
+	if backup != "" {
+		if err := qm.mesh.replicateAndRecord(ctx, workitemID, gen, qm.shardID, qm.store.queueName, backup); err != nil {
+			// ponytail: a failed replicate leaves the item backfill-eligible
+			// (warn inside replicateAndRecord); owner remains authoritative.
+			_ = err
+		}
 	}
 	// Create a decision channel so WaitForDecision can block.
 	qm.decisions.Store(workitemID, make(chan string, 1))
