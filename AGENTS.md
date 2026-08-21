@@ -161,23 +161,23 @@ All implementation, verification, review, and commits happen inside the worktree
 
 ### Pipeline Steps
 
-#### 1. Spec (`make-project-spec`)
+#### 1. Spec (`spec-writer`)
 
-Turn an idea or feature request into `plans/<project-name>/SPEC.md`. The skill explores context, proposes approaches, writes a concrete spec with acceptance criteria, and self-reviews. Output: a reviewed `SPEC.md` ready for planning.
+Turn an idea or feature request into `plans/<project-name>/SPEC.md`. The agent explores context graph-first, proposes approaches, writes a concrete spec with acceptance criteria, and self-reviews. Output: a reviewed `SPEC.md` ready for planning.
 
-Run: `make-project-spec` skill.
+Run: the coordinator dispatches the `spec-writer` agent.
 
-#### 2. Plan (`make-phased-plan`)
+#### 2. Plan (`plan-writer`)
 
-Read `SPEC.md` and produce `PLAN.md` + `PHASE_XX.md` files. Proposes multiple phase breakdown strategies (by layer, by service, by risk, etc.) for the user to choose from. Drafts phases in parallel, then reviews each phase individually and holistically. Output: approved `PLAN.md` and `PHASE_XX.md` files.
+Read `SPEC.md` and produce `PLAN.md` + `PHASE_XX.md` files. Proposes multiple phase breakdown strategies (by layer, by service, by risk, etc.) for the user to choose from, then drafts and writes the phases. The coordinator reviews each phase individually and holistically afterwards. Output: approved `PLAN.md` and `PHASE_XX.md` files.
 
-Run: `make-phased-plan` skill.
+Run: the coordinator dispatches the `plan-writer` agent, then runs the phase-by-phase and holistic review with the `reviewer` agent.
 
-#### 3. Execute (`execute-phased-plan`)
+#### 3. Execute (coordinator)
 
-Execute the phased plan in a fresh git worktree and `dev/<project-slug>` branch. Each phase is implemented, verified, reviewed, and committed before the next phase begins. After all phases, runs the full quality gate (`go test ./... && make check-fix`) and a final spec-fulfilment review. Output: completed implementation in a worktree ready for merge.
+Execute the phased plan in a fresh git worktree and `dev/<project-slug>` branch. The coordinator routes each phase's work to the correct subagent — `implementer` for source, `unit-test-implementer` for unit tests, `int-test-implementer` for integration tests, `reviewer` for review — dispatching source and tests separately when a phase spans both. Each phase is implemented, verified, reviewed, and committed before the next begins. After all phases, it runs the full quality gate and a final spec-fulfilment review. Output: completed implementation in a worktree ready for merge.
 
-Run: `execute-phased-plan` skill.
+Run: the coordinator's "Phased plan execution" workflow.
 
 #### 4. Review (`special-review`)
 
@@ -193,7 +193,7 @@ Run: `special-fixer` skill.
 
 ### Subagents
 
-This repository defines five subagents under `.opencode/agents/`:
+This repository defines seven subagents under `.opencode/agents/`:
 
 | Agent | Model | Purpose |
 |-------|-------|---------|
@@ -202,6 +202,8 @@ This repository defines five subagents under `.opencode/agents/`:
 | `analyst` | claude-haiku-4.5 | Read-only analysis: exploration, categorisation, structured reports |
 | `unit-test-implementer` | deepseek-v4-flash (low variant) | Strict unit-test implementer: true unit tests only (single unit, injected fakes, zero I/O, millisecond-fast) + minimal testability seams |
 | `int-test-implementer` | deepseek-v4-flash (low variant) | Strict integration-test implementer: real components composed across real I/O boundaries, `-short`-guarded, isolated per test |
+| `spec-writer` | deepseek-v4-flash (low variant) | Spec authoring: writes `plans/<project>/SPEC.md` graph-first; writes SPEC.md only |
+| `plan-writer` | deepseek-v4-flash (low variant) | Plan authoring: writes `PLAN.md` + `PHASE_*.md` from `SPEC.md` graph-first |
 
 ### Existing Skills
 
