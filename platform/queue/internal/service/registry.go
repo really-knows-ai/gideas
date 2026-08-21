@@ -7,6 +7,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -63,6 +64,15 @@ type Registry struct {
 	// be visible to concurrent requests, not on the per-request proxy.
 	itemLocks   map[string]*sync.Mutex
 	itemLocksMu sync.Mutex
+
+	// freshestShardID records the per-queue last-acked shard (F2): the funnel
+	// tags the confirming shard of each quorum-acked enqueue as the queue's
+	// freshest mirror. The convergence backstop (Sweeper) and
+	// sync-on-registration use this recorded shard as the authoritative diff
+	// target — NEVER updated_at / heartbeat freshness (all shards carry
+	// identical generation-guarded data, so any confirmer is authoritative).
+	freshestMu      sync.Mutex
+	freshestShardID map[string]string // queueName -> shardID
 }
 
 // NewRegistry constructs a Registry. TTL and sweep interval are explicit
@@ -70,10 +80,84 @@ type Registry struct {
 // field, set post-construction.
 func NewRegistry(c client.Client, leaseTTL, sweepInterval time.Duration) *Registry {
 	return &Registry{
-		client:        c,
-		leaseTTL:      leaseTTL,
-		sweepInterval: sweepInterval,
-		itemLocks:     make(map[string]*sync.Mutex),
+		client:          c,
+		leaseTTL:        leaseTTL,
+		sweepInterval:   sweepInterval,
+		itemLocks:       make(map[string]*sync.Mutex),
+		freshestShardID: make(map[string]string),
+	}
+}
+
+// recordFreshest tags the confirming shard as the per-queue freshest mirror
+// (F2): the last shard to ack a quorum enqueue wins. All shards carry identical
+// generation-guarded data, so any confirmer is authoritative — this is a
+// recorded identity, never an updated_at / heartbeat-freshness arbitration.
+func (r *Registry) recordFreshest(queueName, shardID string) {
+	r.freshestMu.Lock()
+	defer r.freshestMu.Unlock()
+	r.freshestShardID[queueName] = shardID
+}
+
+// FreshestShardID returns the recorded per-queue last-acked shard, or "" if
+// none has been recorded yet.
+func (r *Registry) FreshestShardID(queueName string) string {
+	r.freshestMu.Lock()
+	defer r.freshestMu.Unlock()
+	return r.freshestShardID[queueName]
+}
+
+// syncOnRegistration replays the queue's full authoritative item set to a
+// newly-registered (or re-registered-after-eviction) shard within the
+// registration round-trip (R-4.1). The authoritative set is read from the
+// recorded freshest mirror (F2) and replayed via ApplyItem per item — ONE
+// bounded push, not a scan. If no freshest mirror is recorded, or it is not a
+// living mirror distinct from the target shard, the sync is a no-op. Errors are
+// logged and swallowed: a failed playback leaves the shard to be converged by
+// the periodic backstop sweep.
+func (r *Registry) syncOnRegistration(ctx context.Context, queueName, shardAddr string) {
+	freshID := r.FreshestShardID(queueName)
+	if freshID == "" {
+		return // no recorded freshest mirror — nothing authoritative to replay
+	}
+	proxy := newPeerProxy(r)
+	defer proxy.close()
+
+	shards, err := proxy.fetch(ctx, queueName)
+	if err != nil {
+		slog.Warn("queue-service: sync-on-registration fetch failed", "queue", queueName, "error", err)
+		return
+	}
+	var freshAddr string
+	for _, sh := range shards {
+		if sh.ShardID == freshID {
+			freshAddr = sh.Addr
+			break
+		}
+	}
+	if freshAddr == "" || freshAddr == shardAddr {
+		return // no living freshest mirror, or it IS the target shard
+	}
+
+	freshC, err := proxy.dial(ctx, freshAddr)
+	if err != nil {
+		slog.Warn("queue-service: sync-on-registration dial freshest failed", "queue", queueName, "error", err)
+		return
+	}
+	resp, err := freshC.GetLocalQueue(ctx, &flowv1.GetLocalQueueRequest{})
+	if err != nil {
+		slog.Warn("queue-service: sync-on-registration read failed", "queue", queueName, "error", err)
+		return
+	}
+	targetC, err := proxy.dial(ctx, shardAddr)
+	if err != nil {
+		slog.Warn("queue-service: sync-on-registration dial target failed",
+			"queue", queueName, "addr", shardAddr, "error", err)
+		return
+	}
+	for _, item := range resp.GetItems() {
+		if _, err := targetC.ApplyItem(ctx, &flowv1.ApplyItemRequest{Item: item}); err != nil {
+			slog.Warn("queue-service: sync-on-registration apply failed", "queue", queueName, "addr", shardAddr, "error", err)
+		}
 	}
 }
 
@@ -202,6 +286,9 @@ func (r *Registry) RegisterQueue(
 	if err := r.client.Status().Update(ctx, q); err != nil {
 		return nil, toInternal("register queue: upsert", err)
 	}
+	// R-4.1: playback the authoritative item set to the (re)registered shard
+	// within this round-trip, once the CR shard is living/addressable.
+	r.syncOnRegistration(ctx, req.GetQueueName(), req.GetShardAddr())
 	return &flowv1.RegisterQueueResponse{Acknowledged: true}, nil
 }
 
@@ -231,10 +318,21 @@ func (r *Registry) HeartbeatQueue(
 		}
 	}
 
+	// A shard that was absent from (or evicted from) the living set is treated
+	// as newly-registered: sync its authoritative set within this round-trip
+	// (R-4.1). A continuously-living shard just refreshes its heartbeat.
+	wasLiving := true
+	if i := shardIndex(q, req.GetShardId()); i < 0 || q.Status.Shards[i].Phase == phaseEvicted {
+		wasLiving = false
+	}
 	now := time.Now().UTC()
 	upsertShard(q, req.GetShardId(), req.GetShardAddr(), phaseActive, now)
 	if err := r.client.Status().Update(ctx, q); err != nil {
 		return nil, toInternal("heartbeat: status update", err)
+	}
+
+	if !wasLiving {
+		r.syncOnRegistration(ctx, req.GetQueueName(), req.GetShardAddr())
 	}
 
 	// Re-read to return the authoritative post-write living set.

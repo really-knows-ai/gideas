@@ -208,6 +208,10 @@ func (p *peerProxy) enqueueBroadcast(
 			slog.Warn("queue-service: enqueue apply failed", "addr", s.Addr, "error", err)
 			continue
 		}
+		// F2: tag the confirming shard as the per-queue freshest mirror — the
+		// last confirmer wins. All shards carry identical generation-guarded
+		// data, so any confirmer is authoritative (no updated_at arbitration).
+		p.reg.recordFreshest(queueName, s.ShardID)
 		confirmed++
 	}
 	if confirmed < quorumFor(n) {
