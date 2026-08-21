@@ -3,7 +3,6 @@ package config
 import (
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -40,12 +39,11 @@ func findGoWork(t *testing.T) string {
 	return string(data)
 }
 
-// newTestCommand creates a cobra command with the three watch flags registered.
+// newTestCommand creates a cobra command with the watch flags registered.
 func newTestCommand() *cobra.Command {
 	cmd := &cobra.Command{Use: "watch"}
 	cmd.Flags().String("namespace", "", "Workitem namespace")
 	cmd.Flags().String("system-namespace", "", "System services namespace")
-	cmd.Flags().Int("hitl-port", 0, "HITL REST port")
 	return cmd
 }
 
@@ -172,78 +170,6 @@ func TestParseFlags_SystemNamespace(t *testing.T) {
 			}
 			if cfg.SystemNamespace != tt.want {
 				t.Errorf("SystemNamespace = %q, want %q", cfg.SystemNamespace, tt.want)
-			}
-		})
-	}
-}
-
-func TestParseFlags_HitlPort(t *testing.T) {
-	tests := []struct {
-		name       string
-		flagVal    int
-		envVal     string // empty = not set
-		setChanged bool
-		want       int
-		wantErr    bool
-	}{
-		{
-			name:       "T8: default is 8080",
-			flagVal:    0,
-			envVal:     "",
-			setChanged: false,
-			want:       8080,
-			wantErr:    false,
-		},
-		{
-			name:       "T9: from flag",
-			flagVal:    9090,
-			envVal:     "",
-			setChanged: true,
-			want:       9090,
-			wantErr:    false,
-		},
-		{
-			name:       "T10: from env var",
-			flagVal:    0,
-			envVal:     "7070",
-			setChanged: false,
-			want:       7070,
-			wantErr:    false,
-		},
-		{
-			name:       "T11: env var parse error",
-			flagVal:    0,
-			envVal:     "not-a-number",
-			setChanged: false,
-			want:       0,
-			wantErr:    true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			os.Clearenv()
-			if tt.envVal != "" {
-				os.Setenv("FLOW_HITL_PORT", tt.envVal)
-			}
-			cmd := newTestCommand()
-			if tt.setChanged {
-				cmd.Flags().Set("hitl-port", strconv.Itoa(tt.flagVal))
-				// Ensure flag is marked as explicitly set by user
-				// The Changed method returns true after Set
-			}
-			cfg, err := ParseFlags(cmd)
-			if tt.wantErr {
-				if err == nil {
-					t.Fatal("expected error, got nil")
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if cfg.HitlPort != tt.want {
-				t.Errorf("HitlPort = %d, want %d", cfg.HitlPort, tt.want)
 			}
 		})
 	}

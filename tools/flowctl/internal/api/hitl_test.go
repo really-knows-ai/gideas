@@ -1,5 +1,18 @@
 package api
 
+// PHASE_07 — flowctl HITL client retarget to the queue-service.
+//
+// These tests pin the FULLY-SPECIFIED retarget design:
+//   - NewHitlClient gains a queueName parameter; base URL is the queue-service.
+//   - All paths are retargeted to /queues/{queueName}/{workitemID} (+ suffix).
+//   - GET /choices is GONE; choices are item metadata on QueueItem, surfaced via
+//     (*QueueItem).ChoicesWithDefault.
+//   - Error envelope/codes/Is* helpers are preserved unchanged.
+//
+// The tests are currently RED: production hitl.go still points at /queue/{id},
+// NewHitlClient takes only baseURL, QueueItem has no Choices, and there is no
+// ChoicesWithDefault.
+
 import (
 	"context"
 	"encoding/json"
@@ -7,25 +20,32 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 )
 
-// ─── Mock HTTP Handler ──────────────────────────────────────────────────────
+// ─── Test constants ─────────────────────────────────────────────────────────
 
-// capturedRequest stores a request along with its body bytes for test assertions.
+// The queue name is resolved by the caller (TUI) and passed into the client;
+// the client embeds it into every path it builds.
+const testQueueName = "hitl-approval"
+
+// ─── Mock HTTP handler ──────────────────────────────────────────────────────
+
 type capturedRequest struct {
-	Method     string
-	Path       string
-	Header     http.Header
-	Body       []byte
+	Method string
+	Path   string
+	Body   []byte
 }
 
-// mockHandler responds to configured routes for HITL REST testing.
+// mockHandler routes on the retargeted /queues/{queueName}/{workitemID} paths
+// and captures each request so tests can assert the exact paths the client
+// builds (base URL = queue-service, queue name embedded).
 type mockHandler struct {
 	mu       sync.Mutex
 	routes   map[string]mockRoute
-	requests []capturedRequest // captured for assertion
+	requests []capturedRequest
 }
 
 type mockRoute struct {
@@ -44,21 +64,18 @@ func (h *mockHandler) set(path string, status int, body string) {
 }
 
 func (h *mockHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// Capture request body
 	bodyBytes, _ := io.ReadAll(r.Body)
 	r.Body.Close()
 
-	cr := capturedRequest{
+	h.mu.Lock()
+	h.requests = append(h.requests, capturedRequest{
 		Method: r.Method,
 		Path:   r.URL.Path,
-		Header: r.Header.Clone(),
 		Body:   bodyBytes,
-	}
-
-	h.mu.Lock()
-	h.requests = append(h.requests, cr)
+	})
 	route, ok := h.routes[r.URL.Path]
 	h.mu.Unlock()
+
 	if !ok {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusNotFound)
@@ -73,7 +90,6 @@ func (h *mockHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(route.body))
 }
 
-// lastRequest returns the most recently captured request (for assertion).
 func (h *mockHandler) lastRequest() capturedRequest {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -83,7 +99,6 @@ func (h *mockHandler) lastRequest() capturedRequest {
 	return h.requests[len(h.requests)-1]
 }
 
-// requestCount returns the number of captured requests.
 func (h *mockHandler) requestCount() int {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -92,80 +107,109 @@ func (h *mockHandler) requestCount() int {
 
 // ─── Test helpers ───────────────────────────────────────────────────────────
 
-func testChoiceJSON(value, label, chType string) string {
-	return fmt.Sprintf(`{"value":%q,"label":%q,"type":%q}`, value, label, chType)
-}
-
-func testQueueItemJSON(workitemID string) string {
+// queueItemJSON renders a queue-service queue item. choices may be empty,
+// in which case the field is omitted entirely (exercises the "missing choices
+// -> defaults" path).
+func queueItemJSON(workitemID string, choices ...string) string {
+	if len(choices) == 0 {
+		return fmt.Sprintf(`{
+			"workitem_id":    %q,
+			"shard_id":       "shard-0",
+			"queue_name":     %q,
+			"status":         "pending",
+			"enqueued_at":    "2024-01-01T00:00:00Z",
+			"claimed_at":     ""
+		}`, workitemID, testQueueName)
+	}
+	raw, _ := json.Marshal(choices)
 	return fmt.Sprintf(`{
-		"workitem_id": %q,
-		"shard_id": "shard-0",
-		"queue_name": "default",
-		"status": "pending",
-		"enqueued_at": "2024-01-01T00:00:00Z",
-		"claimed_at": ""
-	}`, workitemID)
+		"workitem_id":    %q,
+		"shard_id":       "shard-0",
+		"queue_name":     %q,
+		"status":         "pending",
+		"enqueued_at":    "2024-01-01T00:00:00Z",
+		"claimed_at":     "",
+		"choices":        %s
+	}`, workitemID, testQueueName, string(raw))
 }
 
-func testErrorJSON(code, message string) string {
+func errorJSON(code, message string) string {
 	return fmt.Sprintf(`{"error":{"code":%q,"message":%q}}`, code, message)
 }
 
-// ─── T1: ProbeQueue returns QueueItem on 200 ────────────────────────────────
+// newClient builds a client pointing at the httptest queue-service with the
+// pinned queue name; every path the client builds is expected under
+// /queues/{testQueueName}/...
+func newClient(serverURL string) *HitlClient {
+	return NewHitlClient(serverURL, testQueueName)
+}
 
-func TestProbeQueue200(t *testing.T) {
+// ─── ProbeQueue ─────────────────────────────────────────────────────────────
+
+// T1: ProbeQueue builds GET /queues/{name}/{id} and returns the item on 200,
+// with choices decoded from the queue-service item.
+func TestProbeQueue(t *testing.T) {
 	h := newMockHandler()
-	h.set("/queue/test-wi", 200, testQueueItemJSON("test-wi"))
+	h.set("/queues/"+testQueueName+"/wi-1", 200, queueItemJSON("wi-1", "approve", "reject"))
 	srv := httptest.NewServer(h)
 	defer srv.Close()
 
-	client := NewHitlClient(srv.URL)
-	qi, err := client.ProbeQueue(context.Background(), "test-wi")
+	client := newClient(srv.URL)
+	qi, err := client.ProbeQueue(context.Background(), "wi-1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if qi == nil {
 		t.Fatal("expected non-nil QueueItem")
 	}
-	if qi.WorkitemID != "test-wi" {
-		t.Errorf("expected WorkitemID 'test-wi', got %q", qi.WorkitemID)
+	if qi.WorkitemID != "wi-1" {
+		t.Errorf("expected WorkitemID 'wi-1', got %q", qi.WorkitemID)
 	}
-	if qi.ShardID != "shard-0" {
-		t.Errorf("expected ShardID 'shard-0', got %q", qi.ShardID)
+	if qi.QueueName != testQueueName {
+		t.Errorf("expected QueueName %q, got %q", testQueueName, qi.QueueName)
 	}
-	if qi.Status != "pending" {
-		t.Errorf("expected Status 'pending', got %q", qi.Status)
+	// Choices arrive as item metadata from the queue-service.
+	if len(qi.Choices) != 2 || qi.Choices[0] != "approve" || qi.Choices[1] != "reject" {
+		t.Errorf("expected item choices [approve reject], got %v", qi.Choices)
+	}
+
+	// The client must query the retargeted path (queue-service base + queue name).
+	req := h.lastRequest()
+	if req.Method != http.MethodGet {
+		t.Errorf("expected GET, got %s", req.Method)
+	}
+	want := "/queues/" + testQueueName + "/wi-1"
+	if req.Path != want {
+		t.Errorf("expected path %q, got %q", want, req.Path)
 	}
 }
 
-// ─── T2: ProbeQueue returns nil on 404 ──────────────────────────────────────
-
-func TestProbeQueue404(t *testing.T) {
+// T2: ProbeQueue returns (nil, nil) silently on 404.
+func TestProbeQueueNotFound(t *testing.T) {
 	h := newMockHandler()
-	h.set("/queue/test-wi", 404, testErrorJSON(ErrQueueItemNotFound, "not found"))
+	h.set("/queues/"+testQueueName+"/wi-1", 404, errorJSON(ErrQueueItemNotFound, "not found"))
 	srv := httptest.NewServer(h)
 	defer srv.Close()
 
-	client := NewHitlClient(srv.URL)
-	qi, err := client.ProbeQueue(context.Background(), "test-wi")
+	client := newClient(srv.URL)
+	qi, err := client.ProbeQueue(context.Background(), "wi-1")
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatalf("expected silent (nil,nil) on 404, got error: %v", err)
 	}
 	if qi != nil {
 		t.Fatal("expected nil QueueItem on 404")
 	}
 }
 
-// ─── T3: ProbeQueue propagates errors ───────────────────────────────────────
-
+// T3: ProbeQueue propagates a structured error envelope on non-200/404.
 func TestProbeQueueError(t *testing.T) {
 	h := newMockHandler()
-	h.set("/queue/test-wi", 409, testErrorJSON(ErrQueueItemAlreadyClaimed, "claimed by X"))
+	h.set("/queues/"+testQueueName+"/wi-1", 409, errorJSON(ErrQueueItemAlreadyClaimed, "claimed by X"))
 	srv := httptest.NewServer(h)
 	defer srv.Close()
 
-	client := NewHitlClient(srv.URL)
-	qi, err := client.ProbeQueue(context.Background(), "test-wi")
+	client := newClient(srv.URL)
+	qi, err := client.ProbeQueue(context.Background(), "wi-1")
 	if qi != nil {
 		t.Fatal("expected nil QueueItem on error")
 	}
@@ -177,116 +221,69 @@ func TestProbeQueueError(t *testing.T) {
 	}
 }
 
-// ─── T4: GetChoices returns choices on 200 ──────────────────────────────────
+// ─── Claim ──────────────────────────────────────────────────────────────────
 
-func TestGetChoices200(t *testing.T) {
-	h := newMockHandler()
-	body := fmt.Sprintf(`{
-		"choices": [%s, %s],
-		"hasFeedback": false,
-		"hasCancel": true
-	}`, testChoiceJSON("approve", "Approve", "route"),
-		testChoiceJSON("cancel", "Cancel", "cancel"))
-	h.set("/choices", 200, body)
-	srv := httptest.NewServer(h)
-	defer srv.Close()
-
-	client := NewHitlClient(srv.URL)
-	cr, err := client.GetChoices(context.Background())
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if cr == nil {
-		t.Fatal("expected non-nil ChoicesResponse")
-	}
-	if len(cr.Choices) != 2 {
-		t.Fatalf("expected 2 choices, got %d", len(cr.Choices))
-	}
-	if cr.Choices[0].Value != "approve" {
-		t.Errorf("expected first choice value 'approve', got %q", cr.Choices[0].Value)
-	}
-	if cr.Choices[0].Label != "Approve" {
-		t.Errorf("expected first choice label 'Approve', got %q", cr.Choices[0].Label)
-	}
-	if cr.Choices[0].Type != "route" {
-		t.Errorf("expected first choice type 'route', got %q", cr.Choices[0].Type)
-	}
-	if !cr.HasCancel {
-		t.Error("expected HasCancel true")
-	}
-}
-
-// ─── T5: GetChoices returns nil on 404 ──────────────────────────────────────
-
-func TestGetChoices404(t *testing.T) {
-	h := newMockHandler()
-	h.set("/choices", 404, testErrorJSON(ErrQueueItemNotFound, "not found"))
-	srv := httptest.NewServer(h)
-	defer srv.Close()
-
-	client := NewHitlClient(srv.URL)
-	cr, err := client.GetChoices(context.Background())
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if cr != nil {
-		t.Fatal("expected nil ChoicesResponse on 404")
-	}
-}
-
-// ─── T6: GetChoices returns error on 5xx ────────────────────────────────────
-
-func TestGetChoices5xx(t *testing.T) {
-	h := newMockHandler()
-	h.set("/choices", 500, testErrorJSON(ErrQueueUnavailable, "internal error"))
-	srv := httptest.NewServer(h)
-	defer srv.Close()
-
-	client := NewHitlClient(srv.URL)
-	cr, err := client.GetChoices(context.Background())
-	if cr != nil {
-		t.Fatal("expected nil ChoicesResponse on 5xx")
-	}
-	if err == nil {
-		t.Fatal("expected error")
-	}
-	if !IsQueueUnavailable(err) {
-		t.Errorf("expected IsQueueUnavailable to be true, got %v", err)
-	}
-}
-
-// ─── T7: Claim returns QueueItem ────────────────────────────────────────────
-
+// T4: Claim builds POST /queues/{name}/{id}/claim and returns the item on 200.
 func TestClaim(t *testing.T) {
 	h := newMockHandler()
-	h.set("/queue/test-wi/claim", 200, testQueueItemJSON("test-wi"))
+	h.set("/queues/"+testQueueName+"/wi-1/claim", 200, queueItemJSON("wi-1"))
 	srv := httptest.NewServer(h)
 	defer srv.Close()
 
-	client := NewHitlClient(srv.URL)
-	qi, err := client.Claim(context.Background(), "test-wi")
+	client := newClient(srv.URL)
+	qi, err := client.Claim(context.Background(), "wi-1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if qi == nil {
 		t.Fatal("expected non-nil QueueItem")
 	}
-	if qi.WorkitemID != "test-wi" {
-		t.Errorf("expected WorkitemID 'test-wi', got %q", qi.WorkitemID)
+	if qi.WorkitemID != "wi-1" {
+		t.Errorf("expected WorkitemID 'wi-1', got %q", qi.WorkitemID)
+	}
+
+	req := h.lastRequest()
+	if req.Method != http.MethodPost {
+		t.Errorf("expected POST, got %s", req.Method)
+	}
+	want := "/queues/" + testQueueName + "/wi-1/claim"
+	if req.Path != want {
+		t.Errorf("expected path %q, got %q", want, req.Path)
 	}
 }
 
-// ─── T8: Decide sends correct request body ──────────────────────────────────
-
-func TestDecideRequestBody(t *testing.T) {
+// T5: Claim maps a 409 already-claimed envelope to IsAlreadyClaimed.
+func TestClaimAlreadyClaimed(t *testing.T) {
 	h := newMockHandler()
-	h.set("/queue/test-wi/decide", 200, `{"acknowledged": true}`)
+	h.set("/queues/"+testQueueName+"/wi-1/claim", 409, errorJSON(ErrQueueItemAlreadyClaimed, "already claimed"))
 	srv := httptest.NewServer(h)
 	defer srv.Close()
 
-	client := NewHitlClient(srv.URL)
-	err := client.Decide(context.Background(), "test-wi", "approve")
-	if err != nil {
+	client := newClient(srv.URL)
+	qi, err := client.Claim(context.Background(), "wi-1")
+	if qi != nil {
+		t.Fatal("expected nil QueueItem on error")
+	}
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !IsAlreadyClaimed(err) {
+		t.Errorf("expected IsAlreadyClaimed, got %v", err)
+	}
+}
+
+// ─── Decide ─────────────────────────────────────────────────────────────────
+
+// T6: Decide builds POST /queues/{name}/{id}/decide with a {"choice":...} body
+// and acks on 200.
+func TestDecideSuccess(t *testing.T) {
+	h := newMockHandler()
+	h.set("/queues/"+testQueueName+"/wi-1/decide", 200, `{"acknowledged": true}`)
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+
+	client := newClient(srv.URL)
+	if err := client.Decide(context.Background(), "wi-1", "approve"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -294,8 +291,9 @@ func TestDecideRequestBody(t *testing.T) {
 	if req.Method != http.MethodPost {
 		t.Errorf("expected POST, got %s", req.Method)
 	}
-	if req.Header.Get("Content-Type") != "application/json" {
-		t.Errorf("expected Content-Type application/json, got %q", req.Header.Get("Content-Type"))
+	want := "/queues/" + testQueueName + "/wi-1/decide"
+	if req.Path != want {
+		t.Errorf("expected path %q, got %q", want, req.Path)
 	}
 
 	var body map[string]string
@@ -307,34 +305,28 @@ func TestDecideRequestBody(t *testing.T) {
 	}
 }
 
-// ─── T9: Decide returns error on QUEUE_ITEM_ALREADY_CLAIMED ─────────────────
-
-func TestDecideAlreadyClaimed(t *testing.T) {
+// T7: Decide accepts a 202 acknowledgment.
+func TestDecideAccepted(t *testing.T) {
 	h := newMockHandler()
-	h.set("/queue/test-wi/decide", 409, testErrorJSON(ErrQueueItemAlreadyClaimed, "already claimed"))
+	h.set("/queues/"+testQueueName+"/wi-1/decide", 202, `{"acknowledged": true}`)
 	srv := httptest.NewServer(h)
 	defer srv.Close()
 
-	client := NewHitlClient(srv.URL)
-	err := client.Decide(context.Background(), "test-wi", "approve")
-	if err == nil {
-		t.Fatal("expected error")
-	}
-	if !IsAlreadyClaimed(err) {
-		t.Errorf("expected IsAlreadyClaimed, got %v", err)
+	client := newClient(srv.URL)
+	if err := client.Decide(context.Background(), "wi-1", "approve"); err != nil {
+		t.Fatalf("expected 202 to ack, got error: %v", err)
 	}
 }
 
-// ─── T10: Decide returns error on QUEUE_ITEM_INVALID_STATE ──────────────────
-
+// T8: Decide maps a 409 invalid-state envelope to IsInvalidState.
 func TestDecideInvalidState(t *testing.T) {
 	h := newMockHandler()
-	h.set("/queue/test-wi/decide", 409, testErrorJSON(ErrQueueItemInvalidState, "unexpected state"))
+	h.set("/queues/"+testQueueName+"/wi-1/decide", 409, errorJSON(ErrQueueItemInvalidState, "unexpected state"))
 	srv := httptest.NewServer(h)
 	defer srv.Close()
 
-	client := NewHitlClient(srv.URL)
-	err := client.Decide(context.Background(), "test-wi", "approve")
+	client := newClient(srv.URL)
+	err := client.Decide(context.Background(), "wi-1", "approve")
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -343,16 +335,15 @@ func TestDecideInvalidState(t *testing.T) {
 	}
 }
 
-// ─── T11: Decide returns error on QUEUE_UNAVAILABLE ─────────────────────────
-
+// T9: Decide maps a 503 unavailable envelope to IsQueueUnavailable.
 func TestDecideQueueUnavailable(t *testing.T) {
 	h := newMockHandler()
-	h.set("/queue/test-wi/decide", 503, testErrorJSON(ErrQueueUnavailable, "queue down"))
+	h.set("/queues/"+testQueueName+"/wi-1/decide", 503, errorJSON(ErrQueueUnavailable, "queue down"))
 	srv := httptest.NewServer(h)
 	defer srv.Close()
 
-	client := NewHitlClient(srv.URL)
-	err := client.Decide(context.Background(), "test-wi", "approve")
+	client := newClient(srv.URL)
+	err := client.Decide(context.Background(), "wi-1", "approve")
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -361,16 +352,15 @@ func TestDecideQueueUnavailable(t *testing.T) {
 	}
 }
 
-// ─── T12: Decide returns error on BAD_REQUEST ───────────────────────────────
-
+// T10: Decide maps a 400 bad-request envelope to IsBadRequest.
 func TestDecideBadRequest(t *testing.T) {
 	h := newMockHandler()
-	h.set("/queue/test-wi/decide", 400, testErrorJSON(ErrBadRequest, "missing choice"))
+	h.set("/queues/"+testQueueName+"/wi-1/decide", 400, errorJSON(ErrBadRequest, "missing choice"))
 	srv := httptest.NewServer(h)
 	defer srv.Close()
 
-	client := NewHitlClient(srv.URL)
-	err := client.Decide(context.Background(), "test-wi", "")
+	client := newClient(srv.URL)
+	err := client.Decide(context.Background(), "wi-1", "")
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -379,16 +369,15 @@ func TestDecideBadRequest(t *testing.T) {
 	}
 }
 
-// ─── T13: Decide returns error on QUEUE_ITEM_NOT_FOUND ──────────────────────
-
+// T11: Decide maps a 404 envelope to IsQueueItemNotFound.
 func TestDecideQueueItemNotFound(t *testing.T) {
 	h := newMockHandler()
-	h.set("/queue/test-wi/decide", 404, testErrorJSON(ErrQueueItemNotFound, "item gone"))
+	h.set("/queues/"+testQueueName+"/wi-1/decide", 404, errorJSON(ErrQueueItemNotFound, "item gone"))
 	srv := httptest.NewServer(h)
 	defer srv.Close()
 
-	client := NewHitlClient(srv.URL)
-	err := client.Decide(context.Background(), "test-wi", "approve")
+	client := newClient(srv.URL)
+	err := client.Decide(context.Background(), "wi-1", "approve")
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -397,35 +386,71 @@ func TestDecideQueueItemNotFound(t *testing.T) {
 	}
 }
 
-// ─── T14: Release returns QueueItem ─────────────────────────────────────────
+// ─── Release ────────────────────────────────────────────────────────────────
 
+// T12: Release builds POST /queues/{name}/{id}/release and returns the item on 200.
 func TestRelease(t *testing.T) {
 	h := newMockHandler()
-	h.set("/queue/test-wi/release", 200, testQueueItemJSON("test-wi"))
+	h.set("/queues/"+testQueueName+"/wi-1/release", 200, queueItemJSON("wi-1"))
 	srv := httptest.NewServer(h)
 	defer srv.Close()
 
-	client := NewHitlClient(srv.URL)
-	qi, err := client.Release(context.Background(), "test-wi")
+	client := newClient(srv.URL)
+	qi, err := client.Release(context.Background(), "wi-1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if qi == nil {
 		t.Fatal("expected non-nil QueueItem")
 	}
-	if qi.WorkitemID != "test-wi" {
-		t.Errorf("expected WorkitemID 'test-wi', got %q", qi.WorkitemID)
+	if qi.WorkitemID != "wi-1" {
+		t.Errorf("expected WorkitemID 'wi-1', got %q", qi.WorkitemID)
+	}
+
+	req := h.lastRequest()
+	if req.Method != http.MethodPost {
+		t.Errorf("expected POST, got %s", req.Method)
+	}
+	want := "/queues/" + testQueueName + "/wi-1/release"
+	if req.Path != want {
+		t.Errorf("expected path %q, got %q", want, req.Path)
 	}
 }
 
-// ─── T15: Error envelope parsing for all known codes ────────────────────────
+// T13: Release maps a structured error envelope to *HitlError.
+func TestReleaseError(t *testing.T) {
+	h := newMockHandler()
+	h.set("/queues/"+testQueueName+"/wi-1/release", 409, errorJSON(ErrQueueItemInvalidState, "cannot release"))
+	srv := httptest.NewServer(h)
+	defer srv.Close()
 
+	client := newClient(srv.URL)
+	qi, err := client.Release(context.Background(), "wi-1")
+	if qi != nil {
+		t.Fatal("expected nil QueueItem on error")
+	}
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	he, ok := err.(*HitlError)
+	if !ok {
+		t.Fatalf("expected *HitlError, got %T", err)
+	}
+	if he.Code != ErrQueueItemInvalidState {
+		t.Errorf("expected code %q, got %q", ErrQueueItemInvalidState, he.Code)
+	}
+}
+
+// ─── Error envelope / parseError (unchanged surface) ────────────────────────
+
+// T14: The queue-service envelope {"error":{"code":...,"message":...}} maps to
+// *HitlError with the matching code; parseError is unchanged from PHASE_01.
 func TestErrorEnvelopeParsing(t *testing.T) {
 	tests := []struct {
-		name     string
-		code     string
-		message  string
-		matcher  func(error) bool
+		name    string
+		code    string
+		message string
+		matcher func(error) bool
 	}{
 		{"QueueItemNotFound", ErrQueueItemNotFound, "not found", IsQueueItemNotFound},
 		{"AlreadyClaimed", ErrQueueItemAlreadyClaimed, "claimed", IsAlreadyClaimed},
@@ -436,124 +461,166 @@ func TestErrorEnvelopeParsing(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			h := newMockHandler()
-			h.set("/queue/test-wi", 409, testErrorJSON(tt.code, tt.message))
-			srv := httptest.NewServer(h)
-			defer srv.Close()
-
-			client := NewHitlClient(srv.URL)
-			_, err := client.ProbeQueue(context.Background(), "test-wi")
+			err := parseError(strings.NewReader(errorJSON(tt.code, tt.message)))
 			if err == nil {
 				t.Fatal("expected error")
 			}
 			if !tt.matcher(err) {
 				t.Errorf("expected matcher(%v) to be true", err)
 			}
-			// Verify the error code is in the message
 			he, ok := err.(*HitlError)
 			if !ok {
-				t.Fatal("expected *HitlError")
+				t.Fatalf("expected *HitlError, got %T", err)
 			}
 			if he.Code != tt.code {
 				t.Errorf("expected code %q, got %q", tt.code, he.Code)
+			}
+			if he.Message != tt.message {
+				t.Errorf("expected message %q, got %q", tt.message, he.Message)
 			}
 		})
 	}
 }
 
-// ─── T16: Probe retries — verify 5 attempts with delays on 404 ──────────────
-
-func TestProbeRetryOn404(t *testing.T) {
-	// Mock: first 4 calls return 404, 5th returns 200
-	callCount := 0
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		callCount++
-		w.Header().Set("Content-Type", "application/json")
-		if callCount < 5 {
-			w.WriteHeader(http.StatusNotFound)
-			json.NewEncoder(w).Encode(errorEnvelope{Error: HitlError{
-				Code:    ErrQueueItemNotFound,
-				Message: "not found",
-			}})
-			return
-		}
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(testQueueItemJSON("test-wi")))
-	})
-	srv := httptest.NewServer(handler)
-	defer srv.Close()
-
-	client := NewHitlClient(srv.URL)
-
-	// Simulate the caller-side retry loop (as done in TUI HitlState.Probe)
-	var qi *QueueItem
-	var err error
-	for attempt := 0; attempt < 5; attempt++ {
-		qi, err = client.ProbeQueue(context.Background(), "test-wi")
-		if err == nil && qi != nil {
-			break
-		}
-		// In real code, this would be a 3s tea.Tick delay
+// T15: A non-JSON body yields a generic error (not a *HitlError).
+func TestErrorEnvelopeNonJSON(t *testing.T) {
+	err := parseError(strings.NewReader("502 Bad Gateway"))
+	if err == nil {
+		t.Fatal("expected error")
 	}
-
-	if err != nil {
-		t.Fatalf("unexpected error after retries: %v", err)
-	}
-	if qi == nil {
-		t.Fatal("expected QueueItem after retries")
-	}
-	if callCount != 5 {
-		t.Errorf("expected 5 total probe attempts, got %d", callCount)
+	if _, ok := err.(*HitlError); ok {
+		t.Fatalf("expected a generic error for non-JSON body, got *HitlError: %v", err)
 	}
 }
 
-// ─── T17: QueueUnavailable retries — verify 3 attempts with delays ──────────
+// ─── ChoicesWithDefault (GET /choices is GONE) ──────────────────────────────
 
-func TestQueueUnavailableRetry(t *testing.T) {
-	// Mock: first 2 calls return QUEUE_UNAVAILABLE, 3rd succeeds
-	callCount := 0
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		callCount++
-		w.Header().Set("Content-Type", "application/json")
-		if callCount < 3 {
-			w.WriteHeader(http.StatusServiceUnavailable)
-			json.NewEncoder(w).Encode(errorEnvelope{Error: HitlError{
-				Code:    ErrQueueUnavailable,
-				Message: "queue down",
-			}})
-			return
+// T16: Non-empty item choices win over the provided defaults.
+func TestChoicesWithDefault_ItemChoicesWin(t *testing.T) {
+	item := &QueueItem{Choices: []string{"approve", "reject"}}
+	got := item.ChoicesWithDefault([]string{"default-choice"})
+	if len(got) != 2 || got[0] != "approve" || got[1] != "reject" {
+		t.Errorf("expected item choices to win, got %v", got)
+	}
+}
+
+// T17: Empty item choices fall back to the provided defaults.
+func TestChoicesWithDefault_EmptyFallsBack(t *testing.T) {
+	defaults := []string{"approve", "reject"}
+	item := &QueueItem{}
+	if got := item.ChoicesWithDefault(defaults); !equalStrings(got, defaults) {
+		t.Errorf("expected defaults on nil choices, got %v", got)
+	}
+	item = &QueueItem{Choices: []string{}}
+	if got := item.ChoicesWithDefault(defaults); !equalStrings(got, defaults) {
+		t.Errorf("expected defaults on empty choices, got %v", got)
+	}
+}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
 		}
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(testQueueItemJSON("test-wi")))
-	})
-	srv := httptest.NewServer(handler)
+	}
+	return true
+}
+
+// ─── ResolveQueueForItem ────────────────────────────────────────────────────
+
+// T18: ResolveQueueForItem lists GET /queues (bare array of names), probes each
+// queue, and returns the matching probe item's queue_name. The client is built
+// with an empty queueName to pin that per-queue probes come from the listed
+// names, not the receiver's own queueName field.
+func TestResolveQueueForItem_Found(t *testing.T) {
+	h := newMockHandler()
+	h.set("/queues", 200, `["hitl-approval","sort-review"]`)
+	h.set("/queues/hitl-approval/wi-001", 404, errorJSON(ErrQueueItemNotFound, "not found"))
+	h.set("/queues/sort-review/wi-001", 200, `{"workitem_id":"wi-001","queue_name":"sort-review","status":"queued"}`)
+	srv := httptest.NewServer(h)
 	defer srv.Close()
 
-	client := NewHitlClient(srv.URL)
-
-	// Simulate the caller-side retry loop (as done in HitlState.retryQueueUnavailable)
-	var qi *QueueItem
-	var err error
-	for attempt := 0; attempt < 3; attempt++ {
-		if attempt > 0 {
-			// In real code, this would be a 2s time.Sleep
-		}
-		qi, err = client.Claim(context.Background(), "test-wi")
-		if err == nil {
-			break
-		}
-		if !IsQueueUnavailable(err) {
-			break // non-retryable
-		}
-	}
-
+	client := NewHitlClient(srv.URL, "")
+	got, err := client.ResolveQueueForItem(context.Background(), "wi-001")
 	if err != nil {
-		t.Fatalf("unexpected error after retries: %v", err)
+		t.Fatalf("unexpected error: %v", err)
 	}
-	if qi == nil {
-		t.Fatal("expected QueueItem after retries")
+	if got != "sort-review" {
+		t.Errorf("expected queue %q, got %q", "sort-review", got)
 	}
-	if callCount != 3 {
-		t.Errorf("expected 3 total claim attempts, got %d", callCount)
+}
+
+// T19: No listed queue serves the item (all probes 404) -> QUEUE_ITEM_NOT_FOUND.
+func TestResolveQueueForItem_NotFound(t *testing.T) {
+	h := newMockHandler()
+	h.set("/queues", 200, `["hitl-approval"]`)
+	h.set("/queues/hitl-approval/wi-001", 404, errorJSON(ErrQueueItemNotFound, "not found"))
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+
+	client := NewHitlClient(srv.URL, "")
+	got, err := client.ResolveQueueForItem(context.Background(), "wi-001")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !IsQueueItemNotFound(err) {
+		t.Errorf("expected IsQueueItemNotFound, got %v", err)
+	}
+	if got != "" {
+		t.Errorf("expected empty queue name on error, got %q", got)
+	}
+}
+
+// T20: A non-200 on GET /queues propagates the structured error envelope.
+func TestResolveQueueForItem_ListFails(t *testing.T) {
+	h := newMockHandler()
+	h.set("/queues", 500, errorJSON(ErrQueueUnavailable, "down"))
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+
+	client := NewHitlClient(srv.URL, "")
+	_, err := client.ResolveQueueForItem(context.Background(), "wi-001")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !IsQueueUnavailable(err) {
+		t.Errorf("expected IsQueueUnavailable, got %v", err)
+	}
+}
+
+// T21: A probe error aborts resolution: the error is surfaced as-is and no
+// further queue is probed.
+func TestResolveQueueForItem_ProbeErrorStops(t *testing.T) {
+	h := newMockHandler()
+	h.set("/queues", 200, `["hitl-approval","sort-review"]`)
+	h.set("/queues/hitl-approval/wi-001", 500, errorJSON(ErrBadRequest, "boom"))
+	// Registering the second queue's probe makes the request-count assertion
+	// below fail if resolution wrongly continues past the first probe error.
+	h.set("/queues/sort-review/wi-001", 200, `{"workitem_id":"wi-001","queue_name":"sort-review","status":"queued"}`)
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+
+	client := NewHitlClient(srv.URL, "")
+	_, err := client.ResolveQueueForItem(context.Background(), "wi-001")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	he, ok := err.(*HitlError)
+	if !ok {
+		t.Fatalf("expected *HitlError, got %T", err)
+	}
+	if he.Code != ErrBadRequest {
+		t.Errorf("expected code %q, got %q", ErrBadRequest, he.Code)
+	}
+	// Exactly two requests: the /queues list plus the failing first probe; the
+	// second queue must never be probed.
+	if got := h.requestCount(); got != 2 {
+		t.Errorf("expected 2 requests (list + one probe), got %d", got)
+	}
+	if req := h.lastRequest(); req.Path != "/queues/hitl-approval/wi-001" {
+		t.Errorf("expected last request to be the failing probe, got %q", req.Path)
 	}
 }

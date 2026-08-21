@@ -2,12 +2,13 @@ package components
 
 import (
 	"context"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"strconv"
 	"strings"
 	"testing"
-
-	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	k8sfake "k8s.io/client-go/kubernetes/fake"
 
 	"github.com/foundry/flow/tools/flowctl/internal/api"
 	"github.com/foundry/flow/tools/flowctl/internal/tui/types"
@@ -67,7 +68,7 @@ func TestHitlEmptyChoicesFallback(t *testing.T) {
 	m := NewHitlPrompt()
 	m.Visible = true
 	m.Loading = false
-	m.Choices = []types.Choice{} // non-nil but empty — simulates /choices returning {"choices":[]}
+	m.Choices = []types.Choice{} // non-nil but empty — simulates a queue item with no choices
 	m.ChoicesLoaded = true
 	m.DefaultChoices = false
 	v := m.View()
@@ -164,18 +165,19 @@ func TestHitlLoadingAfterProbe(t *testing.T) {
 // blockingForwarder blocks in ForwardPod until released, forcing the Probe cmd
 // goroutine to overlap with the caller goroutine's reads/writes.
 type blockingForwarder struct {
-	entered chan struct{}
-	release chan struct{}
+	entered   chan struct{}
+	release   chan struct{}
+	localPort int // the httptest queue-service port
 }
 
 func (b *blockingForwarder) FindReadyPod(context.Context, string, string) (string, bool, error) {
-	return "", false, nil
+	return "queue-service-pod", true, nil
 }
 
 func (b *blockingForwarder) ForwardPod(context.Context, string, string, int) (string, int, error) {
 	close(b.entered)
 	<-b.release
-	return "fwd-1", 0, nil
+	return "test-ns/queue-service-pod:8081", b.localPort, nil
 }
 
 func (b *blockingForwarder) Close(string) error { return nil }
@@ -189,29 +191,44 @@ var _ api.PortForwarder = (*blockingForwarder)(nil)
 // Update goroutine in production). Under -race this fails if the shared
 // HitlState fields are not mutex-guarded.
 func TestHitlStateConcurrentProbeAccess(t *testing.T) {
-	h := NewHitlState(8080)
-	bf := &blockingForwarder{entered: make(chan struct{}), release: make(chan struct{})}
-	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "hitl-pod",
-			Namespace: "test-ns",
-			Labels:    map[string]string{"flow.foundry.io/node-name": "hitl-approval"},
-		},
-		Status: corev1.PodStatus{
-			Phase: corev1.PodRunning,
-			PodIP: "10.0.0.1",
-			Conditions: []corev1.PodCondition{
-				{Type: corev1.PodReady, Status: corev1.ConditionTrue},
-			},
-		},
+	// The queue-service stub that the Probe cmd's HitlClient reaches through the
+	// (fake) port-forward's localPort.
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/queues/hitl-approval/wi-001" {
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, `{"workitem_id":"wi-001","queue_name":"hitl-approval","status":"queued","choices":["approve","cancel"]}`)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer ts.Close()
+
+	u, err := url.Parse(ts.URL)
+	if err != nil {
+		t.Fatalf("parse test server URL: %v", err)
 	}
-	clientset := k8sfake.NewSimpleClientset(pod)
+	localPort, err := strconv.Atoi(u.Port())
+	if err != nil {
+		t.Fatalf("parse test server port: %v", err)
+	}
+
+	h := NewHitlState()
+	bf := &blockingForwarder{
+		entered:   make(chan struct{}),
+		release:   make(chan struct{}),
+		localPort: localPort,
+	}
 
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		cmd := h.Probe(context.Background(), clientset, "test-ns", "hitl-approval", "wi-001", bf)
-		cmd() // returns HitlProbeRetryMsg once the forward is released
+		// clientset is nil because the production Probe path never consults it
+		// (SPEC R-5.1: the queue-service pod is reached via the PortForwarder).
+		cmd := h.Probe(context.Background(), nil, "test-ns", "hitl-approval", "wi-001", bf)
+		msg := cmd() // returns HitlProbeResultMsg once the forward is released
+		if _, ok := msg.(HitlProbeResultMsg); !ok {
+			t.Errorf("expected HitlProbeResultMsg, got %T", msg)
+		}
 	}()
 
 	<-bf.entered // the probe goroutine is now blocked inside ForwardPod
@@ -228,4 +245,66 @@ func TestHitlStateConcurrentProbeAccess(t *testing.T) {
 
 	close(bf.release)
 	<-done
+}
+
+// ─── RecordProbeFailure (probeHitl resolution-failure seam) ────────────────
+
+// TestRecordProbeFailure_RetriesThenExhausts pins the RecordProbeFailure
+// contract: attempts 1-4 yield HitlProbeRetryMsg with Exhausted() false, the
+// 5th (probeMax) yields HitlProbeExhaustedMsg carrying the workitem, the
+// queue-service label, and the diagnostic, with Exhausted() true.
+func TestRecordProbeFailure_RetriesThenExhausts(t *testing.T) {
+	h := NewHitlState()
+	for i := 0; i < 4; i++ {
+		msg := h.RecordProbeFailure("wi-001", "diag")
+		if _, ok := msg.(HitlProbeRetryMsg); !ok {
+			t.Fatalf("attempt %d: expected HitlProbeRetryMsg, got %T", i+1, msg)
+		}
+		if h.Exhausted() {
+			t.Fatalf("attempt %d: expected not exhausted yet", i+1)
+		}
+	}
+	msg := h.RecordProbeFailure("wi-001", "diag")
+	exh, ok := msg.(HitlProbeExhaustedMsg)
+	if !ok {
+		t.Fatalf("expected HitlProbeExhaustedMsg, got %T", msg)
+	}
+	if exh.WorkitemID != "wi-001" {
+		t.Errorf("expected WorkitemID wi-001, got %q", exh.WorkitemID)
+	}
+	if exh.NodeName != QueueServiceLabel {
+		t.Errorf("expected NodeName %q, got %q", QueueServiceLabel, exh.NodeName)
+	}
+	if exh.Diagnostic != "diag" {
+		t.Errorf("expected Diagnostic diag, got %q", exh.Diagnostic)
+	}
+	if !h.Exhausted() {
+		t.Error("expected Exhausted() true after probeMax failures")
+	}
+}
+
+// TestRecordProbeFailure_ResetArmsAgain pins that ResetForNewWorkitem clears
+// the attempt counter so a new workitem cycle retries instead of staying
+// exhausted.
+func TestRecordProbeFailure_ResetArmsAgain(t *testing.T) {
+	h := NewHitlState()
+	for i := 0; i < 5; i++ {
+		h.RecordProbeFailure("wi-001", "diag")
+	}
+	if !h.Exhausted() {
+		t.Fatal("expected exhausted after 5 failures")
+	}
+
+	h.ResetForNewWorkitem()
+	if h.Exhausted() {
+		t.Error("expected not exhausted after reset")
+	}
+
+	msg := h.RecordProbeFailure("wi-002", "diag2")
+	if _, ok := msg.(HitlProbeRetryMsg); !ok {
+		t.Fatalf("expected HitlProbeRetryMsg after reset, got %T", msg)
+	}
+	if h.Exhausted() {
+		t.Error("expected not exhausted after one failure post-reset")
+	}
 }

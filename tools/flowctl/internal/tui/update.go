@@ -495,9 +495,9 @@ func (m *Model) handleWorkitemUpdate(msg WorkitemUpdateMsg) tea.Cmd {
 						m.workitemDetail.hitl.Visible = false
 						if m.k8s != nil && msg.Item.Node != "" && msg.Item.Node != "-" {
 							m.workitemList.Items[i] = msg.Item
-							cmds = append(cmds,
-								m.hitlState.Probe(m.ctx, m.k8s.CoreClient, m.namespace, msg.Item.Node, msg.Item.Name, m.pfm),
-							)
+							if probeCmd := m.probeHitl(msg.Item.Name); probeCmd != nil {
+								cmds = append(cmds, probeCmd)
+							}
 						}
 					}
 				}

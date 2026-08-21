@@ -8,12 +8,21 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 
 	"github.com/foundry/flow/tools/flowctl/internal/api"
 	"github.com/foundry/flow/tools/flowctl/internal/tui/types"
 )
+
+// QueueServiceLabel selects the queue-service pod to port-forward to. The
+// spec pins a single queue-service replica; the flowctl tool reaches it
+// directly, never a node (SPEC R-5.1).
+// ponytail: assumes the queue-service Deployment carries this label; align
+// the Deployment manifest when provisioning becomes explicit.
+const QueueServiceLabel = "app=queue-service"
+
+// QueueServiceRESTPort is the queue-service REST port (cmd/main.go defaultRESTPort).
+const QueueServiceRESTPort = 8081
 
 // ─── HitlPromptModel (Rendering Component) ──────────────────────────────────
 
@@ -21,11 +30,11 @@ import (
 type HitlPromptModel struct {
 	Visible        bool // true when a queue item exists
 	QueueItemID    string
-	Choices        []types.Choice // populated from /choices or defaults
+	Choices        []types.Choice // populated from the queue item or defaults
 	Loading        bool           // true while probing or deciding
 	Error          string
 	ErrorRetry     bool // true if retry is possible
-	ChoicesLoaded  bool // true after /choices returned 200, even if empty
+	ChoicesLoaded  bool // true once the queue item's choices are loaded
 	DefaultChoices bool // true when using the built-in approve/cancel fallback
 
 	// Cancel confirmation
@@ -128,8 +137,8 @@ type HitlProbeResultMsg struct {
 	DefaultChoices bool
 }
 
-// HitlProbeRetryMsg is returned by the Probe cmd when all pods returned
-// 404/error and retries remain.
+// HitlProbeRetryMsg is returned when a queue-service probe attempt found no
+// match and retries remain.
 type HitlProbeRetryMsg struct{}
 
 // HitlProbeExhaustedMsg is emitted when all probe retries are exhausted.
@@ -137,11 +146,6 @@ type HitlProbeExhaustedMsg struct {
 	WorkitemID string
 	NodeName   string
 	Diagnostic string
-}
-
-// HitlChoicesBlockedMsg is emitted when /choices returns 5xx — blocks HITL.
-type HitlChoicesBlockedMsg struct {
-	Err error
 }
 
 // ─── HitlState (Lifecycle Manager) ──────────────────────────────────────────
@@ -168,32 +172,27 @@ type HitlState struct {
 	probeAttempts int
 	probeMax      int // 5 total
 	exhausted     bool
-
-	// Non-default port tracking for debug hint
-	hitlPort       int
-	debugHintShown bool
 }
 
-// NewHitlState creates a HitlState with the given HITL port.
-func NewHitlState(hitlPort int) *HitlState {
-	return &HitlState{
-		probeMax: 5,
-		hitlPort: hitlPort,
-	}
+// NewHitlState creates a HitlState. The probe reaches the queue-service REST
+// port directly (SPEC R-5.1), so no HITL port is needed.
+func NewHitlState() *HitlState {
+	return &HitlState{probeMax: 5}
 }
 
 // Probe performs one HITL probe attempt asynchronously.
 // It does not reset probeAttempts — the caller (Update) must reset
 // probeAttempts = 0 before calling Probe for a new workitem cycle.
-// Returns a tea.Cmd that lists pods labeled for the node, opens port-forwards
-// sequentially, and returns one of:
+// Returns a tea.Cmd that reaches the queue-service directly (SPEC R-5.1: queue
+// interactions never go through a node): finds the queue-service pod, opens a
+// port-forward to its REST port, probes the named queue's item, and returns
+// one of:
 //
 //	HitlProbeResultMsg     — queue item found
-//	HitlProbeRetryMsg      — no match on any pod, retries remain
+//	HitlProbeRetryMsg      — no match, retries remain
 //	HitlProbeExhaustedMsg  — all attempts used, no match
-//	HitlChoicesBlockedMsg  — /choices returned 5xx/transport error
 func (h *HitlState) Probe(ctx context.Context, clientset kubernetes.Interface,
-	namespace, nodeName, workitemID string, pm api.PortForwarder) tea.Cmd {
+	namespace, queueName, workitemID string, pm api.PortForwarder) tea.Cmd {
 
 	// Close previous HITL forward from any prior attempt.
 	h.mu.Lock()
@@ -201,7 +200,7 @@ func (h *HitlState) Probe(ctx context.Context, clientset kubernetes.Interface,
 	h.forwardID = ""
 	h.hitlClient = nil
 	h.active = false
-	h.nodeName = nodeName
+	h.nodeName = queueName
 	h.workitemID = workitemID
 	h.mu.Unlock()
 	if prevForward != "" {
@@ -219,11 +218,9 @@ func (h *HitlState) Probe(ctx context.Context, clientset kubernetes.Interface,
 		attemptCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 		defer cancel()
 
-		// List pods labeled flow.foundry.io/node-name=<node>
-		pods, err := clientset.CoreV1().Pods(namespace).List(attemptCtx, metav1.ListOptions{
-			LabelSelector: "flow.foundry.io/node-name=" + nodeName,
-		})
-		if err != nil {
+		// retryOrExhaust maps a failed attempt to the retry/exhaust message
+		// (same semantics as the old pod-probe miss path).
+		retryOrExhaust := func(diagnostic string) tea.Msg {
 			h.mu.Lock()
 			exhausted := attempts >= h.probeMax
 			if exhausted {
@@ -233,97 +230,74 @@ func (h *HitlState) Probe(ctx context.Context, clientset kubernetes.Interface,
 			if exhausted {
 				return HitlProbeExhaustedMsg{
 					WorkitemID: workitemID,
-					NodeName:   nodeName,
-					Diagnostic: fmt.Sprintf("list pods: %v", err),
+					NodeName:   queueName,
+					Diagnostic: diagnostic,
 				}
 			}
 			return HitlProbeRetryMsg{}
 		}
 
-		// Probe each Ready pod sequentially
-		for _, pod := range pods.Items {
-			if !api.PodReady(&pod) {
-				continue
-			}
-
-			// Open port-forward to pod port --hitl-port
-			forwardID, localPort, err := pm.ForwardPod(attemptCtx, namespace, pod.Name, h.hitlPort)
-			if err != nil {
-				continue // try next pod
-			}
-
-			client := api.NewHitlClient(fmt.Sprintf("http://localhost:%d", localPort))
-			qi, err := client.ProbeQueue(attemptCtx, workitemID)
-			if err != nil || qi == nil {
-				// 404, error, or transport failure — close forward, try next pod
-				pm.Close(forwardID)
-				continue
-			}
-
-			// Found a matching queue item. Keep this forward open.
-			h.mu.Lock()
-			h.forwardID = forwardID
-			h.queueItem = qi
-			h.hitlClient = client
-			h.active = true
-			h.probeAttempts = 0
-			h.mu.Unlock()
-
-			// Probe /choices on the same forward
-			choices, err := client.GetChoices(attemptCtx)
-			if err != nil {
-				// 5xx or transport error — block HITL interaction
-				return HitlChoicesBlockedMsg{Err: err}
-			}
-			defaultChoiceSet := false
-			var selected []api.Choice
-			if choices != nil && len(choices.Choices) > 0 {
-				selected = choices.Choices
-			} else {
-				// 404 or empty choices array — use defaults
-				selected = DefaultAPIChoices()
-				defaultChoiceSet = true
-			}
-			h.mu.Lock()
-			h.choices = selected
-			h.mu.Unlock()
-
-			return HitlProbeResultMsg{
-				WorkitemID:     workitemID,
-				NodeName:       nodeName,
-				QueueItem:      qi,
-				Choices:        selected,
-				ChoicesLoaded:  choices != nil,
-				DefaultChoices: defaultChoiceSet,
-			}
+		// The queue-service pod is the single interaction point (R-5.1).
+		podName, found, err := pm.FindReadyPod(attemptCtx, namespace, QueueServiceLabel)
+		switch {
+		case err != nil:
+			return retryOrExhaust(fmt.Sprintf("find queue-service pod: %v", err))
+		case !found:
+			return retryOrExhaust("no ready queue-service pod found")
 		}
 
-		// No pod returned 200.
+		// Open port-forward to the queue-service REST port.
+		forwardID, localPort, err := pm.ForwardPod(attemptCtx, namespace, podName, QueueServiceRESTPort)
+		if err != nil {
+			return retryOrExhaust(fmt.Sprintf("port-forward to queue-service: %v", err))
+		}
+
+		client := api.NewHitlClient(fmt.Sprintf("http://localhost:%d", localPort), queueName)
+		qi, err := client.ProbeQueue(attemptCtx, workitemID)
+		if err != nil || qi == nil {
+			// 404, error, or transport failure — close forward, try again
+			pm.Close(forwardID)
+			return retryOrExhaust("HITL probe timed out — queue-service has not enqueued the workitem")
+		}
+
+		// Found a matching queue item. Keep this forward open.
 		h.mu.Lock()
-		exhausted := attempts >= h.probeMax
-		if exhausted {
-			h.exhausted = true
-		}
-		appendDebugHint := exhausted && h.hitlPort != 8080 && !h.debugHintShown
-		if appendDebugHint {
-			h.debugHintShown = true
-		}
+		h.forwardID = forwardID
+		h.queueItem = qi
+		h.hitlClient = client
+		h.active = true
+		h.probeAttempts = 0
 		h.mu.Unlock()
 
-		if exhausted {
-			diagnostic := "HITL probe timed out — node may not have enqueued the item"
-			if appendDebugHint {
-				diagnostic += "\nHITL probe failed — verify `--hitl-port` matches the node's `FLOW_HITL_PORT`"
-			}
-			return HitlProbeExhaustedMsg{
-				WorkitemID: workitemID,
-				NodeName:   nodeName,
-				Diagnostic: diagnostic,
-			}
-		}
+		// Choices are item metadata (R-5.2); there is no separate /choices call.
+		selected, defaultChoiceSet := selectedFromItem(qi)
+		h.mu.Lock()
+		h.choices = selected
+		h.mu.Unlock()
 
-		return HitlProbeRetryMsg{}
+		return HitlProbeResultMsg{
+			WorkitemID:     workitemID,
+			NodeName:       queueName,
+			QueueItem:      qi,
+			Choices:        selected,
+			ChoicesLoaded:  true,
+			DefaultChoices: defaultChoiceSet,
+		}
 	}
+}
+
+// selectedFromItem maps the queue-service item's routing values to rendered
+// choices, falling back to the default approve/cancel choices (R-5.2, R-5.3).
+// Returns (choices, defaultChoiceSet).
+func selectedFromItem(qi *api.QueueItem) ([]api.Choice, bool) {
+	if len(qi.Choices) == 0 {
+		return DefaultAPIChoices(), true
+	}
+	selected := make([]api.Choice, 0, len(qi.Choices))
+	for _, v := range qi.Choices {
+		selected = append(selected, api.Choice{Value: v, Label: v, Type: "route"})
+	}
+	return selected, false
 }
 
 // ClaimAndDecide claims the queue item then decides with the given choice.
@@ -407,8 +381,32 @@ func (h *HitlState) ResetForNewWorkitem() {
 	h.mu.Lock()
 	h.probeAttempts = 0
 	h.exhausted = false
-	h.debugHintShown = false
 	h.mu.Unlock()
+}
+
+// RecordProbeFailure records one failed probe attempt against the queue-service
+// and returns the retry/exhaust message, mirroring Probe's retryOrExhaust
+// semantics: attempts are counted on HitlState so the probe cycle re-arms while
+// retries remain and stops once exhausted (the 3s tick is gated by Exhausted).
+// workitemID is passed in because HitlState only records it after a successful
+// Probe; resolution failures happen before any queue is known.
+func (h *HitlState) RecordProbeFailure(workitemID, diagnostic string) tea.Msg {
+	h.mu.Lock()
+	h.probeAttempts++
+	attempts := h.probeAttempts
+	exhausted := attempts >= h.probeMax
+	if exhausted {
+		h.exhausted = true
+	}
+	h.mu.Unlock()
+	if exhausted {
+		return HitlProbeExhaustedMsg{
+			WorkitemID: workitemID,
+			NodeName:   QueueServiceLabel,
+			Diagnostic: diagnostic,
+		}
+	}
+	return HitlProbeRetryMsg{}
 }
 
 // ─── Accessor methods (for tui package use) ─────────────────────────────────

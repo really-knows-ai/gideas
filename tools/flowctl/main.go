@@ -86,7 +86,6 @@ var watchCmd = &cobra.Command{
 func init() {
 	watchCmd.Flags().String("namespace", "", "Workitem namespace (overrides FLOW_NAMESPACE)")
 	watchCmd.Flags().String("system-namespace", "", "System services namespace (overrides FLOW_SYSTEM_NAMESPACE)")
-	watchCmd.Flags().Int("hitl-port", 8080, "HITL REST port (overrides FLOW_HITL_PORT)")
 	rootCmd.AddCommand(watchCmd)
 	rootCmd.AddCommand(cmd.NewPackageCmd())
 	rootCmd.AddCommand(cmd.NewInstallCmd())
