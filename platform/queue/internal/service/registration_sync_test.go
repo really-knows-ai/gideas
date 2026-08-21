@@ -9,10 +9,6 @@ package service
 // when a shard is new or was evicted. All collaborators are injected fakes
 // (fake controller client, fakeMirrorShards over bufconn) — zero real I/O, no
 // real clock, deterministic.
-//
-// RED today: Registry.syncOnRegistration and the wiring in RegisterQueue /
-// HeartbeatQueue do not exist yet, so this file cannot compile until the
-// round-2 implementer adds the pinned seam.
 
 import (
 	"context"

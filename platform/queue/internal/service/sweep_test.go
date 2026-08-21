@@ -2,19 +2,20 @@ package service
 
 // PHASE_05 convergence backstop unit tests (R-4.1/R-4.2/R-4.3, F2, F3).
 //
-// These drive the Sweeper (sweep.go — does not exist yet) and the per-queue
-// freshest-shard record (the funnel's queueName -> freshestShardID map, also
-// not yet present) through the SAME bufconn harness pattern the PHASE_03
-// funnel tests use: a Registry backed by a controller-runtime fake client
-// (no real K8s) whose peerDialer routes each shard address to a distinct
-// in-process fakeMirrorShard over bufconn (no real network). Collaborators are
-// injected via the existing peerDialer seam; there is zero real I/O, no real
-// clock, and every test is deterministic and millisecond-fast.
+// These drive the Sweeper (sweep.go) and the per-queue freshest-shard record
+// (the funnel's queueName -> freshestShardID map) through the SAME bufconn
+// harness pattern the PHASE_03 funnel tests use: a Registry backed by a
+// controller-runtime fake client (no real K8s) whose peerDialer routes each
+// shard address to a distinct in-process fakeMirrorShard over bufconn (no real
+// network). Collaborators are injected via the existing peerDialer seam; there
+// is zero real I/O, no real clock, and every test is deterministic and
+// millisecond-fast.
 //
-// These are RED today: the Sweeper type, DefaultSweepInterval, Registry.
-// FreshestShardID / recordFreshest, trimReport, and planConvergence do not
-// exist yet, so this file cannot compile until the round-2 implementer adds
-// the pinned seam below. Nothing here touches a non-test file.
+// The pure diff under test is planConvergence/planPushToReference: a target
+// shard is reconciled against the recorded freshest reference (F2) and the
+// OTHER non-reference shards' reports. The reference is repairable — it can
+// receive symmetric pushes; it is never a reason to destroy copies. Nothing
+// here touches a non-test file.
 
 import (
 	"context"
@@ -336,6 +337,59 @@ func TestSweepNeverDowngradesNewerCopy(t *testing.T) {
 	}
 }
 
+// TestSweepReproducer_QuorumAckedSurvivesIncompleteFreshest is the data-loss
+// reproducer (n=3, X,Y,Z):
+//
+//	Enqueue(A): Z fails → X,Y confirm → freshest=Y; A on {X,Y}.
+//	Enqueue(B): Y fails → X,Z confirm → freshest=Z; B on {X,Z}.
+//
+// Recorded freshest = Z = {B} — incomplete (misses A). A single sweep must
+// converge EVERY shard to {A,B} and must NOT destroy the only remaining copy
+// of A. This FAILS against the old presence-only "drop anything absent from
+// fresh" logic (A vanishes everywhere); it passes only with corroborated drops
+// + symmetric push onto the reference.
+func TestSweepReproducer_QuorumAckedSurvivesIncompleteFreshest(t *testing.T) {
+	// shard-a (X) holds A and B; shard-b (Y) holds only A; shard-c (Z) holds
+	// only B and is the recorded freshest reference.
+	h := newSweepHarness(t, "shard-a", "shard-b", "shard-c")
+	h.setFreshest("shard-c")
+
+	h.shards["addr-shard-a"].setItem(&flowv1.QueueItem{
+		WorkitemId: "A", QueueName: testQueueName, Status: "waiting",
+		GenerationId: "0000000000000001",
+	})
+	h.shards["addr-shard-a"].setItem(&flowv1.QueueItem{
+		WorkitemId: "B", QueueName: testQueueName, Status: "waiting",
+		GenerationId: "0000000000000002",
+	})
+	h.shards["addr-shard-b"].setItem(&flowv1.QueueItem{
+		WorkitemId: "A", QueueName: testQueueName, Status: "waiting",
+		GenerationId: "0000000000000001",
+	})
+	h.shards["addr-shard-c"].setItem(&flowv1.QueueItem{
+		WorkitemId: "B", QueueName: testQueueName, Status: "waiting",
+		GenerationId: "0000000000000002",
+	})
+
+	if err := h.sw.Sweep(context.Background(), testQueueName); err != nil {
+		t.Fatalf("Sweep: %v", err)
+	}
+
+	// The reference (shard-c) must be repaired with the A it lacks (symmetric
+	// push), and no corroborated copy may be dropped. After one sweep EVERY
+	// shard must hold BOTH A and B — all quorum-acked items survive everywhere.
+	for _, addr := range h.addrs {
+		store := h.shards[addr].serve()
+		if store["A"] == nil {
+			t.Fatalf("shard %s lost A — quorum-acked item destroyed by an incomplete "+
+				"freshest (data-loss bug); every shard must hold A", h.shards[addr].shardID)
+		}
+		if store["B"] == nil {
+			t.Fatalf("shard %s lost B — every shard must hold B", h.shards[addr].shardID)
+		}
+	}
+}
+
 // TestTrimReport_PayloadFree pins F3 (per-shard payload-free report): mapping
 // a GetLocalQueue response's items to {workitem_id -> generation_id} only,
 // discarding payloads (choices, timestamps, status, shard_id).
@@ -376,10 +430,48 @@ func TestTrimReportEmpty(t *testing.T) {
 	}
 }
 
-// TestPlanConvergence_PushAndDrop pins the pure diff (R-4.2/R-4.3): against the
-// freshest mirror's item set, a shard missing an item gets it pushed, and a
-// shard holding an extra / older-generation copy of an absent item gets it
-// dropped.
+// planConvergence is the pure diff pinned by the tests below. Its signature is
+// declared in sweep.go; the tests exercise it against the still-2-arg RED
+// declaration until the implementer adds the corroboration parameter. The
+// corrected contract it must implement:
+//
+//	func planConvergence(
+//		fresh []*flowv1.QueueItem, targetGen map[string]string,
+//		otherReports []map[string]string,
+//	) (push []*flowv1.QueueItem, drops []dropRef)
+//
+//   - push: every item in F missing from the target (full items from F,
+//     generation-guarded ApplyItem).
+//   - drops: an item the target holds that is ABSENT from F is a genuine orphan
+//     only when it is ALSO absent from EVERY other non-reference shard's report
+//     — then it is dropped (generation-guarded, S's recorded gen). If it is
+//     present on ANY other non-reference shard it is a corroborated copy that
+//     must survive and is NOT dropped (the data-loss guard). Presence on another
+//     non-reference shard always wins: absence from the reference ALONE never
+//     justifies a drop.
+//
+// targetGen: the target shard's trimmed {workitem_id -> generation_id}
+// report. otherReports: the trimmed reports of every OTHER non-reference
+// shard. Returns the ApplyItem pushes and the generation-guarded DropItem
+// refs.
+
+// planPushToReference is the pure symmetric-push-onto-reference helper pinned
+// by TestPlanPushToReference. It must be added by the sweeping implementer
+// alongside the corrected planConvergence:
+//
+//	func planPushToReference(freshestGen map[string]string, otherReports []map[string]string) []*flowv1.QueueItem
+//
+// It computes the symmetric push onto the reference shard: every item present
+// on some non-reference shard but ABSENT from the recorded freshest reference
+// F (full items from the reporting shards' reports) is pushed onto the
+// reference. The reference is a repairable straggler, never a reason to destroy
+// copies (R-4.2 corrected). `freshestGen` is the reference's current trimmed
+// report ({workitem_id -> generation_id}).
+
+// TestPlanConvergence_PushAndDrop pins the pure diff (R-4.2/R-4.3 corrected):
+// against the freshest mirror's item set, a shard missing an item gets it
+// pushed, and a shard holding an EXTRA item absent from the reference AND from
+// every other shard's report (a corroborated orphan) gets it dropped.
 func TestPlanConvergence_PushAndDrop(t *testing.T) {
 	fresh := []*flowv1.QueueItem{
 		{WorkitemId: testWorkitemID, GenerationId: "0000000000000001"},
@@ -391,16 +483,86 @@ func TestPlanConvergence_PushAndDrop(t *testing.T) {
 		"wi-2": "0000000000000002",
 		"wi-9": "0000000000000099",
 	}
+	// Other non-reference shards hold ONLY authoritative items — wi-9 appears
+	// nowhere else, so it is a genuine orphan and is dropped.
+	others := []map[string]string{
+		{"wi-2": "0000000000000002"},
+	}
 
-	push, drops := planConvergence(fresh, shard)
+	push, drops := planConvergence(fresh, shard, others)
 
 	// Missing authoritative item wi-1 is pushed (with its full item).
 	if len(push) != 1 || push[0].GetWorkitemId() != testWorkitemID || push[0].GetGenerationId() != "0000000000000001" {
 		t.Fatalf("push = %+v, want exactly [wi-1@0000000000000001]", push)
 	}
-	// Extra wi-9 is dropped (with the shard's recorded generation).
+	// Extra wi-9 is dropped (with the shard's recorded generation) because it
+	// is absent from the reference AND from every other shard's report.
 	if len(drops) != 1 || drops[0].WorkitemID != "wi-9" || drops[0].GenerationID != "0000000000000099" {
 		t.Fatalf("drops = %+v, want exactly [wi-9@0000000000000099]", drops)
+	}
+}
+
+// TestPlanConvergence_CorroboratedDropNotDestroyed pins the corrected drop
+// semantics: an item in the target absent from the (incomplete) reference is a
+// corroborated copy, NOT a genuine orphan, when it is present on ANY other
+// non-reference shard — it must survive and is NOT dropped (the data-loss
+// guard). The presence of a corroborating report wins even if a different
+// non-reference shard also lacks the item: "present on another non-reference
+// shard → do NOT drop" (fix contract).
+func TestPlanConvergence_CorroboratedDropNotDestroyed(t *testing.T) {
+	// Reference is INCOMPLETE — the recorded freshest is shard-c missing A
+	// (the reproduced partial-broadcast row).
+	ref := []*flowv1.QueueItem{
+		{WorkitemId: "B", GenerationId: "0000000000000002"},
+	}
+	// Target shard-a holds A and B; A is absent from the reference but is a
+	// quorum-acked item that ALSO lives on shard-b. A THIRD non-reference shard
+	// (shard-x) does not hold A — but shard-b's corroboration makes A survive.
+	target := map[string]string{"A": "0000000000000001", "B": "0000000000000002"}
+	others := []map[string]string{
+		{"A": "0000000000000001"}, // shard-b corroborates A → A survives
+		{"B": "0000000000000002"}, // shard-x does not hold A; must NOT cause a drop
+	}
+
+	push, drops := planConvergence(ref, target, others)
+
+	// A is corroborated by shard-b, so it must NOT be dropped — even though
+	// shard-x lacks it. Absence from the reference alone never justifies a drop.
+	if len(drops) != 0 {
+		t.Fatalf("drops = %+v, want NONE — A is corroborated by shard-b and must survive; "+
+			"a genuine orphan is absent from the reference AND from EVERY other non-reference report", drops)
+	}
+	// Nothing in the reference is missing from the target, so no push (B is
+	// already there).
+	if len(push) != 0 {
+		t.Fatalf("push = %+v, want none (target already holds B)", push)
+	}
+}
+
+// TestPlanConvergence_GenuineOrphanDropped pins the OTHER side of the drop
+// guard: an item in the target that is absent from the reference AND absent
+// from EVERY other non-reference shard's report is a genuine orphan and IS
+// dropped (generation-guarded).
+func TestPlanConvergence_GenuineOrphanDropped(t *testing.T) {
+	ref := []*flowv1.QueueItem{
+		{WorkitemId: "B", GenerationId: "0000000000000002"},
+	}
+	// Target shard-a holds a stale extra "orphan" that no other shard holds —
+	// a real orphaned backup copy.
+	target := map[string]string{"B": "0000000000000002", "orphan": "0000000000000099"}
+	others := []map[string]string{
+		{"A": "0000000000000001"}, // other shards have A, but NOT "orphan"
+	}
+
+	push, drops := planConvergence(ref, target, others)
+
+	// "orphan" is absent from the reference and absent from every other
+	// non-reference report → genuine orphan → dropped (generation-guarded).
+	if len(drops) != 1 || drops[0].WorkitemID != "orphan" || drops[0].GenerationID != "0000000000000099" {
+		t.Fatalf("drops = %+v, want exactly [orphan@0000000000000099]", drops)
+	}
+	if len(push) != 0 {
+		t.Fatalf("push = %+v, want none (target already holds B)", push)
 	}
 }
 
@@ -413,14 +575,38 @@ func TestPlanConvergence_NoDowngrade(t *testing.T) {
 	}
 	// Target shard holds a NEWER copy of wi-1 (generation 5 > authoritative 1).
 	shard := map[string]string{testWorkitemID: "0000000000000005"}
+	var others []map[string]string
 
-	push, drops := planConvergence(fresh, shard)
+	push, drops := planConvergence(fresh, shard, others)
 
 	if len(push) != 0 {
 		t.Fatalf("push = %+v, want no downgrade push for a newer local copy", push)
 	}
 	if len(drops) != 0 {
 		t.Fatalf("drops = %+v, want no drop for an item present in the authoritative set", drops)
+	}
+}
+
+// TestPlanPushToReference pins the symmetric push onto the reference: an item
+// present on some non-reference shard but ABSENT from the recorded freshest
+// reference is pushed onto the reference. The reference is a repairable
+// straggler, never a reason to destroy copies.
+func TestPlanPushToReference(t *testing.T) {
+	// The recorded freshest reference (shard-c) is INCOMPLETE: it holds only B,
+	// missing A (the quorum-acked partial-broadcast row).
+	freshestGen := map[string]string{"B": "0000000000000002"}
+	// Non-reference shards hold A (shard-a) and B (shard-b, shard-c-like).
+	others := []map[string]string{
+		{"A": "0000000000000001", "B": "0000000000000002"}, // shard-a has A+B
+		{"B": "0000000000000002"},                          // shard-b has only B
+	}
+
+	push := planPushToReference(freshestGen, others)
+
+	// A is absent from the reference but present on another non-reference shard,
+	// so the reference must be repaired with it.
+	if len(push) != 1 || push[0].GetWorkitemId() != "A" {
+		t.Fatalf("push onto reference = %+v, want exactly [A] (reference is a repairable straggler)", push)
 	}
 }
 
