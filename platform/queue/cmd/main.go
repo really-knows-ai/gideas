@@ -18,8 +18,10 @@ import (
 
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
 	flowv1api "github.com/foundry/flow/operator/api/v1"
+	"github.com/foundry/flow/pkg/eventbus"
 	"github.com/foundry/flow/queue/internal/service"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/reflection"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -80,6 +82,39 @@ func main() {
 	reg := service.NewRegistry(c, leaseTTL, service.DefaultLeaseSweepInterval)
 	reg.Namespace = namespace
 
+	// Event Bus wiring for queue.decided notifications. The EventBus is a
+	// notification channel, never the record (R-4.5): the decision lives in
+	// the delete-on-all-shards, so an absent/unreachable bus must never block
+	// or alter a decide. When EVENT_BUS_ADDRESS is unset we leave
+	// PublishQueueDecided nil — publishQueueDecided is nil-safe, so decide
+	// still succeeds silently. When set, we adapt the hook to the shared
+	// AsyncPublisher (async, non-blocking Submit).
+	var pub *eventbus.AsyncPublisher
+	if busAddr := os.Getenv("EVENT_BUS_ADDRESS"); busAddr != "" {
+		busConn, err := grpc.NewClient(busAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		if err != nil {
+			slog.Error("Failed to connect to Event Bus", "address", busAddr, "error", err)
+			os.Exit(1)
+		}
+		pub = eventbus.NewAsyncPublisher(flowv1.NewFlowEventBusServiceClient(busConn))
+		reg.PublishQueueDecided = func(queueName, workitemID, choice string) {
+			pub.Submit(&flowv1.PublishRequest{
+				Channel: "queue",
+				Event: &flowv1.FlowEvent{
+					EventType:  "queue.decided",
+					WorkitemId: workitemID,
+					Attributes: map[string]string{
+						"queue_name": queueName,
+						"choice":     choice,
+					},
+				},
+			})
+		}
+		slog.Info("Event Bus connected for queue.decided publishing", "address", busAddr)
+	} else {
+		slog.Info("Event Bus not configured, queue.decided publishing disabled")
+	}
+
 	// gRPC server: QueueRegistryService (registration/lease/single-item) +
 	// reflection.
 	lis, err := net.Listen("tcp", ":"+grpcPort)
@@ -117,6 +152,9 @@ func main() {
 		<-sigCh
 		slog.Info("Received signal, shutting down gracefully")
 		cancel()
+		if pub != nil {
+			pub.Stop() // best-effort flush of buffered queue.decided events
+		}
 		shutCtx, shutdown := context.WithTimeout(context.Background(), 5*time.Second)
 		defer shutdown()
 		_ = httpSrv.Shutdown(shutCtx)

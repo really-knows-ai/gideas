@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"sync"
 	"time"
 
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
@@ -80,8 +79,9 @@ type Manager struct {
 	dialer    DialFunc
 	svc       flowv1.QueueGatewayServiceClient
 
-	mu    sync.Mutex
-	decCh map[string]chan string // workitemID -> buffered decision channel
+	// eventBus is the EventBus client WaitForDecision subscribes on.
+	// nil ⇒ WaitForDecision of a present item fails fast (see below).
+	eventBus flowv1.FlowEventBusServiceClient
 }
 
 // WithQueueName sets the queue-name scoping used on every request.
@@ -102,9 +102,17 @@ func WithDialer(d DialFunc) Option {
 	return func(m *Manager) { m.dialer = d }
 }
 
+// WithEventBus injects the EventBus client used by WaitForDecision.
+// It is the EventBus counterpart of WithDialer: production wiring
+// (flowv1.NewFlowEventBusServiceClient over the Event Bus connection)
+// and bufconn-backed tests share it.
+func WithEventBus(eb flowv1.FlowEventBusServiceClient) Option {
+	return func(m *Manager) { m.eventBus = eb }
+}
+
 // NewManager builds a Manager, applying opts then dialing the queue service.
 func NewManager(opts ...Option) (*Manager, error) {
-	m := &Manager{decCh: map[string]chan string{}}
+	m := &Manager{}
 	for _, o := range opts {
 		o(m)
 	}
@@ -126,27 +134,6 @@ func (m *Manager) dial(ctx context.Context) (grpc.ClientConnInterface, error) {
 		return nil, errors.New("queuemgr: FLOW_QUEUE_SERVICE_ADDR unset and no WithDialer supplied")
 	}
 	return grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
-}
-
-// registerDecision creates a client-local buffered decision entry for id.
-func (m *Manager) registerDecision(id string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.decCh[id] = make(chan string, 1)
-}
-
-// deliverDecision stores the choice for id (buffered, non-blocking).
-func (m *Manager) deliverDecision(id, choice string) {
-	m.mu.Lock()
-	ch, ok := m.decCh[id]
-	m.mu.Unlock()
-	if !ok {
-		return
-	}
-	select {
-	case ch <- choice:
-	default: // buffer full — drop; caller should read via WaitForDecision
-	}
 }
 
 // statusErr maps a grpc status error to the corresponding package sentinel. It
@@ -194,9 +181,9 @@ func toItem(p *flowv1.QueueItem) *QueueItem {
 	return it
 }
 
-// Enqueue registers workitemID into the queue with the configured choices, and
-// installs a client-local decision entry so WaitForDecision can observe the
-// eventual decision.
+// Enqueue registers workitemID into the queue with the configured choices. The
+// queue-service publishes the eventual decision as a queue.decided EventBus
+// event, which WaitForDecision subscribes to.
 func (m *Manager) Enqueue(ctx context.Context, workitemID string) error {
 	_, err := m.svc.Enqueue(ctx, &flowv1.EnqueueRequest{
 		WorkitemId: workitemID,
@@ -206,7 +193,6 @@ func (m *Manager) Enqueue(ctx context.Context, workitemID string) error {
 	if err != nil {
 		return statusErr(err)
 	}
-	m.registerDecision(workitemID)
 	return nil
 }
 
@@ -271,8 +257,8 @@ func (m *Manager) Release(ctx context.Context, workitemID string) (*QueueItem, e
 	return toItem(resp.GetItem()), nil
 }
 
-// Decide records the human's routing choice and delivers it to any
-// client-local WaitForDecision entry for id.
+// Decide records the human's routing choice. The queue-service publishes it as
+// a queue.decided EventBus event, which WaitForDecision subscribes to.
 func (m *Manager) Decide(ctx context.Context, workitemID, choice string) error {
 	_, err := m.svc.Decide(ctx, &flowv1.DecideRequest{
 		QueueName:  m.queueName,
@@ -282,34 +268,63 @@ func (m *Manager) Decide(ctx context.Context, workitemID, choice string) error {
 	if err != nil {
 		return statusErr(err)
 	}
-	m.deliverDecision(workitemID, choice)
 	return nil
 }
 
 // WaitForDecision returns the decision choice for id, awaiting it if not yet
-// decided. It returns ErrQueueItemNotFound when the id was never enqueued on
-// this Manager, or ctx.Err() when the context completes first.
-//
-// ponytail: decisions are delivered via a client-local in-process buffered
-// channel keyed by workitemID (registered on Enqueue, filled on Decide). This
-// only works when Enqueue/Decide/WaitForDecision all run on the same Manager
-// instance. PHASE_06 replaces this with EventBus pub/sub so decisions can be
-// observed across processes and shards.
-//
-// ponytail: the decCh map grows by one buffered channel per workitemID and is
-// never reclaimed, so a long-running HITL node leaks one entry per enqueued
-// workitem over time — slow but real until PHASE_06 drops WaitForDecision.
+// decided. It first checks the queue service: if the item is absent
+// (never enqueued OR already decided+deleted) it returns ErrQueueItemNotFound
+// immediately without subscribing. Otherwise it subscribes to the EventBus
+// (channel "queue", event type "queue.decided") and waits for the first event
+// whose workitem_id matches, returning that event's "choice" attribute. The
+// subscribe→consume loop runs inside ReconnectStream, so EventBus downtime
+// (a dropped stream or a failed subscribe) backs off and retries with
+// reconnect-backoff instead of failing hard. It returns ctx.Err() when the
+// context completes first.
 func (m *Manager) WaitForDecision(ctx context.Context, workitemID string) (string, error) {
-	m.mu.Lock()
-	ch, ok := m.decCh[workitemID]
-	m.mu.Unlock()
-	if !ok {
-		return "", ErrQueueItemNotFound
+	// 1. GetItem FIRST: absent item ⇒ ErrQueueItemNotFound, never subscribe.
+	if _, err := m.GetItem(ctx, workitemID); err != nil {
+		return "", err
 	}
-	select {
-	case choice := <-ch:
-		return choice, nil
-	case <-ctx.Done():
-		return "", ctx.Err()
+
+	// 2. Fail fast if no EventBus client injected (never block, never spin —
+	//    checked before the retry loop so a nil eventBus cannot busy-retry).
+	if m.eventBus == nil {
+		return "", fmt.Errorf("queuemgr: WaitForDecision: no EventBus client injected (WithEventBus)")
 	}
+
+	// 3. Subscribe→consume loop inside ReconnectStream. The consume closure
+	//    runs the workitem-filtered Recv-loop; the first event matching
+	//    workitemID decides, capturing its "choice" into the outer variable and
+	//    returning nil to end. A Recv error bubbles up to ReconnectStream,
+	//    which backs off and re-subscribes.
+	var choice string
+	err := ReconnectStream(
+		ctx,
+		func() (flowv1.FlowEventBusService_SubscribeClient, error) {
+			return m.eventBus.Subscribe(ctx, &flowv1.SubscribeRequest{
+				Channel: "queue",
+				Filter:  &flowv1.SubscribeFilter{EventType: "queue.decided"},
+			})
+		},
+		func(stream flowv1.FlowEventBusService_SubscribeClient) error {
+			for {
+				evt, err := stream.Recv()
+				if err != nil {
+					return err
+				}
+				if evt.GetWorkitemId() != workitemID {
+					continue
+				}
+				choice = evt.GetAttributes()["choice"]
+				return nil
+			}
+		},
+		waitDecisionBackoff,
+		sleepCtx,
+	)
+	if err != nil {
+		return "", err
+	}
+	return choice, nil
 }

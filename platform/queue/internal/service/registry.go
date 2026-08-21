@@ -54,6 +54,14 @@ type Registry struct {
 	// OnShardEvicted fires (queueName, shardID) when the sweep evicts a shard,
 	// BEFORE the CR removal. nil ⇒ slog.Warn.
 	OnShardEvicted func(queueName, shardID string)
+	// PublishQueueDecided fires (queueName, workitemID, choice) after a
+	// decide quorum-acks, so the queue-service can emit the
+	// queue.decided EventBus event (channel "queue", event type
+	// "queue.decided"). nil ⇒ no event — the EventBus is a notification
+	// channel, never the record, so a decision is NEVER blocked by
+	// publish. Production cmd/main.go adapts this hook to the
+	// pkg/eventbus AsyncPublisher + flowv1.PublishRequest shape.
+	PublishQueueDecided func(queueName, workitemID, choice string)
 	// Namespace scopes every Queue CR operation. Resolved in cmd/main.go and
 	// set after construction; defaults to "default".
 	Namespace string
@@ -104,6 +112,16 @@ func (r *Registry) FreshestShardID(queueName string) string {
 	r.freshestMu.Lock()
 	defer r.freshestMu.Unlock()
 	return r.freshestShardID[queueName]
+}
+
+// publishQueueDecided emits the queue.decided notification via the
+// PublishQueueDecided hook. nil ⇒ silent no-op (unlike
+// OnShardEvicted's nil ⇒ slog.Warn: an absent EventBus is a
+// configured choice for the queue-service, not a fault).
+func (r *Registry) publishQueueDecided(queueName, workitemID, choice string) {
+	if r.PublishQueueDecided != nil {
+		r.PublishQueueDecided(queueName, workitemID, choice)
+	}
 }
 
 // syncOnRegistration replays the queue's full authoritative item set to a

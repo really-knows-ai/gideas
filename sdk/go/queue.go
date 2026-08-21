@@ -1,6 +1,7 @@
 package flow
 
 import (
+	flowv1 "github.com/foundry/flow/gen/flow/v1"
 	"github.com/foundry/flow/sdk/go/internal/queuemgr"
 )
 
@@ -39,3 +40,10 @@ func WithChoices(choices []string) QueueManagerOption {
 // a bufconn dialer. Test-only seam retained on the public API so node test
 // harnesses can run the thin client over bufconn without real network I/O.
 func WithDialer(d queuemgr.DialFunc) QueueManagerOption { return queuemgr.WithDialer(d) }
+
+// WithEventBus injects the EventBus client used by WaitForDecision, so a node
+// can subscribe to queue.decided events. It is the EventBus counterpart of
+// WithDialer. If unset, WaitForDecision of a present item fails fast.
+func WithEventBus(eb flowv1.FlowEventBusServiceClient) QueueManagerOption {
+	return queuemgr.WithEventBus(eb)
+}

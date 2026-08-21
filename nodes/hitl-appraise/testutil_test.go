@@ -5,6 +5,7 @@ import (
 	"net"
 	"sync"
 	"testing"
+	"time"
 
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
 	flow "github.com/foundry/flow/sdk/go"
@@ -215,22 +216,41 @@ func newSpyClient(t *testing.T, spy *hitlAppraiseSpy) *flow.Client {
 
 // fakeQueueService is an in-memory, in-process implementation of the
 // queue-service's SDK-facing surface (flowv1.QueueGatewayServiceServer). It is
-// a true unit-test fake: no real I/O, no database, no EventBus. Items are
-// stored in a mutex-guarded map keyed by workitem_id, and the RPCs return the
-// PHASE_01 gRPC status codes the thin client's reverse-mapping expects
-// (NotFound/AlreadyExists/FailedPrecondition). Decisions are delivered
-// client-locally by the thin client's WaitForDecision, so Decide only needs to
-// return success.
+// a true unit-test fake: no real I/O, no database. Items are stored in a
+// mutex-guarded map keyed by workitem_id, and the RPCs return the PHASE_01
+// gRPC status codes the thin client's reverse-mapping expects
+// (NotFound/AlreadyExists/FailedPrecondition). Decisions are delivered over
+// the EventBus exactly like the real queue-service: Decide deletes the item
+// (delete-on-decide) and publishes the queue.decided event to the harness's
+// in-memory bus, which is what the SDK's event-driven WaitForDecision
+// subscribes on.
 type fakeQueueService struct {
 	flowv1.UnimplementedQueueGatewayServiceServer
 
 	mu    sync.Mutex
 	items map[string]*flowv1.QueueItem
+
+	// eventBus is the in-memory bus the fake publishes queue.decided events
+	// to when a workitem is decided. Wired by newTestQueueManager.
+	eventBus *inMemoryEventBus
 }
 
 const (
 	queueStatusWaiting = "waiting"
 	queueStatusClaimed = "claimed"
+
+	// testQueueName scopes every queue request in the harness (WithQueueName).
+	testQueueName = "hitl-appraise"
+
+	// EventBus coordinates of the queue-service's decision notification (SPEC
+	// R-4.4; mirrored by the SDK's manager_waitdecision_test.go and
+	// platform/queue/internal/service/registry.go publishQueueDecided). The
+	// event carries workitem_id as the first-class FlowEvent.WorkitemId field
+	// and queue_name + choice as FlowEvent.Attributes entries.
+	queueDecidedChannel   = "queue"
+	queueDecidedEventType = "queue.decided"
+	eventAttrQueueName    = "queue_name"
+	eventAttrChoice       = "choice"
 )
 
 func newFakeQueueService() *fakeQueueService {
@@ -303,53 +323,224 @@ func (f *fakeQueueService) Release(_ context.Context, req *flowv1.ReleaseRequest
 	return &flowv1.ReleaseResponse{Item: cp}, nil
 }
 
-func (f *fakeQueueService) Decide(_ context.Context, req *flowv1.DecideRequest) (*flowv1.DecideResponse, error) {
+func (f *fakeQueueService) Decide(ctx context.Context, req *flowv1.DecideRequest) (*flowv1.DecideResponse, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	it, ok := f.items[req.GetWorkitemId()]
 	if !ok {
+		f.mu.Unlock()
 		return nil, status.Error(codes.NotFound, "queue item not found")
 	}
 	if it.GetStatus() != queueStatusClaimed {
+		f.mu.Unlock()
 		return nil, status.Error(codes.FailedPrecondition, "queue item invalid state transition")
 	}
-	delete(f.items, req.GetWorkitemId())
+	queueName := it.GetQueueName()
+	delete(f.items, req.GetWorkitemId()) // delete-on-decide: decided items no longer GetItem-able
+	f.mu.Unlock()
+
+	// Deliver the decision over the EventBus exactly like the real
+	// queue-service: the node's WaitForDecision (already subscribed — the
+	// harness waits for the subscription before deciding) receives the choice
+	// from this event's "choice" attribute.
+	if f.eventBus != nil {
+		_, _ = f.eventBus.Publish(ctx, &flowv1.PublishRequest{
+			Channel: queueDecidedChannel,
+			Event: &flowv1.FlowEvent{
+				EventId:    "evt-" + req.GetWorkitemId(),
+				Channel:    queueDecidedChannel,
+				EventType:  queueDecidedEventType,
+				WorkitemId: req.GetWorkitemId(),
+				Attributes: map[string]string{
+					eventAttrQueueName: queueName,
+					eventAttrChoice:    req.GetChoice(),
+				},
+			},
+		})
+	}
 	return &flowv1.DecideResponse{Acknowledged: true}, nil
 }
 
-// newTestQueueManager starts a fake queue-service behind an in-process bufconn
-// listener and returns a flow.QueueManager thin client whose injected dialer
-// reaches that listener. No real network I/O, no FLOW_QUEUE_SERVICE_ADDR. The
-// fake server is stopped via t.Cleanup. The thin client has no Start/Stop; a
-// Decide on the returned manager delivers the choice client-locally, unblocking
-// WaitForDecision.
-func newTestQueueManager(t *testing.T) flow.QueueManager {
+// inMemoryEventBus is the node-harness analogue of the SDK's
+// queueDecidedEventBusSpy (sdk/go/internal/queuemgr/manager_waitdecision_test.go):
+// a fake FlowEventBusServiceServer reachable over a bufconn listener. Publish
+// appends the event to a replay buffer (so a decision published before the
+// node subscribes is still delivered — the harness must not lose the decision
+// to a subscribe/publish race) and fans it out to live subscribers. subc
+// signals when the first Subscribe reaches the server, so tests can wait until
+// the node's WaitForDecision has subscribed before deciding — at that point
+// its pre-subscription GetItem has already succeeded while the item was
+// pending, so the subsequent delete-on-decide cannot race it.
+type inMemoryEventBus struct {
+	flowv1.UnimplementedFlowEventBusServiceServer
+
+	mu        sync.Mutex
+	events    []*flowv1.FlowEvent            // published-event replay buffer
+	subs      map[int]chan *flowv1.FlowEvent // live subscriber send channels
+	nextSubID int
+	subc      chan struct{} // subscription signal (buffered 1)
+}
+
+func newInMemoryEventBus() *inMemoryEventBus {
+	return &inMemoryEventBus{
+		subs: map[int]chan *flowv1.FlowEvent{},
+		subc: make(chan struct{}, 1),
+	}
+}
+
+func (b *inMemoryEventBus) Publish(_ context.Context, req *flowv1.PublishRequest) (*flowv1.PublishResponse, error) {
+	evt := req.GetEvent()
+	if evt == nil {
+		return &flowv1.PublishResponse{Acknowledged: true}, nil
+	}
+	b.mu.Lock()
+	b.events = append(b.events, evt)
+	seq := uint64(len(b.events))
+	for _, ch := range b.subs {
+		select {
+		case ch <- evt:
+		default: // subscriber buffer full — the replay buffer backstops the drop
+		}
+	}
+	b.mu.Unlock()
+	return &flowv1.PublishResponse{Acknowledged: true, Sequence: seq}, nil
+}
+
+func (b *inMemoryEventBus) Subscribe(
+	_ *flowv1.SubscribeRequest,
+	stream flowv1.FlowEventBusService_SubscribeServer,
+) error {
+	b.mu.Lock()
+	replay := append([]*flowv1.FlowEvent(nil), b.events...)
+	ch := make(chan *flowv1.FlowEvent, 8)
+	id := b.nextSubID
+	b.nextSubID++
+	b.subs[id] = ch
+	select {
+	case b.subc <- struct{}{}:
+	default: // subscription already signalled
+	}
+	b.mu.Unlock()
+	defer func() {
+		b.mu.Lock()
+		delete(b.subs, id)
+		b.mu.Unlock()
+	}()
+
+	for _, evt := range replay {
+		if err := stream.Send(evt); err != nil {
+			return err
+		}
+	}
+	for {
+		select {
+		case evt, ok := <-ch:
+			if !ok {
+				return nil
+			}
+			if err := stream.Send(evt); err != nil {
+				return err
+			}
+		case <-stream.Context().Done():
+			return stream.Context().Err()
+		}
+	}
+}
+
+// waitForSubscribe blocks until the first Subscribe reaches the bus (bounded:
+// in-process delivery fires within microseconds, so 2s is a generous hard cap
+// that only trips on a genuinely broken harness). Test-side synchronization
+// only — the no-poll rule applies to the SDK WaitForDecision body, not here.
+func (b *inMemoryEventBus) waitForSubscribe(t *testing.T) {
+	t.Helper()
+	select {
+	case <-b.subc:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for the node's WaitForDecision to subscribe")
+	}
+}
+
+// testQueueManager bundles the SDK QueueManager under test with the harness's
+// in-memory EventBus. Call decide to deliver a human decision.
+type testQueueManager struct {
+	qm  flow.QueueManager
+	bus *inMemoryEventBus
+}
+
+// newTestQueueManager wires the SDK QueueManager's two injected seams the way
+// production intends (and the SDK's own manager_waitdecision_test.go does):
+// WithDialer reaches the fake queue-service over bufconn, and WithEventBus
+// reaches the in-memory bus over bufconn. The fake queue-service's Decide both
+// deletes the item (delete-on-decide) and publishes the queue.decided event, so
+// WaitForDecision sees the item pending in GetItem, subscribes, and receives the
+// decision over the event stream. No real network I/O, no FLOW_QUEUE_SERVICE_ADDR,
+// no event-bus address.
+func newTestQueueManager(t *testing.T) *testQueueManager {
 	t.Helper()
 
-	lis := bufconn.Listen(1024 * 1024)
-	srv := grpc.NewServer()
-	flowv1.RegisterQueueGatewayServiceServer(srv, newFakeQueueService())
-	go func() { _ = srv.Serve(lis) }()
-	t.Cleanup(srv.Stop)
+	bus := newInMemoryEventBus()
+	fake := newFakeQueueService()
+	fake.eventBus = bus
 
-	qm, err := flow.NewQueueManager(flow.WithDialer(func(ctx context.Context, _ string) (grpc.ClientConnInterface, error) {
-		conn, err := grpc.NewClient(
-			"passthrough:///bufconn-queue",
-			grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) {
-				return lis.DialContext(ctx)
-			}),
-			grpc.WithTransportCredentials(insecure.NewCredentials()),
-		)
-		if err != nil {
-			return nil, err
-		}
-		t.Cleanup(func() { _ = conn.Close() })
-		return conn, nil
-	}))
+	queueConn := bufconnConn(t, "bufconn-queue", func(s *grpc.Server) {
+		flowv1.RegisterQueueGatewayServiceServer(s, fake)
+	})
+	ebConn := bufconnConn(t, "bufconn-eventbus", func(s *grpc.Server) {
+		flowv1.RegisterFlowEventBusServiceServer(s, bus)
+	})
+
+	qm, err := flow.NewQueueManager(
+		flow.WithQueueName(testQueueName),
+		flow.WithDialer(func(context.Context, string) (grpc.ClientConnInterface, error) {
+			return queueConn, nil
+		}),
+		flow.WithEventBus(flowv1.NewFlowEventBusServiceClient(ebConn)),
+	)
 	if err != nil {
 		t.Fatalf("NewQueueManager failed: %v", err)
 	}
-	return qm
+
+	return &testQueueManager{qm: qm, bus: bus}
+}
+
+// bufconnConn starts a gRPC server on an in-process bufconn listener with the
+// given registrar and returns a client connection to it. Zero real I/O.
+func bufconnConn(t *testing.T, name string, register func(*grpc.Server)) grpc.ClientConnInterface {
+	t.Helper()
+	lis := bufconn.Listen(1024 * 1024)
+	srv := grpc.NewServer()
+	register(srv)
+	go func() { _ = srv.Serve(lis) }()
+	t.Cleanup(srv.Stop)
+
+	conn, err := grpc.NewClient(
+		"passthrough:///"+name,
+		grpc.WithContextDialer(func(_ context.Context, _ string) (net.Conn, error) {
+			return lis.DialContext(context.Background())
+		}),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		t.Fatalf("dial %s: %v", name, err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	return conn
+}
+
+// decide waits until the node's WaitForDecision has subscribed (its
+// pre-subscription GetItem has already succeeded while the item was pending),
+// then claims and decides the workitem. The fake queue-service's Decide both
+// deletes the item and publishes the queue.decided event, which unblocks the
+// handler's WaitForDecision with the choice.
+func (h *testQueueManager) decide(t *testing.T, ctx context.Context, workitemID, choice string) {
+	t.Helper()
+	h.bus.waitForSubscribe(t)
+
+	if _, err := h.qm.Claim(ctx, workitemID); err != nil {
+		t.Fatalf("Claim failed: %v", err)
+	}
+	if err := h.qm.Decide(ctx, workitemID, choice); err != nil {
+		t.Fatalf("Decide failed: %v", err)
+	}
 }
 
 // newTestWorkitem creates a Workitem from a client by setting the workitem ID env var.

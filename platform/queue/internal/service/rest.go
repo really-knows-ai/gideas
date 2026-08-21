@@ -121,6 +121,7 @@ func (s *RestServer) handleDecide(w http.ResponseWriter, r *http.Request) {
 		writeRestProxyError(w, err)
 		return
 	}
+	s.reg.publishQueueDecided(name, id, choice)
 	writeRestJSON(w, map[string]bool{"acknowledged": true})
 }
 

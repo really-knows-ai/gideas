@@ -25,13 +25,13 @@ const (
 func TestHITL_HitlAppraise_Approved(t *testing.T) {
 	spy := newHITLAppraiseSpy()
 	client := newSpyClient(t, spy)
-	qm := newTestQueueManager(t)
+	h := newTestQueueManager(t)
 	cfg := configWithLabels(map[string]string{"approved": "Approve Petition"})
 	ctx := context.Background()
 	wctx := newWorkitemContext("wi-appraise-1")
 
-	errCh := runHandler(ctx, client, qm, cfg, wctx)
-	simulateDecision(t, ctx, qm, "wi-appraise-1", outputApproved)
+	errCh := runHandler(ctx, client, h.qm, cfg, wctx)
+	h.decide(t, ctx, "wi-appraise-1", outputApproved)
 
 	if err := <-errCh; err != nil {
 		t.Fatalf("handler returned error: %v", err)
@@ -94,13 +94,13 @@ func TestHITL_HitlAppraise_Approved(t *testing.T) {
 func TestHITL_ArbiterResolve_Resolution(t *testing.T) {
 	spy := newArbiterHITLResolveSpy()
 	client := newSpyClient(t, spy)
-	qm := newTestQueueManager(t)
+	h := newTestQueueManager(t)
 	cfg := defaultConfig()
 	ctx := context.Background()
 	wctx := newWorkitemContext("wi-arbiter-1")
 
-	errCh := runHandler(ctx, client, qm, cfg, wctx)
-	simulateDecision(t, ctx, qm, "wi-arbiter-1", outputResolution)
+	errCh := runHandler(ctx, client, h.qm, cfg, wctx)
+	h.decide(t, ctx, "wi-arbiter-1", outputResolution)
 
 	if err := <-errCh; err != nil {
 		t.Fatalf("handler returned error: %v", err)
@@ -142,13 +142,13 @@ func TestHITL_ArbiterResolve_Resolution(t *testing.T) {
 func TestHITL_TribunalResolve_Resolution(t *testing.T) {
 	spy := newTribunalHITLResolveSpy()
 	client := newSpyClient(t, spy)
-	qm := newTestQueueManager(t)
+	h := newTestQueueManager(t)
 	cfg := defaultConfig()
 	ctx := context.Background()
 	wctx := newWorkitemContext("wi-tribunal-1")
 
-	errCh := runHandler(ctx, client, qm, cfg, wctx)
-	simulateDecision(t, ctx, qm, "wi-tribunal-1", outputResolution)
+	errCh := runHandler(ctx, client, h.qm, cfg, wctx)
+	h.decide(t, ctx, "wi-tribunal-1", outputResolution)
 
 	if err := <-errCh; err != nil {
 		t.Fatalf("handler returned error: %v", err)
@@ -182,13 +182,13 @@ func TestHITL_TribunalResolve_Resolution(t *testing.T) {
 func TestHITL_Minimal_Route(t *testing.T) {
 	spy := newMinimalSpy()
 	client := newSpyClient(t, spy)
-	qm := newTestQueueManager(t)
+	h := newTestQueueManager(t)
 	cfg := defaultConfig()
 	ctx := context.Background()
 	wctx := newWorkitemContext("wi-minimal-1")
 
-	errCh := runHandler(ctx, client, qm, cfg, wctx)
-	simulateDecision(t, ctx, qm, "wi-minimal-1", "default")
+	errCh := runHandler(ctx, client, h.qm, cfg, wctx)
+	h.decide(t, ctx, "wi-minimal-1", "default")
 
 	if err := <-errCh; err != nil {
 		t.Fatalf("handler returned error: %v", err)
@@ -324,13 +324,13 @@ func TestDeriveBehaviour_Minimal(t *testing.T) {
 func TestHITL_ChoicesRestriction_SubsetRoutes(t *testing.T) {
 	spy := newThreeOutputSpy()
 	client := newSpyClient(t, spy)
-	qm := newTestQueueManager(t)
+	h := newTestQueueManager(t)
 	cfg := configWithChoices(choiceEntry{Output: "b", Label: "Bravo"})
 	ctx := context.Background()
 	wctx := newWorkitemContext("wi-restrict-1")
 
-	errCh := runHandler(ctx, client, qm, cfg, wctx)
-	simulateDecision(t, ctx, qm, "wi-restrict-1", "b")
+	errCh := runHandler(ctx, client, h.qm, cfg, wctx)
+	h.decide(t, ctx, "wi-restrict-1", "b")
 
 	if err := <-errCh; err != nil {
 		t.Fatalf("handler returned error: %v", err)
@@ -350,13 +350,13 @@ func TestHITL_ChoicesRestriction_SubsetRoutes(t *testing.T) {
 func TestHITL_ChoicesRestriction_UnlistedChoiceFails(t *testing.T) {
 	spy := newThreeOutputSpy()
 	client := newSpyClient(t, spy)
-	qm := newTestQueueManager(t)
+	h := newTestQueueManager(t)
 	cfg := configWithChoices(choiceEntry{Output: "b"})
 	ctx := context.Background()
 	wctx := newWorkitemContext("wi-restrict-2")
 
-	errCh := runHandler(ctx, client, qm, cfg, wctx)
-	simulateDecision(t, ctx, qm, "wi-restrict-2", "a")
+	errCh := runHandler(ctx, client, h.qm, cfg, wctx)
+	h.decide(t, ctx, "wi-restrict-2", "a")
 
 	err := <-errCh
 	if err == nil {
@@ -373,12 +373,12 @@ func TestHITL_ChoicesRestriction_UnlistedChoiceFails(t *testing.T) {
 func TestHITL_ChoicesRestriction_ConfiguredOutputNotInTopology(t *testing.T) {
 	spy := newThreeOutputSpy()
 	client := newSpyClient(t, spy)
-	qm := newTestQueueManager(t)
+	h := newTestQueueManager(t)
 	cfg := configWithChoices(choiceEntry{Output: "b"}, choiceEntry{Output: "nope"})
 	ctx := context.Background()
 	wctx := newWorkitemContext("wi-restrict-3")
 
-	errCh := runHandler(ctx, client, qm, cfg, wctx)
+	errCh := runHandler(ctx, client, h.qm, cfg, wctx)
 
 	err := <-errCh
 	if err == nil {
@@ -425,13 +425,13 @@ func TestHITL_ChoicesRestriction_AbsentPresentsAll(t *testing.T) {
 func TestHITL_ApprovalAsInstance_Approve(t *testing.T) {
 	spy := newApprovalSpy()
 	client := newSpyClient(t, spy)
-	qm := newTestQueueManager(t)
+	h := newTestQueueManager(t)
 	cfg := configWithLabels(map[string]string{"approve": "Approve Petition"})
 	ctx := context.Background()
 	wctx := newWorkitemContext("wi-approval-1")
 
-	errCh := runHandler(ctx, client, qm, cfg, wctx)
-	simulateDecision(t, ctx, qm, "wi-approval-1", "approve")
+	errCh := runHandler(ctx, client, h.qm, cfg, wctx)
+	h.decide(t, ctx, "wi-approval-1", "approve")
 
 	if err := <-errCh; err != nil {
 		t.Fatalf("handler returned error: %v", err)
@@ -464,13 +464,13 @@ func TestHITL_ApprovalAsInstance_Approve(t *testing.T) {
 func TestHITL_ApprovalAsInstance_Cancel(t *testing.T) {
 	spy := newApprovalSpy()
 	client := newSpyClient(t, spy)
-	qm := newTestQueueManager(t)
+	h := newTestQueueManager(t)
 	cfg := configWithLabels(map[string]string{"approve": "Approve Petition"})
 	ctx := context.Background()
 	wctx := newWorkitemContext("wi-approval-2")
 
-	errCh := runHandler(ctx, client, qm, cfg, wctx)
-	simulateDecision(t, ctx, qm, "wi-approval-2", "cancel")
+	errCh := runHandler(ctx, client, h.qm, cfg, wctx)
+	h.decide(t, ctx, "wi-approval-2", "cancel")
 
 	if err := <-errCh; err != nil {
 		t.Fatalf("handler returned error: %v", err)
@@ -507,13 +507,13 @@ func TestHITL_ApprovalAsInstance_Cancel(t *testing.T) {
 func TestHITL_HitlAppraise_Cancel(t *testing.T) {
 	spy := newHITLAppraiseSpy()
 	client := newSpyClient(t, spy)
-	qm := newTestQueueManager(t)
+	h := newTestQueueManager(t)
 	cfg := configWithLabels(map[string]string{"approved": "Approve Petition"})
 	ctx := context.Background()
 	wctx := newWorkitemContext("wi-cancel-1")
 
-	errCh := runHandler(ctx, client, qm, cfg, wctx)
-	simulateDecision(t, ctx, qm, "wi-cancel-1", "cancel")
+	errCh := runHandler(ctx, client, h.qm, cfg, wctx)
+	h.decide(t, ctx, "wi-cancel-1", "cancel")
 
 	if err := <-errCh; err != nil {
 		t.Fatalf("handler returned error: %v", err)
@@ -558,13 +558,13 @@ func TestHITL_HitlAppraise_Cancel(t *testing.T) {
 func TestHITL_InvalidChoice(t *testing.T) {
 	spy := newHITLAppraiseSpy()
 	client := newSpyClient(t, spy)
-	qm := newTestQueueManager(t)
+	h := newTestQueueManager(t)
 	cfg := defaultConfig()
 	ctx := context.Background()
 	wctx := newWorkitemContext("wi-invalid-1")
 
-	errCh := runHandler(ctx, client, qm, cfg, wctx)
-	simulateDecision(t, ctx, qm, "wi-invalid-1", "bogus")
+	errCh := runHandler(ctx, client, h.qm, cfg, wctx)
+	h.decide(t, ctx, "wi-invalid-1", "bogus")
 
 	err := <-errCh
 	if err == nil {
@@ -603,13 +603,13 @@ func TestHITL_InvalidChoice(t *testing.T) {
 func TestHITL_Minimal_CancelRejected(t *testing.T) {
 	spy := newMinimalSpy()
 	client := newSpyClient(t, spy)
-	qm := newTestQueueManager(t)
+	h := newTestQueueManager(t)
 	cfg := defaultConfig()
 	ctx := context.Background()
 	wctx := newWorkitemContext("wi-nocancel-1")
 
-	errCh := runHandler(ctx, client, qm, cfg, wctx)
-	simulateDecision(t, ctx, qm, "wi-nocancel-1", "cancel")
+	errCh := runHandler(ctx, client, h.qm, cfg, wctx)
+	h.decide(t, ctx, "wi-nocancel-1", "cancel")
 
 	err := <-errCh
 	if err == nil {
@@ -639,15 +639,15 @@ func TestHITL_Minimal_CancelRejected(t *testing.T) {
 func TestHITL_ContextCancelled(t *testing.T) {
 	spy := newMinimalSpy()
 	client := newSpyClient(t, spy)
-	qm := newTestQueueManager(t)
+	h := newTestQueueManager(t)
 	cfg := defaultConfig()
 	ctx, cancel := context.WithCancel(context.Background())
 	wctx := newWorkitemContext("wi-ctx-cancel-1")
 
-	errCh := runHandler(ctx, client, qm, cfg, wctx)
+	errCh := runHandler(ctx, client, h.qm, cfg, wctx)
 
 	// Wait for enqueue, then cancel the context.
-	waitForEnqueue(t, qm, "wi-ctx-cancel-1")
+	waitForEnqueue(t, h.qm, "wi-ctx-cancel-1")
 	cancel()
 
 	err := <-errCh
@@ -680,13 +680,13 @@ func TestHITL_ContextCancelled(t *testing.T) {
 func TestHITL_MultipleStamps(t *testing.T) {
 	spy := newMultiStampSpy()
 	client := newSpyClient(t, spy)
-	qm := newTestQueueManager(t)
+	h := newTestQueueManager(t)
 	cfg := defaultConfig()
 	ctx := context.Background()
 	wctx := newWorkitemContext("wi-multistamp-1")
 
-	errCh := runHandler(ctx, client, qm, cfg, wctx)
-	simulateDecision(t, ctx, qm, "wi-multistamp-1", "done")
+	errCh := runHandler(ctx, client, h.qm, cfg, wctx)
+	h.decide(t, ctx, "wi-multistamp-1", "done")
 
 	if err := <-errCh; err != nil {
 		t.Fatalf("handler returned error: %v", err)

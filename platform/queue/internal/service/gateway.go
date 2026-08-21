@@ -116,5 +116,6 @@ func (g *GatewayServer) Decide(ctx context.Context, req *flowv1.DecideRequest) (
 	if err := proxy.decideBroadcast(ctx, req.GetQueueName(), req.GetWorkitemId(), req.GetChoice()); err != nil {
 		return nil, gatewayErr(err)
 	}
+	g.reg.publishQueueDecided(req.GetQueueName(), req.GetWorkitemId(), req.GetChoice())
 	return &flowv1.DecideResponse{Acknowledged: true}, nil
 }

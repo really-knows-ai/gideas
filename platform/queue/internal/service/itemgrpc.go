@@ -39,6 +39,7 @@ func (r *Registry) DecideQueuedItem(
 	if err := proxy.decideBroadcast(ctx, req.GetQueueName(), req.GetWorkitemId(), req.GetChoice()); err != nil {
 		return nil, toItemGRPCError(err)
 	}
+	r.publishQueueDecided(req.GetQueueName(), req.GetWorkitemId(), req.GetChoice())
 	return &flowv1.DecideQueuedItemResponse{Acknowledged: true}, nil
 }
 
