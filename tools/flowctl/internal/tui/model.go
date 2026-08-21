@@ -53,12 +53,12 @@ type Model struct {
 	wizardEntryContracts map[string]interface{} // entry contract name -> governed artefact keys
 	wizardNodeEntryMap   map[string]string      // node name -> entry contract name
 
-	// HITL lifecycle manager (created on Init with cfg.HitlPort)
+	// HITL lifecycle manager (queue-service probe lifecycle, created on Init)
 	hitlState *components.HitlState
 
 	// Status message displayed in the detail view status bar
 	statusMessage string
-	// Debug hint shown when --hitl-port != 8080 and all probes fail
+	// Debug hint shown when all probes fail
 	debugHint string
 
 	// Delete confirmation state — non-empty means we are awaiting y/N
@@ -114,7 +114,7 @@ func NewModel(k8s *api.K8sClient, cfg *config.Config, ctx context.Context) Model
 	m.k8s = k8s
 	m.cfg = cfg
 	m.ctx = ctx
-	m.hitlState = components.NewHitlState(cfg.HitlPort)
+	m.hitlState = components.NewHitlState()
 	m.logWriter = NewLogWriter(cfg.LogFile)
 	return m
 }

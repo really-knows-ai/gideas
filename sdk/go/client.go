@@ -5,11 +5,11 @@
 // operations. All calls are routed through the in-pod Sidecar.
 //
 // The package hosts the client SDK core and node entry points (Client,
-// Workitem, Graph, Transaction, Agent, Start/Handler). The server-heavy
-// subsystems live in internal subpackages: the HITL queue mesh (gRPC
-// QueuePeerService, HTTP server, SQLite store, DNS discovery) in
-// internal/queue, the embassy/federation protocols in internal/embassy, and
-// the LLM provider implementations in internal/provider.
+// Workitem, Graph, Transaction, Agent, Start/Handler). In the queue space it
+// is a thin QueueManager client to the queue-service (R-1.3); the mesh itself
+// lives in the sidecar (platform/sidecar/internal/queue). Other internal
+// subsystems: the embassy/federation protocols in internal/embassy, and the
+// LLM provider implementations in internal/provider.
 package flow
 
 import (

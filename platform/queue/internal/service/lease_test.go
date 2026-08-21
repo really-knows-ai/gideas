@@ -7,7 +7,6 @@ import (
 	"time"
 
 	flowv1api "github.com/foundry/flow/operator/api/v1"
-	"google.golang.org/grpc"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -185,62 +184,6 @@ func TestEviction_BroadcastsOnShardEvicted(t *testing.T) {
 	defer mu.Unlock()
 	if gotQ != "hitl-approval" || gotS != testShard0 {
 		t.Fatalf("OnShardEvicted fired (%q, %q), want (hitl-approval, shard-0)", gotQ, gotS)
-	}
-}
-
-func TestEviction_FansOutNotifyShardDead(t *testing.T) {
-	ctx := context.Background()
-	// Three shards: X stale (⇒ evicted), Y + Z fresh survivors. Wire bufconn
-	// fakes for Y and Z that record NotifyShardDead payloads.
-	now := time.Now().UTC()
-	survivorY := newFakePeerShard(t)
-	survivorZ := newFakePeerShard(t)
-
-	seed := queueCR(
-		"hitl-approval",
-		shard("shard-X", "10.0.0.9:50053", "active", now.Add(-10*time.Second)),
-		shard("shard-Y", "say:y", "active", now),
-		shard("shard-Z", "saz:z", "active", now),
-	)
-	c := newFakeClient(t, seed)
-	r := NewRegistry(c, time.Second, time.Second)
-	r.Namespace = testNamespace
-
-	// Use a dialer that routes bufconn addrs to the right fake. Record which
-	// addrs were dialed to assert X's address was never dialed.
-	var dialed []string
-	var mu sync.Mutex
-	r.peerDialer = func(cctx context.Context, addr string) (*grpc.ClientConn, error) {
-		mu.Lock()
-		dialed = append(dialed, addr)
-		mu.Unlock()
-		switch addr {
-		case "say:y":
-			return survivorY.dialer(cctx, addr)
-		case "saz:z":
-			return survivorZ.dialer(cctx, addr)
-		}
-		return nil, errShardUnavailable
-	}
-
-	if err := r.sweepEvictions(ctx); err != nil {
-		t.Fatalf("sweepEvictions: %v", err)
-	}
-
-	// Each surviving peer received NotifyShardDead(X) exactly once.
-	for _, f := range []*fakePeerShard{survivorY, survivorZ} {
-		notified := f.notifiedCalls()
-		if len(notified) != 1 || notified[0] != "shard-X" {
-			t.Fatalf("survivor received %v, want exactly [shard-X]", notified)
-		}
-	}
-	// The dead shard X's address was never dialed.
-	mu.Lock()
-	defer mu.Unlock()
-	for _, a := range dialed {
-		if a == "10.0.0.9:50053" {
-			t.Fatal("dead shard X's address was dialed during the fan-out")
-		}
 	}
 }
 

@@ -18,8 +18,10 @@ import (
 
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
 	flowv1api "github.com/foundry/flow/operator/api/v1"
+	"github.com/foundry/flow/pkg/eventbus"
 	"github.com/foundry/flow/queue/internal/service"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/reflection"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -35,17 +37,21 @@ const (
 )
 
 func main() {
-	var grpcPort, restPort, ttlFlag string
+	var grpcPort, restPort, ttlFlag, sweepIntervalFlag string
 	flag.StringVar(&grpcPort, "grpc-port", "", "gRPC port (default 50057; env QUEUE_SERVICE_PORT)")
 	flag.StringVar(&restPort, "rest-port", "", "REST port (default 8081; env QUEUE_REST_PORT)")
 	flag.StringVar(&ttlFlag, "queue-lease-ttl", "",
 		"Queue shard lease TTL (Go duration, e.g. \"45s\"; env QUEUE_LEASE_TTL; "+
 			"default "+service.DefaultQueueLeaseTTL.String()+")")
+	flag.StringVar(&sweepIntervalFlag, "convergence-sweep-interval", "",
+		"Convergence backstop sweep cadence (Go duration, e.g. \"60s\"; env "+
+			"QUEUE_SWEEP_INTERVAL; default "+service.DefaultSweepInterval.String()+")")
 	flag.Parse()
 
 	grpcPort = envDefault(grpcPort, os.Getenv("QUEUE_SERVICE_PORT"), defaultGRPCPort)
 	restPort = envDefault(restPort, os.Getenv("QUEUE_REST_PORT"), defaultRESTPort)
 	leaseTTL := resolveQueueLeaseTTL(ttlFlag)
+	sweepInterval := resolveQueueSweepInterval(sweepIntervalFlag)
 
 	slog.Info("Flow Queue Service starting", "grpc_port", grpcPort, "rest_port", restPort, "lease_ttl", leaseTTL)
 
@@ -76,6 +82,39 @@ func main() {
 	reg := service.NewRegistry(c, leaseTTL, service.DefaultLeaseSweepInterval)
 	reg.Namespace = namespace
 
+	// Event Bus wiring for queue.decided notifications. The EventBus is a
+	// notification channel, never the record (R-4.5): the decision lives in
+	// the delete-on-all-shards, so an absent/unreachable bus must never block
+	// or alter a decide. When EVENT_BUS_ADDRESS is unset we leave
+	// PublishQueueDecided nil — publishQueueDecided is nil-safe, so decide
+	// still succeeds silently. When set, we adapt the hook to the shared
+	// AsyncPublisher (async, non-blocking Submit).
+	var pub *eventbus.AsyncPublisher
+	if busAddr := os.Getenv("EVENT_BUS_ADDRESS"); busAddr != "" {
+		busConn, err := grpc.NewClient(busAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		if err != nil {
+			slog.Error("Failed to connect to Event Bus", "address", busAddr, "error", err)
+			os.Exit(1)
+		}
+		pub = eventbus.NewAsyncPublisher(flowv1.NewFlowEventBusServiceClient(busConn))
+		reg.PublishQueueDecided = func(queueName, workitemID, choice string) {
+			pub.Submit(&flowv1.PublishRequest{
+				Channel: "queue",
+				Event: &flowv1.FlowEvent{
+					EventType:  "queue.decided",
+					WorkitemId: workitemID,
+					Attributes: map[string]string{
+						"queue_name": queueName,
+						"choice":     choice,
+					},
+				},
+			})
+		}
+		slog.Info("Event Bus connected for queue.decided publishing", "address", busAddr)
+	} else {
+		slog.Info("Event Bus not configured, queue.decided publishing disabled")
+	}
+
 	// gRPC server: QueueRegistryService (registration/lease/single-item) +
 	// reflection.
 	lis, err := net.Listen("tcp", ":"+grpcPort)
@@ -85,6 +124,7 @@ func main() {
 	}
 	gs := grpc.NewServer()
 	flowv1.RegisterQueueRegistryServiceServer(gs, reg)
+	flowv1.RegisterQueueGatewayServiceServer(gs, service.NewGatewayServer(reg))
 	reflection.Register(gs)
 
 	// REST frontend.
@@ -95,6 +135,8 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	reg.StartSweep(ctx)
+	// Start the convergence backstop sweep alongside it.
+	service.NewSweeper(reg, sweepInterval).Run(ctx)
 
 	go func() {
 		slog.Info("Flow Queue Service REST listening", "address", ":"+restPort)
@@ -110,6 +152,9 @@ func main() {
 		<-sigCh
 		slog.Info("Received signal, shutting down gracefully")
 		cancel()
+		if pub != nil {
+			pub.Stop() // best-effort flush of buffered queue.decided events
+		}
 		shutCtx, shutdown := context.WithTimeout(context.Background(), 5*time.Second)
 		defer shutdown()
 		_ = httpSrv.Shutdown(shutCtx)
@@ -150,6 +195,21 @@ func resolveQueueLeaseTTL(flagValue string) time.Duration {
 		slog.Warn("Invalid QUEUE_LEASE_TTL, falling back to default",
 			"value", raw, "error", err, "default", service.DefaultQueueLeaseTTL)
 		return service.DefaultQueueLeaseTTL
+	}
+	return d
+}
+
+// resolveQueueSweepInterval resolves the convergence backstop sweep cadence:
+// the --convergence-sweep-interval flag, else the QUEUE_SWEEP_INTERVAL env var,
+// else DefaultSweepInterval. A malformed value logs a warning and falls back to
+// the default.
+func resolveQueueSweepInterval(flagValue string) time.Duration {
+	raw := envDefault(flagValue, os.Getenv("QUEUE_SWEEP_INTERVAL"), service.DefaultSweepInterval.String())
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		slog.Warn("Invalid QUEUE_SWEEP_INTERVAL, falling back to default",
+			"value", raw, "error", err, "default", service.DefaultSweepInterval)
+		return service.DefaultSweepInterval
 	}
 	return d
 }

@@ -46,13 +46,14 @@ func (s *RestServer) handleListQueues(w http.ResponseWriter, r *http.Request) {
 	writeRestJSON(w, names)
 }
 
-// handleListItems lists items for one queue: raw GetLocalQueue scatter-gather
-// across every living shard (no per-workitem_id dedupe — PHASE_04 applies it).
+// handleListItems lists items for one queue: scatter-gather GetLocalQueue
+// across every living shard, deduped by workitem_id (max generation, owner
+// tie-break via served_by_shard_id, R-3.6).
 func (s *RestServer) handleListItems(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	proxy := newPeerProxy(s.reg)
 	defer proxy.close()
-	items, err := proxy.listItems(r.Context(), name)
+	items, err := proxy.listItemsDeduped(r.Context(), name, "")
 	if err != nil {
 		writeRestProxyError(w, err)
 		return
@@ -63,14 +64,14 @@ func (s *RestServer) handleListItems(w http.ResponseWriter, r *http.Request) {
 	writeRestJSON(w, items)
 }
 
-// handleGetItem returns a single queue item by workitem id proxied to the
-// living owning shard.
+// handleGetItem returns a single queue item (with its choices, R-5.2) via the
+// scatter-gather + dedupe read path.
 func (s *RestServer) handleGetItem(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	id := r.PathValue("id")
 	proxy := newPeerProxy(s.reg)
 	defer proxy.close()
-	item, err := proxy.getItem(r.Context(), name, id)
+	item, err := proxy.getItemDeduped(r.Context(), name, id)
 	if err != nil {
 		writeRestProxyError(w, err)
 		return
@@ -78,13 +79,15 @@ func (s *RestServer) handleGetItem(w http.ResponseWriter, r *http.Request) {
 	writeRestJSON(w, item)
 }
 
-// handleClaim proxies ClaimItem to the living owning shard.
+// handleClaim broadcasts ClaimItem to every living shard (serialized per item).
 func (s *RestServer) handleClaim(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	id := r.PathValue("id")
+	unlock := s.reg.lockItem(id)
+	defer unlock()
 	proxy := newPeerProxy(s.reg)
 	defer proxy.close()
-	item, err := proxy.claim(r.Context(), name, id)
+	item, err := proxy.claimBroadcast(r.Context(), name, id)
 	if err != nil {
 		writeRestProxyError(w, err)
 		return
@@ -92,8 +95,8 @@ func (s *RestServer) handleClaim(w http.ResponseWriter, r *http.Request) {
 	writeRestJSON(w, item)
 }
 
-// handleDecide proxies DecideItem (with optional choice body) to the living
-// owner.
+// handleDecide broadcasts DecideItem (with optional choice body) to every
+// living shard (serialized per item).
 func (s *RestServer) handleDecide(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	id := r.PathValue("id")
@@ -110,22 +113,27 @@ func (s *RestServer) handleDecide(w http.ResponseWriter, r *http.Request) {
 		choice = body.Choice
 	}
 
+	unlock := s.reg.lockItem(id)
+	defer unlock()
 	proxy := newPeerProxy(s.reg)
 	defer proxy.close()
-	if err := proxy.decide(r.Context(), name, id, choice); err != nil {
+	if err := proxy.decideBroadcast(r.Context(), name, id, choice); err != nil {
 		writeRestProxyError(w, err)
 		return
 	}
+	s.reg.publishQueueDecided(name, id, choice)
 	writeRestJSON(w, map[string]bool{"acknowledged": true})
 }
 
-// handleRelease proxies ReleaseItem to the living owning shard.
+// handleRelease broadcasts ReleaseItem to every living shard (serialized per item).
 func (s *RestServer) handleRelease(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	id := r.PathValue("id")
+	unlock := s.reg.lockItem(id)
+	defer unlock()
 	proxy := newPeerProxy(s.reg)
 	defer proxy.close()
-	item, err := proxy.release(r.Context(), name, id)
+	item, err := proxy.releaseBroadcast(r.Context(), name, id)
 	if err != nil {
 		writeRestProxyError(w, err)
 		return

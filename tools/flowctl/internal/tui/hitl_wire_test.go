@@ -11,9 +11,6 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
-	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	k8sfake "k8s.io/client-go/kubernetes/fake"
 
 	"github.com/foundry/flow/tools/flowctl/internal/api"
 	"github.com/foundry/flow/tools/flowctl/internal/tui/components"
@@ -31,7 +28,7 @@ func TestNodeChangeTriggersProbe(t *testing.T) {
 		{Name: "wi-001", State: "Running", Node: "sort"},
 	}
 	m.workitemList.Namespace = "test-ns"
-	m.hitlState = components.NewHitlState(8080)
+	m.hitlState = components.NewHitlState()
 	m.namespace = "test-ns"
 
 	// Simulate a modified event with a new node
@@ -106,8 +103,8 @@ func TestHitlProbeExhaustionShowsDiagnostic(t *testing.T) {
 	}
 }
 
-// W4: Default choices used when /choices returns 404
-// (Default choices are set by HitlState.Probe when /choices returns nil;
+// W4: Default choices used when the queue item has no choices
+// (Default choices are set by HitlState.Probe when the queue item has no choices;
 // the Update function receives them as part of HitlProbeResultMsg.)
 func TestDefaultChoicesOnProbeResult(t *testing.T) {
 	m := initialModel()
@@ -141,7 +138,7 @@ func TestDefaultChoicesOnProbeResult(t *testing.T) {
 	}
 }
 
-// W5: Dynamic choices on /choices 200
+// W5: Dynamic item-sourced choices
 func TestDynamicChoicesOnProbeResult(t *testing.T) {
 	m := initialModel()
 	m.screen = ScreenWorkitemDetail
@@ -224,7 +221,7 @@ func TestQueueItemNotFoundClosesPrompt(t *testing.T) {
 func TestCancelChoiceShowsConfirmation(t *testing.T) {
 	m := initialModel()
 	m.screen = ScreenWorkitemDetail
-	m.hitlState = components.NewHitlState(8080)
+	m.hitlState = components.NewHitlState()
 	m2, _ := startHitlProbe(t, &m, "hitl-approval")
 
 	// Press "c" (first letter of "Cancel")
@@ -246,7 +243,7 @@ func TestCancelChoiceShowsConfirmation(t *testing.T) {
 func TestCancelConfirmationDismissesOnNo(t *testing.T) {
 	m := initialModel()
 	m.screen = ScreenWorkitemDetail
-	m.hitlState = components.NewHitlState(8080)
+	m.hitlState = components.NewHitlState()
 	m2, _ := startHitlProbe(t, &m, "hitl-approval")
 	m2.workitemDetail.hitl.ConfirmingCancel = true
 	m2.workitemDetail.hitl.PendingChoice = "cancel"
@@ -268,7 +265,7 @@ func TestCancelConfirmationDismissesOnNo(t *testing.T) {
 func TestCancelConfirmationSubmitsOnYes(t *testing.T) {
 	m := initialModel()
 	m.screen = ScreenWorkitemDetail
-	m.hitlState = components.NewHitlState(8080)
+	m.hitlState = components.NewHitlState()
 	m2, _ := startHitlProbe(t, &m, "hitl-approval")
 	m2.workitemDetail.hitl.ConfirmingCancel = true
 	m2.workitemDetail.hitl.PendingChoice = "cancel"
@@ -294,7 +291,7 @@ func TestCancelConfirmationSubmitsOnYes(t *testing.T) {
 func TestCtrlCCleansHitlForward(t *testing.T) {
 	m := initialModel()
 	m.screen = ScreenWorkitemDetail
-	m.hitlState = components.NewHitlState(8080)
+	m.hitlState = components.NewHitlState()
 	m2, mockPFM := startHitlProbe(t, &m, "hitl-approval")
 
 	if len(mockPFM.forwards) != 1 {
@@ -313,33 +310,6 @@ func TestCtrlCCleansHitlForward(t *testing.T) {
 	}
 }
 
-// W10: Debug hint for non-default port
-func TestHitlDebugHintNonDefaultPort(t *testing.T) {
-	m := initialModel()
-	m.screen = ScreenWorkitemDetail
-	m.workitemDetail.workitemName = "wi-001"
-	m.hitlState = components.NewHitlState(9999)
-
-	// HitlProbeExhaustedMsg from HitlState with non-default port.
-	// The diagnostic is already composed by HitlState.Probe.
-	model, cmd := m.Update(components.HitlProbeExhaustedMsg{
-		WorkitemID: "wi-001",
-		NodeName:   "hitl-approval",
-		Diagnostic: "HITL probe timed out — node may not have enqueued the item\nHITL probe failed — verify `--hitl-port` matches the node's `FLOW_HITL_PORT`",
-	})
-	m2 := model.(*Model)
-
-	if m2.statusMessage == "" {
-		t.Error("expected statusMessage to contain diagnostic")
-	}
-	if !strings.Contains(m2.statusMessage, "HITL probe timed out") {
-		t.Errorf("expected diagnostic in statusMessage, got %q", m2.statusMessage)
-	}
-	if cmd != nil {
-		t.Error("expected nil command")
-	}
-}
-
 // ─── Mock PortForwarder for W9 ──────────────────────────────────────────────
 
 type mockPortForwarder struct {
@@ -352,6 +322,11 @@ func newMockPortForwarder(localPort int) *mockPortForwarder {
 }
 
 func (m *mockPortForwarder) FindReadyPod(ctx context.Context, namespace, labelSelector string) (string, bool, error) {
+	// R-5.1: the probe reaches the queue-service pod directly. Only return a
+	// ready pod for the queue-service label; anything else is not-found.
+	if labelSelector == components.QueueServiceLabel {
+		return "queue-service-pod", true, nil
+	}
 	return "", false, nil
 }
 
@@ -379,12 +354,19 @@ func startHitlProbe(t *testing.T, m *Model, nodeName string) (*Model, *mockPortF
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case strings.HasPrefix(r.URL.Path, "/queue/"):
+		case r.URL.Path == "/queues/hitl-approval/wi-001":
+			// Queue-service item route (R-5.1). No `choices` field, so
+			// selectedFromItem falls back to DefaultAPIChoices() — this keeps
+			// the cancel-confirmation tests (which press "c" and expect a
+			// cancel-type choice, detail_keys.go) passing unchanged, since
+			// item-sourced choices are all Type "route".
 			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprint(w, `{"workitem_id":"wi-001","status":"queued"}`)
-		case r.URL.Path == "/choices":
-			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprint(w, `{"choices":[{"value":"approve","label":"Approve","type":"route"},{"value":"cancel","label":"Cancel","type":"cancel"}]}`)
+			fmt.Fprint(w, `{"workitem_id":"wi-001","queue_name":"hitl-approval","status":"queued"}`)
+		case r.URL.Path == "/choices" || strings.HasPrefix(r.URL.Path, "/queue/"):
+			// The old node flow (node /choices or /queue/{id}) must never be
+			// reached — flowctl talks to the queue-service directly (R-5.1).
+			t.Errorf("node route %s reached under never-a-node (SPEC R-5.1)", r.URL.Path)
+			w.WriteHeader(http.StatusInternalServerError)
 		default:
 			http.NotFound(w, r)
 		}
@@ -404,23 +386,9 @@ func startHitlProbe(t *testing.T, m *Model, nodeName string) (*Model, *mockPortF
 	m.workitemDetail.workitemName = "wi-001"
 	m.pfm = newMockPortForwarder(localPort)
 
-	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "hitl-pod",
-			Namespace: m.namespace,
-			Labels:    map[string]string{"flow.foundry.io/node-name": nodeName},
-		},
-		Status: corev1.PodStatus{
-			Phase: corev1.PodRunning,
-			PodIP: "10.0.0.1",
-			Conditions: []corev1.PodCondition{
-				{Type: corev1.PodReady, Status: corev1.ConditionTrue},
-			},
-		},
-	}
-	clientset := k8sfake.NewSimpleClientset(pod)
-
-	cmd := m.hitlState.Probe(context.Background(), clientset, m.namespace, nodeName, m.workitemDetail.workitemName, m.pfm)
+	// Probe reaches the queue-service via the PortForwarder only; the
+	// clientset (pod listing) is no longer consulted by the production path.
+	cmd := m.hitlState.Probe(context.Background(), nil, m.namespace, nodeName, m.workitemDetail.workitemName, m.pfm)
 	msg := cmd()
 	model, _ := m.Update(msg)
 	m2, ok := model.(*Model)

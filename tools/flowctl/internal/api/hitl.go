@@ -13,7 +13,7 @@ import (
 	flowmeta "github.com/foundry/flow/pkg/metadata"
 )
 
-// QueueItem represents a HITL queue item returned by the node's REST API.
+// QueueItem represents a HITL queue item returned by the queue-service's REST API.
 type QueueItem struct {
 	WorkitemID string `json:"workitem_id"`
 	ShardID    string `json:"shard_id"`
@@ -21,21 +21,31 @@ type QueueItem struct {
 	Status     string `json:"status"`
 	EnqueuedAt string `json:"enqueued_at"`
 	ClaimedAt  string `json:"claimed_at"`
+	// Choices are the routing options the queue-service serves as item metadata
+	// (R-5.2); the node-local /choices route is gone.
+	Choices []string `json:"choices"`
 }
 
-// Choice represents a single decision option from GET /choices. The wire
-// contract is defined once in the shared metadata package and re-exported
-// here so the TUI can reference it as api.Choice.
-type Choice = flowmeta.Choice
+// ChoicesWithDefault returns q.Choices when non-empty, else the given
+// defaults (fallback semantics preserved from the old /choices 404 path).
+func (q *QueueItem) ChoicesWithDefault(defaults []string) []string {
+	if len(q.Choices) > 0 {
+		return q.Choices
+	}
+	return defaults
+}
 
-// ChoicesResponse is the optional GET /choices response.
-type ChoicesResponse = flowmeta.ChoicesResponse
+// Choice is the decision-option shape (value/label/type) the TUI renders,
+// sourced from queue item metadata served by the queue-service (no HTTP
+// route). The wire contract is defined once in the shared metadata package
+// and re-exported here so the TUI can reference it as api.Choice.
+type Choice = flowmeta.Choice
 
 type ackResponse struct {
 	Acknowledged bool `json:"acknowledged"`
 }
 
-// HitlError represents a structured error from the node's REST API.
+// HitlError represents a structured error from the queue-service's REST API.
 type HitlError struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
@@ -68,26 +78,29 @@ func hasCode(err error, code string) bool {
 	return false
 }
 
-// HitlClient communicates with a HITL-capable node's REST API.
+// HitlClient communicates with the queue-service's REST API.
 type HitlClient struct {
 	baseURL    string
+	queueName  string
 	httpClient *http.Client
 }
 
-// NewHitlClient creates a client targeting the given base URL
-// (typically http://localhost:<localPort>).
-func NewHitlClient(baseURL string) *HitlClient {
+// NewHitlClient creates a client targeting the queue-service at the given
+// base URL for the named queue; every path it builds is rooted at
+// /queues/{queueName}/.
+func NewHitlClient(baseURL, queueName string) *HitlClient {
 	return &HitlClient{
 		baseURL:    baseURL,
+		queueName:  queueName,
 		httpClient: &http.Client{Timeout: 10 * time.Second},
 	}
 }
 
-// ProbeQueue sends GET /queue/{workitemID}.
+// ProbeQueue sends GET /queues/{queueName}/{workitemID}.
 // Returns (QueueItem, nil) on 200, (nil, nil) on 404 (silent non-match),
 // or (nil, error) on other responses.
 func (c *HitlClient) ProbeQueue(ctx context.Context, workitemID string) (*QueueItem, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/queue/"+workitemID, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/queues/"+c.queueName+"/"+workitemID, nil)
 	if err != nil {
 		return nil, fmt.Errorf("probe queue request: %w", err)
 	}
@@ -111,38 +124,48 @@ func (c *HitlClient) ProbeQueue(ctx context.Context, workitemID string) (*QueueI
 	}
 }
 
-// GetChoices sends GET /choices.
-// Returns (ChoicesResponse, nil) on 200, (nil, nil) on 404 (fallback to defaults),
-// or (nil, error) on other responses.
-func (c *HitlClient) GetChoices(ctx context.Context) (*ChoicesResponse, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/choices", nil)
+// ResolveQueueForItem finds the queue serving workitemID by listing the
+// queue-service's queues (GET /queues) and probing each queue's item
+// (GET /queues/{name}/{workitemID}) until a match, returning the matching
+// item's queue_name. A QUEUE_ITEM_NOT_FOUND error is returned when no queue
+// serves it (R-5.3).
+func (c *HitlClient) ResolveQueueForItem(ctx context.Context, workitemID string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/queues", nil)
 	if err != nil {
-		return nil, fmt.Errorf("get choices request: %w", err)
+		return "", fmt.Errorf("list queues request: %w", err)
 	}
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("get choices: %w", err)
+		return "", fmt.Errorf("list queues: %w", err)
 	}
 	defer resp.Body.Close()
-
-	switch resp.StatusCode {
-	case http.StatusOK:
-		var cr ChoicesResponse
-		if err := json.NewDecoder(resp.Body).Decode(&cr); err != nil {
-			return nil, fmt.Errorf("decode choices: %w", err)
-		}
-		return &cr, nil
-	case http.StatusNotFound:
-		return nil, nil
-	default:
-		return nil, parseError(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return "", parseError(resp.Body)
 	}
+	// GET /queues returns a bare array of queue names (handleListQueues).
+	var queueNames []string
+	if err := json.NewDecoder(resp.Body).Decode(&queueNames); err != nil {
+		return "", fmt.Errorf("decode queues: %w", err)
+	}
+	// The receiver's queueName is irrelevant here: per-queue probes are built
+	// from the listed names, so a client created before the queue is known
+	// (queueName "") resolves correctly.
+	for _, name := range queueNames {
+		qi, err := NewHitlClient(c.baseURL, name).ProbeQueue(ctx, workitemID)
+		if err != nil {
+			return "", err
+		}
+		if qi != nil {
+			return qi.QueueName, nil
+		}
+	}
+	return "", &HitlError{Code: ErrQueueItemNotFound, Message: "workitem not found in any queue"}
 }
 
-// Claim sends POST /queue/{workitemID}/claim.
+// Claim sends POST /queues/{queueName}/{workitemID}/claim.
 // Returns (QueueItem, nil) on 200, or (nil, error) on other responses.
 func (c *HitlClient) Claim(ctx context.Context, workitemID string) (*QueueItem, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/queue/"+workitemID+"/claim", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/queues/"+c.queueName+"/"+workitemID+"/claim", nil)
 	if err != nil {
 		return nil, fmt.Errorf("claim request: %w", err)
 	}
@@ -162,15 +185,15 @@ func (c *HitlClient) Claim(ctx context.Context, workitemID string) (*QueueItem, 
 	return nil, parseError(resp.Body)
 }
 
-// Decide sends POST /queue/{workitemID}/decide with body {"choice":"<value>"}.
-// Returns nil on 200 or 202, or error on other responses.
+// Decide sends POST /queues/{queueName}/{workitemID}/decide with body
+// {"choice":"<value>"}. Returns nil on 200 or 202, or error on other responses.
 func (c *HitlClient) Decide(ctx context.Context, workitemID, choice string) error {
 	body := map[string]string{"choice": choice}
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(body); err != nil {
 		return fmt.Errorf("encode decide body: %w", err)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/queue/"+workitemID+"/decide", &buf)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/queues/"+c.queueName+"/"+workitemID+"/decide", &buf)
 	if err != nil {
 		return fmt.Errorf("decide request: %w", err)
 	}
@@ -194,10 +217,10 @@ func (c *HitlClient) Decide(ctx context.Context, workitemID, choice string) erro
 	return parseError(resp.Body)
 }
 
-// Release sends POST /queue/{workitemID}/release.
+// Release sends POST /queues/{queueName}/{workitemID}/release.
 // Returns (QueueItem, nil) on 200, or (nil, error) on other responses.
 func (c *HitlClient) Release(ctx context.Context, workitemID string) (*QueueItem, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/queue/"+workitemID+"/release", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/queues/"+c.queueName+"/"+workitemID+"/release", nil)
 	if err != nil {
 		return nil, fmt.Errorf("release request: %w", err)
 	}

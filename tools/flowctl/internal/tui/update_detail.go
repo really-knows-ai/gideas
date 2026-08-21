@@ -19,7 +19,7 @@ func (m *Model) updateWorkitemDetail(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ArtefactsLoadedMsg, ArtefactLoadErrorMsg, ArtefactExpandedMsg, ArtefactFeedbackLoadedMsg, ArtefactCollapsedMsg:
 		return m.handleArtefacts(msg)
 	case components.HitlProbeResultMsg, components.HitlProbeRetryMsg, components.HitlProbeExhaustedMsg,
-		components.HitlChoicesBlockedMsg, HitlProbeTriggerMsg, HitlReleasedMsg, HitlDecidedMsg, HitlErrorMsg:
+		HitlProbeTriggerMsg, HitlReleasedMsg, HitlDecidedMsg, HitlErrorMsg:
 		return m.handleHitl(msg)
 	case ErrorMsg, ClearErrorBannerMsg, BannerMsg, BannerDismissMsg, WorkitemDeletedMsg:
 		return m.handleBanner(msg)

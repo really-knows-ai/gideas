@@ -17,6 +17,7 @@
 package main
 
 import (
+	"context"
 	"crypto/ed25519"
 	"encoding/base64"
 	"fmt"
@@ -24,11 +25,14 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
+	"time"
 
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
 	"github.com/foundry/flow/sidecar/internal/buffer"
 	"github.com/foundry/flow/sidecar/internal/proxy"
+	"github.com/foundry/flow/sidecar/internal/queue"
 	"github.com/foundry/flow/sidecar/internal/service"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -50,7 +54,12 @@ const (
 	envFederationAddress   = "FEDERATION_ADDRESS"
 	envCapabilities        = "FLOW_CAPABILITIES"
 	envCartographerAddress = "CARTOGRAPHER_ADDRESS"
+	envQueueServiceAddr    = "FLOW_QUEUE_SERVICE_ADDR"
 	envSidecarSigningKey   = "SIDECAR_SIGNING_KEY"
+
+	// defaultQueueHeartbeatInterval is the queue-shard registry heartbeat
+	// period, mirroring the SDK's default.
+	defaultQueueHeartbeatInterval = 15 * time.Second
 )
 
 func main() {
@@ -244,6 +253,16 @@ func main() {
 	// Cartographer-related RPCs are unavailable from that node (SPEC R5).
 	cartographerCloser := registerCartographerProxy(srv, cartographerAddr)
 
+	// Queue-shard role: serve the QueuePeerService and heartbeats the
+	// queue-service registry when FLOW_QUEUE_SERVICE_ADDR is set. When unset,
+	// the sidecar serves only its node — nothing queue-related is registered.
+	queueServiceAddr := os.Getenv(envQueueServiceAddr)
+	queuePeerCloser, err := registerQueuePeer(srv, queueServiceAddr, nodeID, nodeAddr, port)
+	if err != nil {
+		slog.Error("Failed to register queue peer", "error", err)
+		os.Exit(1)
+	}
+
 	// Enable gRPC reflection for debugging with grpcurl.
 	reflection.Register(srv)
 
@@ -263,6 +282,7 @@ func main() {
 		_ = frictionLedgerCloser()
 		_ = federationCloser()
 		_ = cartographerCloser()
+		_ = queuePeerCloser()
 		_ = eventBusCloser()
 		_ = sidecarSrv.Close()
 	}()
@@ -296,4 +316,75 @@ func registerCartographerProxy(srv *grpc.Server, cartographerAddr string) func()
 	flowv1.RegisterCartographerServiceServer(srv, cartographerProxy)
 	slog.Info("Cartographer proxy enabled", "address", cartographerAddr)
 	return cartographerProxy.Close
+}
+
+// registerQueuePeer wires the sidecar's queue-shard role onto srv when
+// queueServiceAddr is non-empty (FLOW_QUEUE_SERVICE_ADDR): it creates the
+// in-memory mirror store + QueuePeerService server, registers the peer service,
+// mints the random shard ID + shard address, and starts the registry client +
+// heartbeat loop. When queueServiceAddr is empty the sidecar serves only its
+// node — nothing queue-related is registered and a no-op closer is returned.
+//
+// The function is a seam extracted from main() (like registerCartographerProxy)
+// so the queue-shard branch is pinnable from a test with a real *grpc.Server.
+// host is the node's dialable host (FLOW_NODE_ADDRESS), port the peer listen
+// port (FLOW_SIDECAR_PORT, default 50051); together they form the registered
+// ShardAddr. The node registers a shard of its own queue: queueName is nodeID
+// (FLOW_NODE_ID semantics — each node serves a shard of the queue bearing its
+// own id). It returns a closer that stops the heartbeat loop and closes the
+// store + registry conn.
+func registerQueuePeer(
+	srv *grpc.Server, queueServiceAddr, nodeID, host, port string,
+) (func() error, error) {
+	if queueServiceAddr == "" {
+		slog.Info("Queue peer disabled (no FLOW_QUEUE_SERVICE_ADDR set)")
+		return func() error { return nil }, nil
+	}
+
+	shardID := queue.NewShardID()
+	shardAddr := queue.ShardAddr(host, port)
+	queueName := nodeID
+
+	store, err := queue.NewInMemoryStore(shardID, queueName)
+	if err != nil {
+		return nil, fmt.Errorf("create queue mirror store: %w", err)
+	}
+
+	peer := queue.NewPeerServer(store, shardID, queueName)
+	flowv1.RegisterQueuePeerServiceServer(srv, peer)
+
+	rc, err := queue.NewRegistryClient(
+		queueServiceAddr, nil, queueName, shardID, shardAddr, defaultQueueHeartbeatInterval,
+	)
+	if err != nil {
+		_ = store.Close()
+		return nil, fmt.Errorf("create queue registry client: %w", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	var wg sync.WaitGroup
+
+	// A shard that fails to register on boot is not a boot failure: the
+	// heartbeat loop retries on the next tick.
+	if err := rc.Register(ctx); err != nil {
+		slog.Warn("queue-service registration failed; will retry on next heartbeat",
+			"queue", queueName, "shard", shardID, "error", err)
+	}
+
+	wg.Add(1)
+	go rc.HeartbeatLoop(ctx, &wg)
+
+	slog.Info("Queue peer enabled",
+		"address", queueServiceAddr,
+		"node_id", nodeID,
+		"shard_id", shardID,
+		"shard_addr", shardAddr,
+	)
+
+	return func() error {
+		cancel()
+		wg.Wait()
+		_ = rc.Close()
+		return store.Close()
+	}, nil
 }

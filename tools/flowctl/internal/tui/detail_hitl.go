@@ -40,20 +40,9 @@ func (m *Model) handleHitl(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.statusMessage = msg.Diagnostic
 		m.logIfEnabled("ERROR", "hitl", fmt.Sprintf("probe exhausted for %s/%s: %s", msg.NodeName, msg.WorkitemID, msg.Diagnostic))
 
-	case components.HitlChoicesBlockedMsg:
-		if m.hitlState != nil {
-			m.hitlState.Close(m.pfm)
-		}
-		m.workitemDetail.hitl.Visible = true
-		m.workitemDetail.hitl.Error = fmt.Sprintf("choices: %s", msg.Err)
-		m.workitemDetail.hitl.ErrorRetry = true
-		m.statusMessage = fmt.Sprintf("Unable to load choices: %s", msg.Err)
-		m.logIfEnabled("ERROR", "hitl", fmt.Sprintf("choices blocked: %s", msg.Err))
-
 	case HitlProbeTriggerMsg:
 		if m.hitlState != nil && !m.hitlState.Exhausted() && m.workitemDetail.workitemName != "" {
-			return m, m.hitlState.Probe(m.ctx, m.k8s.CoreClient, m.namespace,
-				m.hitlState.GetNodeName(), m.hitlState.GetWorkitemID(), m.pfm)
+			return m, m.probeHitl(m.workitemDetail.workitemName)
 		}
 
 	case HitlReleasedMsg:

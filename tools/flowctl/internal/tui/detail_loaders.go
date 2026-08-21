@@ -8,6 +8,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/foundry/flow/tools/flowctl/internal/api"
 	"github.com/foundry/flow/tools/flowctl/internal/tui/components"
 	"github.com/foundry/flow/tools/flowctl/internal/tui/types"
 )
@@ -39,9 +40,7 @@ func (m *Model) handleDetailTopology(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.hitlState != nil && m.k8s != nil && currentNode != "" {
 			m.hitlState.ResetForNewWorkitem()
 			cmds := []tea.Cmd{m.RefreshArtefacts()}
-			probeCmd := m.hitlState.Probe(m.ctx, m.k8s.CoreClient, m.namespace,
-				currentNode, msg.Detail.Name, m.pfm)
-			if probeCmd != nil {
+			if probeCmd := m.probeHitl(msg.Detail.Name); probeCmd != nil {
 				cmds = append(cmds, probeCmd)
 			}
 			return m, tea.Batch(cmds...)
@@ -74,6 +73,55 @@ func (m *Model) handleDetailTopology(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.workitemDetail.topology.Loading = false
 	}
 	return m, nil
+}
+
+// probeHitl resolves the queue serving workitemID through the queue-service
+// (SPEC R-5.1: queue interactions go only through the queue-service, never a
+// node), then starts the HITL probe. When the queue-service cannot be reached
+// or no queue serves the item, the resolution port-forward (if opened) is
+// closed and the failure is recorded on HitlState: retry commands re-arm the
+// probe cycle while attempts remain, and the cycle stops once attempts are
+// exhausted — preserving Probe's retry/exhaust contract.
+func (m *Model) probeHitl(workitemID string) tea.Cmd {
+	if m.hitlState == nil || m.k8s == nil || m.pfm == nil {
+		return nil
+	}
+	ctx := m.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	// retryOrExhaust records a failed resolution attempt on HitlState and
+	// returns the retry/exhaust command, mirroring Probe's retryOrExhaust
+	// semantics so the 3s probe tick stops once attempts are exhausted.
+	retryOrExhaust := func(diagnostic string) tea.Cmd {
+		return func() tea.Msg {
+			return m.hitlState.RecordProbeFailure(workitemID, diagnostic)
+		}
+	}
+
+	podName, found, err := m.pfm.FindReadyPod(ctx, m.namespace, components.QueueServiceLabel)
+	switch {
+	case err != nil:
+		return retryOrExhaust("find queue-service pod: " + err.Error())
+	case !found:
+		return retryOrExhaust("no ready queue-service pod found")
+	}
+	forwardID, localPort, err := m.pfm.ForwardPod(ctx, m.namespace, podName, components.QueueServiceRESTPort)
+	if err != nil {
+		return retryOrExhaust("port-forward to queue-service: " + err.Error())
+	}
+	// ResolveQueueForItem lists GET /queues and probes each queue's item by
+	// name, so the client's queueName is irrelevant here (unknown until
+	// resolution completes).
+	client := api.NewHitlClient(fmt.Sprintf("http://localhost:%d", localPort), "")
+	queueName, err := client.ResolveQueueForItem(ctx, workitemID)
+	if err != nil {
+		// Nothing else tracks the resolution forward (it is not stored in
+		// hitlState.forwardID), so close it before retrying.
+		m.pfm.Close(forwardID)
+		return retryOrExhaust("queue-service has not enqueued the workitem: " + err.Error())
+	}
+	return m.hitlState.Probe(ctx, m.k8s.CoreClient, m.namespace, queueName, workitemID, m.pfm)
 }
 
 // handleBanner applies banner/error display state on the detail screen,

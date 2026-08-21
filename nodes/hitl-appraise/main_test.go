@@ -4,16 +4,14 @@ import (
 	"context"
 	"strings"
 	"testing"
-	"time"
 
 	flowv1 "github.com/foundry/flow/gen/flow/v1"
-	flow "github.com/foundry/flow/sdk/go"
 )
 
 func TestHITLAppraise_HappyPath(t *testing.T) {
 	spy := newHITLAppraiseSpy()
 	client := newSpyClient(t, spy)
-	qm := newTestQueueManager(t)
+	h := newTestQueueManager(t)
 
 	ctx := context.Background()
 	wctx := &flowv1.WorkitemContext{
@@ -27,19 +25,11 @@ func TestHITLAppraise_HappyPath(t *testing.T) {
 	errCh := make(chan error, 1)
 	go func() {
 		wi, _ := client.GetWorkitem(wctx.GetWorkitemId())
-		errCh <- handleAppraise(ctx, client, wi, qm, cfg, wctx)
+		errCh <- handleAppraise(ctx, client, wi, h.qm, cfg, wctx)
 	}()
 
-	// Simulate human: wait for item to appear, then claim and decide.
-	waitForEnqueue(t, qm, "wi-hitl-1")
-
-	_, err := qm.Claim(ctx, "wi-hitl-1")
-	if err != nil {
-		t.Fatalf("Claim failed: %v", err)
-	}
-	if err := qm.Decide(ctx, "wi-hitl-1", ""); err != nil {
-		t.Fatalf("Decide failed: %v", err)
-	}
+	// Simulate human decision: wait for the item, then claim and decide.
+	h.decide(t, ctx, "wi-hitl-1", "")
 
 	// Wait for handler to complete.
 	if err := <-errCh; err != nil {
@@ -95,7 +85,7 @@ func TestHITLAppraise_NoStampCapability(t *testing.T) {
 		},
 	}
 	client := newSpyClient(t, spy)
-	qm := newTestQueueManager(t)
+	h := newTestQueueManager(t)
 
 	ctx := context.Background()
 	wctx := &flowv1.WorkitemContext{
@@ -105,7 +95,7 @@ func TestHITLAppraise_NoStampCapability(t *testing.T) {
 	}
 
 	wi := newTestWorkitem(t, client, wctx.GetWorkitemId())
-	err := handleAppraise(ctx, client, wi, qm, &hitlAppraiseConfig{InputArtefact: "petition"}, wctx)
+	err := handleAppraise(ctx, client, wi, h.qm, &hitlAppraiseConfig{InputArtefact: "petition"}, wctx)
 	if err == nil {
 		t.Fatal("expected error when no stamp capability")
 	}
@@ -117,7 +107,7 @@ func TestHITLAppraise_NoStampCapability(t *testing.T) {
 func TestHITLAppraise_ContextCancellation(t *testing.T) {
 	spy := newHITLAppraiseSpy()
 	client := newSpyClient(t, spy)
-	qm := newTestQueueManager(t)
+	h := newTestQueueManager(t)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	wctx := &flowv1.WorkitemContext{
@@ -129,7 +119,7 @@ func TestHITLAppraise_ContextCancellation(t *testing.T) {
 	errCh := make(chan error, 1)
 	go func() {
 		wi, _ := client.GetWorkitem(wctx.GetWorkitemId())
-		errCh <- handleAppraise(ctx, client, wi, qm, &hitlAppraiseConfig{InputArtefact: "petition"}, wctx)
+		errCh <- handleAppraise(ctx, client, wi, h.qm, &hitlAppraiseConfig{InputArtefact: "petition"}, wctx)
 	}()
 
 	// Cancel while waiting for decision.
@@ -139,17 +129,4 @@ func TestHITLAppraise_ContextCancellation(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error on context cancellation")
 	}
-}
-
-// waitForEnqueue polls until the given workitem appears in the queue.
-func waitForEnqueue(t *testing.T, qm flow.QueueManager, workitemID string) {
-	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if _, err := qm.GetItem(context.Background(), workitemID); err == nil {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatalf("timed out waiting for %s to appear in queue", workitemID)
 }

@@ -23,16 +23,11 @@ func (m *Model) updateWorkitemDetailKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.workitemDetail.artefacts, _ = m.workitemDetail.artefacts.Update(msg)
 
 	if m.workitemDetail.hitl.Visible && m.workitemDetail.hitl.ErrorRetry && msg.String() == "r" {
-		wasChoicesError := strings.Contains(m.workitemDetail.hitl.Error, "choices")
 		m.workitemDetail.hitl.Error = ""
 		m.workitemDetail.hitl.ErrorRetry = false
 		m.workitemDetail.hitl.Loading = true
 		if m.ctx == nil {
 			m.ctx = context.Background()
-		}
-		if m.hitlState != nil && m.k8s != nil && wasChoicesError {
-			return m, m.hitlState.Probe(m.ctx, m.k8s.CoreClient, m.namespace,
-				m.hitlState.GetNodeName(), m.hitlState.GetWorkitemID(), m.pfm)
 		}
 		if m.hitlState != nil && m.hitlState.GetPendingChoice() != "" {
 			choice := m.hitlState.GetPendingChoice()

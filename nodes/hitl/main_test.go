@@ -25,13 +25,13 @@ const (
 func TestHITL_HitlAppraise_Approved(t *testing.T) {
 	spy := newHITLAppraiseSpy()
 	client := newSpyClient(t, spy)
-	qm := newTestQueueManager(t)
+	h := newTestQueueManager(t)
 	cfg := configWithLabels(map[string]string{"approved": "Approve Petition"})
 	ctx := context.Background()
 	wctx := newWorkitemContext("wi-appraise-1")
 
-	errCh := runHandler(ctx, client, qm, cfg, wctx)
-	simulateDecision(t, ctx, qm, "wi-appraise-1", outputApproved)
+	errCh := runHandler(ctx, client, h.qm, cfg, wctx)
+	h.decide(t, ctx, "wi-appraise-1", outputApproved)
 
 	if err := <-errCh; err != nil {
 		t.Fatalf("handler returned error: %v", err)
@@ -94,13 +94,13 @@ func TestHITL_HitlAppraise_Approved(t *testing.T) {
 func TestHITL_ArbiterResolve_Resolution(t *testing.T) {
 	spy := newArbiterHITLResolveSpy()
 	client := newSpyClient(t, spy)
-	qm := newTestQueueManager(t)
+	h := newTestQueueManager(t)
 	cfg := defaultConfig()
 	ctx := context.Background()
 	wctx := newWorkitemContext("wi-arbiter-1")
 
-	errCh := runHandler(ctx, client, qm, cfg, wctx)
-	simulateDecision(t, ctx, qm, "wi-arbiter-1", outputResolution)
+	errCh := runHandler(ctx, client, h.qm, cfg, wctx)
+	h.decide(t, ctx, "wi-arbiter-1", outputResolution)
 
 	if err := <-errCh; err != nil {
 		t.Fatalf("handler returned error: %v", err)
@@ -142,13 +142,13 @@ func TestHITL_ArbiterResolve_Resolution(t *testing.T) {
 func TestHITL_TribunalResolve_Resolution(t *testing.T) {
 	spy := newTribunalHITLResolveSpy()
 	client := newSpyClient(t, spy)
-	qm := newTestQueueManager(t)
+	h := newTestQueueManager(t)
 	cfg := defaultConfig()
 	ctx := context.Background()
 	wctx := newWorkitemContext("wi-tribunal-1")
 
-	errCh := runHandler(ctx, client, qm, cfg, wctx)
-	simulateDecision(t, ctx, qm, "wi-tribunal-1", outputResolution)
+	errCh := runHandler(ctx, client, h.qm, cfg, wctx)
+	h.decide(t, ctx, "wi-tribunal-1", outputResolution)
 
 	if err := <-errCh; err != nil {
 		t.Fatalf("handler returned error: %v", err)
@@ -182,13 +182,13 @@ func TestHITL_TribunalResolve_Resolution(t *testing.T) {
 func TestHITL_Minimal_Route(t *testing.T) {
 	spy := newMinimalSpy()
 	client := newSpyClient(t, spy)
-	qm := newTestQueueManager(t)
+	h := newTestQueueManager(t)
 	cfg := defaultConfig()
 	ctx := context.Background()
 	wctx := newWorkitemContext("wi-minimal-1")
 
-	errCh := runHandler(ctx, client, qm, cfg, wctx)
-	simulateDecision(t, ctx, qm, "wi-minimal-1", "default")
+	errCh := runHandler(ctx, client, h.qm, cfg, wctx)
+	h.decide(t, ctx, "wi-minimal-1", "default")
 
 	if err := <-errCh; err != nil {
 		t.Fatalf("handler returned error: %v", err)
@@ -315,167 +315,6 @@ func TestDeriveBehaviour_Minimal(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// buildChoicesResponse — pure function tests
-// ---------------------------------------------------------------------------
-
-func TestBuildChoicesResponse_HITLAppraise_WithLabels(t *testing.T) {
-	spy := newHITLAppraiseSpy()
-	cfg := configWithLabels(map[string]string{
-		"approved": "Approve Petition",
-		"cancel":   "Reject & Cancel",
-	})
-
-	flowObj := newFlowFromTopology(t, spy)
-	resp, err := buildChoicesResponse(flowObj, spy.Topology, cfg)
-	if err != nil {
-		t.Fatalf("buildChoicesResponse returned error: %v", err)
-	}
-
-	if !resp.HasFeedback {
-		t.Error("expected HasFeedback=true")
-	}
-	if !resp.HasCancel {
-		t.Error("expected HasCancel=true")
-	}
-	// 2 choices: approved (route) + cancel.
-	if len(resp.Choices) != 2 {
-		t.Fatalf("expected 2 choices, got %d", len(resp.Choices))
-	}
-
-	// First: route choice.
-	c0 := resp.Choices[0]
-	if c0.Value != "approved" {
-		t.Errorf("choice[0].Value=%q, want 'approved'", c0.Value)
-	}
-	if c0.Label != "Approve Petition" {
-		t.Errorf("choice[0].Label=%q, want 'Approve Petition'", c0.Label)
-	}
-	if c0.Type != choiceTypeRoute {
-		t.Errorf("choice[0].Type=%q, want 'route'", c0.Type)
-	}
-
-	// Second: cancel choice.
-	c1 := resp.Choices[1]
-	if c1.Value != "cancel" {
-		t.Errorf("choice[1].Value=%q, want 'cancel'", c1.Value)
-	}
-	if c1.Label != "Reject & Cancel" {
-		t.Errorf("choice[1].Label=%q, want 'Reject & Cancel'", c1.Label)
-	}
-	if c1.Type != choiceTypeCancel {
-		t.Errorf("choice[1].Type=%q, want 'cancel'", c1.Type)
-	}
-}
-
-func TestBuildChoicesResponse_ArbiterResolve_DefaultLabels(t *testing.T) {
-	spy := newArbiterHITLResolveSpy()
-	cfg := defaultConfig()
-
-	flowObj := newFlowFromTopology(t, spy)
-	resp, err := buildChoicesResponse(flowObj, spy.Topology, cfg)
-	if err != nil {
-		t.Fatalf("buildChoicesResponse returned error: %v", err)
-	}
-
-	if resp.HasFeedback {
-		t.Error("expected HasFeedback=false")
-	}
-	if !resp.HasCancel {
-		t.Error("expected HasCancel=true")
-	}
-	if len(resp.Choices) != 2 {
-		t.Fatalf("expected 2 choices, got %d", len(resp.Choices))
-	}
-
-	// Route uses output name as label when no config label.
-	if resp.Choices[0].Label != outputResolution {
-		t.Errorf("expected label='resolution' (default), got %q", resp.Choices[0].Label)
-	}
-
-	// Cancel uses "Cancel" as default label.
-	if resp.Choices[1].Label != "Cancel" {
-		t.Errorf("expected label='Cancel' (default), got %q", resp.Choices[1].Label)
-	}
-}
-
-func TestBuildChoicesResponse_Minimal_NoCancel(t *testing.T) {
-	spy := newMinimalSpy()
-	cfg := defaultConfig()
-
-	flowObj := newFlowFromTopology(t, spy)
-	resp, err := buildChoicesResponse(flowObj, spy.Topology, cfg)
-	if err != nil {
-		t.Fatalf("buildChoicesResponse returned error: %v", err)
-	}
-
-	if resp.HasFeedback {
-		t.Error("expected HasFeedback=false")
-	}
-	if resp.HasCancel {
-		t.Error("expected HasCancel=false")
-	}
-	if len(resp.Choices) != 1 {
-		t.Fatalf("expected 1 choice, got %d", len(resp.Choices))
-	}
-	if resp.Choices[0].Value != "default" {
-		t.Errorf("choice[0].Value=%q, want 'default'", resp.Choices[0].Value)
-	}
-	if resp.Choices[0].Type != choiceTypeRoute {
-		t.Errorf("choice[0].Type=%q, want 'route'", resp.Choices[0].Type)
-	}
-}
-
-func TestBuildChoicesResponse_MultipleOutputs(t *testing.T) {
-	topology := &flowv1.GetFlowTopologyResponse{
-		Self: &flowv1.FlowNode{
-			Name:         "hitl-multi",
-			Capabilities: []string{"READ:flow"},
-			Outputs: []*flowv1.FlowOutput{
-				{Name: "approve", Target: "node-a"},
-				{Name: "reject", Target: "node-b"},
-				{Name: "escalate", Target: "node-c"},
-			},
-		},
-	}
-	cfg := configWithLabels(map[string]string{
-		"approve":  "Approve",
-		"reject":   "Reject",
-		"escalate": "Escalate to Manager",
-	})
-
-	spy := &hitlSpy{Topology: topology}
-	flowObj := newFlowFromTopology(t, spy)
-	resp, err := buildChoicesResponse(flowObj, topology, cfg)
-	if err != nil {
-		t.Fatalf("buildChoicesResponse returned error: %v", err)
-	}
-
-	if len(resp.Choices) != 3 {
-		t.Fatalf("expected 3 choices, got %d", len(resp.Choices))
-	}
-
-	expected := []struct {
-		value string
-		label string
-	}{
-		{"approve", "Approve"},
-		{"reject", "Reject"},
-		{"escalate", "Escalate to Manager"},
-	}
-	for i, e := range expected {
-		if resp.Choices[i].Value != e.value {
-			t.Errorf("choice[%d].Value=%q, want %q", i, resp.Choices[i].Value, e.value)
-		}
-		if resp.Choices[i].Label != e.label {
-			t.Errorf("choice[%d].Label=%q, want %q", i, resp.Choices[i].Label, e.label)
-		}
-		if resp.Choices[i].Type != choiceTypeRoute {
-			t.Errorf("choice[%d].Type=%q, want 'route'", i, resp.Choices[i].Type)
-		}
-	}
-}
-
-// ---------------------------------------------------------------------------
 // Choices restriction (config restricts the presented routing choices)
 // ---------------------------------------------------------------------------
 
@@ -485,13 +324,13 @@ func TestBuildChoicesResponse_MultipleOutputs(t *testing.T) {
 func TestHITL_ChoicesRestriction_SubsetRoutes(t *testing.T) {
 	spy := newThreeOutputSpy()
 	client := newSpyClient(t, spy)
-	qm := newTestQueueManager(t)
+	h := newTestQueueManager(t)
 	cfg := configWithChoices(choiceEntry{Output: "b", Label: "Bravo"})
 	ctx := context.Background()
 	wctx := newWorkitemContext("wi-restrict-1")
 
-	errCh := runHandler(ctx, client, qm, cfg, wctx)
-	simulateDecision(t, ctx, qm, "wi-restrict-1", "b")
+	errCh := runHandler(ctx, client, h.qm, cfg, wctx)
+	h.decide(t, ctx, "wi-restrict-1", "b")
 
 	if err := <-errCh; err != nil {
 		t.Fatalf("handler returned error: %v", err)
@@ -511,13 +350,13 @@ func TestHITL_ChoicesRestriction_SubsetRoutes(t *testing.T) {
 func TestHITL_ChoicesRestriction_UnlistedChoiceFails(t *testing.T) {
 	spy := newThreeOutputSpy()
 	client := newSpyClient(t, spy)
-	qm := newTestQueueManager(t)
+	h := newTestQueueManager(t)
 	cfg := configWithChoices(choiceEntry{Output: "b"})
 	ctx := context.Background()
 	wctx := newWorkitemContext("wi-restrict-2")
 
-	errCh := runHandler(ctx, client, qm, cfg, wctx)
-	simulateDecision(t, ctx, qm, "wi-restrict-2", "a")
+	errCh := runHandler(ctx, client, h.qm, cfg, wctx)
+	h.decide(t, ctx, "wi-restrict-2", "a")
 
 	err := <-errCh
 	if err == nil {
@@ -534,12 +373,12 @@ func TestHITL_ChoicesRestriction_UnlistedChoiceFails(t *testing.T) {
 func TestHITL_ChoicesRestriction_ConfiguredOutputNotInTopology(t *testing.T) {
 	spy := newThreeOutputSpy()
 	client := newSpyClient(t, spy)
-	qm := newTestQueueManager(t)
+	h := newTestQueueManager(t)
 	cfg := configWithChoices(choiceEntry{Output: "b"}, choiceEntry{Output: "nope"})
 	ctx := context.Background()
 	wctx := newWorkitemContext("wi-restrict-3")
 
-	errCh := runHandler(ctx, client, qm, cfg, wctx)
+	errCh := runHandler(ctx, client, h.qm, cfg, wctx)
 
 	err := <-errCh
 	if err == nil {
@@ -576,45 +415,6 @@ func TestHITL_ChoicesRestriction_AbsentPresentsAll(t *testing.T) {
 	}
 }
 
-// TestBuildChoicesResponse_ChoicesRestriction verifies that GET /choices body
-// lists exactly the restricted outputs (config order, with the choices label),
-// plus cancel when exit-bound.
-func TestBuildChoicesResponse_ChoicesRestriction(t *testing.T) {
-	spy := newThreeOutputSpy()
-	flowObj := newFlowFromTopology(t, spy)
-	cfg := configWithChoices(
-		choiceEntry{Output: "c", Label: "Charlie"},
-		choiceEntry{Output: "a", Label: "Alpha"},
-	)
-
-	resp, err := buildChoicesResponse(flowObj, spy.Topology, cfg)
-	if err != nil {
-		t.Fatalf("buildChoicesResponse returned error: %v", err)
-	}
-
-	if len(resp.Choices) != 2 {
-		t.Fatalf("expected 2 choices, got %d: %+v", len(resp.Choices), resp.Choices)
-	}
-	if resp.Choices[0].Value != "c" || resp.Choices[0].Label != "Charlie" {
-		t.Errorf("choice[0]=%+v, want c/Charlie", resp.Choices[0])
-	}
-	if resp.Choices[1].Value != "a" || resp.Choices[1].Label != "Alpha" {
-		t.Errorf("choice[1]=%+v, want a/Alpha", resp.Choices[1])
-	}
-}
-
-// TestBuildChoicesResponse_ChoicesInvalid asserts that a misconfigured choices
-// list (output not in topology) surfaces as an error rather than a partial body.
-func TestBuildChoicesResponse_ChoicesInvalid(t *testing.T) {
-	spy := newThreeOutputSpy()
-	flowObj := newFlowFromTopology(t, spy)
-	cfg := configWithChoices(choiceEntry{Output: "nope"})
-
-	if _, err := buildChoicesResponse(flowObj, spy.Topology, cfg); err == nil {
-		t.Fatal("expected error for invalid choices config, got nil")
-	}
-}
-
 // ---------------------------------------------------------------------------
 // Approval as a hitl:latest instance (purely via config: output approve →
 // sort, STAMP:artefact/haiku/approval, exit-bound standard-exit)
@@ -625,13 +425,13 @@ func TestBuildChoicesResponse_ChoicesInvalid(t *testing.T) {
 func TestHITL_ApprovalAsInstance_Approve(t *testing.T) {
 	spy := newApprovalSpy()
 	client := newSpyClient(t, spy)
-	qm := newTestQueueManager(t)
+	h := newTestQueueManager(t)
 	cfg := configWithLabels(map[string]string{"approve": "Approve Petition"})
 	ctx := context.Background()
 	wctx := newWorkitemContext("wi-approval-1")
 
-	errCh := runHandler(ctx, client, qm, cfg, wctx)
-	simulateDecision(t, ctx, qm, "wi-approval-1", "approve")
+	errCh := runHandler(ctx, client, h.qm, cfg, wctx)
+	h.decide(t, ctx, "wi-approval-1", "approve")
 
 	if err := <-errCh; err != nil {
 		t.Fatalf("handler returned error: %v", err)
@@ -664,13 +464,13 @@ func TestHITL_ApprovalAsInstance_Approve(t *testing.T) {
 func TestHITL_ApprovalAsInstance_Cancel(t *testing.T) {
 	spy := newApprovalSpy()
 	client := newSpyClient(t, spy)
-	qm := newTestQueueManager(t)
+	h := newTestQueueManager(t)
 	cfg := configWithLabels(map[string]string{"approve": "Approve Petition"})
 	ctx := context.Background()
 	wctx := newWorkitemContext("wi-approval-2")
 
-	errCh := runHandler(ctx, client, qm, cfg, wctx)
-	simulateDecision(t, ctx, qm, "wi-approval-2", "cancel")
+	errCh := runHandler(ctx, client, h.qm, cfg, wctx)
+	h.decide(t, ctx, "wi-approval-2", "cancel")
 
 	if err := <-errCh; err != nil {
 		t.Fatalf("handler returned error: %v", err)
@@ -707,13 +507,13 @@ func TestHITL_ApprovalAsInstance_Cancel(t *testing.T) {
 func TestHITL_HitlAppraise_Cancel(t *testing.T) {
 	spy := newHITLAppraiseSpy()
 	client := newSpyClient(t, spy)
-	qm := newTestQueueManager(t)
+	h := newTestQueueManager(t)
 	cfg := configWithLabels(map[string]string{"approved": "Approve Petition"})
 	ctx := context.Background()
 	wctx := newWorkitemContext("wi-cancel-1")
 
-	errCh := runHandler(ctx, client, qm, cfg, wctx)
-	simulateDecision(t, ctx, qm, "wi-cancel-1", "cancel")
+	errCh := runHandler(ctx, client, h.qm, cfg, wctx)
+	h.decide(t, ctx, "wi-cancel-1", "cancel")
 
 	if err := <-errCh; err != nil {
 		t.Fatalf("handler returned error: %v", err)
@@ -758,13 +558,13 @@ func TestHITL_HitlAppraise_Cancel(t *testing.T) {
 func TestHITL_InvalidChoice(t *testing.T) {
 	spy := newHITLAppraiseSpy()
 	client := newSpyClient(t, spy)
-	qm := newTestQueueManager(t)
+	h := newTestQueueManager(t)
 	cfg := defaultConfig()
 	ctx := context.Background()
 	wctx := newWorkitemContext("wi-invalid-1")
 
-	errCh := runHandler(ctx, client, qm, cfg, wctx)
-	simulateDecision(t, ctx, qm, "wi-invalid-1", "bogus")
+	errCh := runHandler(ctx, client, h.qm, cfg, wctx)
+	h.decide(t, ctx, "wi-invalid-1", "bogus")
 
 	err := <-errCh
 	if err == nil {
@@ -803,13 +603,13 @@ func TestHITL_InvalidChoice(t *testing.T) {
 func TestHITL_Minimal_CancelRejected(t *testing.T) {
 	spy := newMinimalSpy()
 	client := newSpyClient(t, spy)
-	qm := newTestQueueManager(t)
+	h := newTestQueueManager(t)
 	cfg := defaultConfig()
 	ctx := context.Background()
 	wctx := newWorkitemContext("wi-nocancel-1")
 
-	errCh := runHandler(ctx, client, qm, cfg, wctx)
-	simulateDecision(t, ctx, qm, "wi-nocancel-1", "cancel")
+	errCh := runHandler(ctx, client, h.qm, cfg, wctx)
+	h.decide(t, ctx, "wi-nocancel-1", "cancel")
 
 	err := <-errCh
 	if err == nil {
@@ -831,50 +631,6 @@ func TestHITL_Minimal_CancelRejected(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Edge case: empty choice (QueueManager shutdown)
-// ---------------------------------------------------------------------------
-
-// TestHITL_EmptyChoice_QMShutdown verifies that when the QueueManager is
-// stopped before a decision, the handler receives an empty choice and returns
-// an error.
-func TestHITL_EmptyChoice_QMShutdown(t *testing.T) {
-	spy := newMinimalSpy()
-	client := newSpyClient(t, spy)
-	qm, stopQM := newTestQueueManagerWithStop(t)
-	cfg := defaultConfig()
-	ctx := context.Background()
-	wctx := newWorkitemContext("wi-shutdown-1")
-
-	errCh := runHandler(ctx, client, qm, cfg, wctx)
-
-	// Wait for the item to be enqueued, then stop the QM (unblocks WaitForDecision
-	// with empty choice).
-	waitForEnqueue(t, qm, "wi-shutdown-1")
-	if err := stopQM(); err != nil {
-		t.Fatalf("QueueManager.Stop() failed: %v", err)
-	}
-
-	err := <-errCh
-	if err == nil {
-		t.Fatal("expected error for empty choice (QM shutdown), got nil")
-	}
-	if !strings.Contains(err.Error(), "empty choice") {
-		t.Errorf("expected 'empty choice' in error, got: %v", err)
-	}
-
-	spy.mu.Lock()
-	defer spy.mu.Unlock()
-
-	// Nothing dispatched.
-	if len(spy.RoutedOutputs) != 0 {
-		t.Errorf("expected no routes, got %v", spy.RoutedOutputs)
-	}
-	if len(spy.CompletedReasons) != 0 {
-		t.Errorf("expected no completions, got %v", spy.CompletedReasons)
-	}
-}
-
-// ---------------------------------------------------------------------------
 // Edge case: context cancellation while waiting for decision
 // ---------------------------------------------------------------------------
 
@@ -883,15 +639,15 @@ func TestHITL_EmptyChoice_QMShutdown(t *testing.T) {
 func TestHITL_ContextCancelled(t *testing.T) {
 	spy := newMinimalSpy()
 	client := newSpyClient(t, spy)
-	qm := newTestQueueManager(t)
+	h := newTestQueueManager(t)
 	cfg := defaultConfig()
 	ctx, cancel := context.WithCancel(context.Background())
 	wctx := newWorkitemContext("wi-ctx-cancel-1")
 
-	errCh := runHandler(ctx, client, qm, cfg, wctx)
+	errCh := runHandler(ctx, client, h.qm, cfg, wctx)
 
 	// Wait for enqueue, then cancel the context.
-	waitForEnqueue(t, qm, "wi-ctx-cancel-1")
+	waitForEnqueue(t, h.qm, "wi-ctx-cancel-1")
 	cancel()
 
 	err := <-errCh
@@ -924,13 +680,13 @@ func TestHITL_ContextCancelled(t *testing.T) {
 func TestHITL_MultipleStamps(t *testing.T) {
 	spy := newMultiStampSpy()
 	client := newSpyClient(t, spy)
-	qm := newTestQueueManager(t)
+	h := newTestQueueManager(t)
 	cfg := defaultConfig()
 	ctx := context.Background()
 	wctx := newWorkitemContext("wi-multistamp-1")
 
-	errCh := runHandler(ctx, client, qm, cfg, wctx)
-	simulateDecision(t, ctx, qm, "wi-multistamp-1", "done")
+	errCh := runHandler(ctx, client, h.qm, cfg, wctx)
+	h.decide(t, ctx, "wi-multistamp-1", "done")
 
 	if err := <-errCh; err != nil {
 		t.Fatalf("handler returned error: %v", err)

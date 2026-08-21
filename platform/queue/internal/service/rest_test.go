@@ -18,20 +18,22 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// setupRestRegistry seeds a CR with living shards wired to bufconn fakes via
-// r.peerDialer and returns the REST handler + the fakes keyed by addr.
+// setupRestRegistry seeds a CR with living shards wired to bufconn mirror
+// shards via r.peerDialer and returns the REST handler + the mirror shards
+// keyed by addr. The mirror fakes implement the broadcast+dedupe path
+// (PHASE_03) so list/get/claim/decide/release are meaningfully exercised.
 type restHarness struct {
 	handler *http.ServeMux
 	reg     *Registry
-	shards  map[string]*fakePeerShard
+	shards  map[string]*fakeMirrorShard
 }
 
 func newRestHarness(t *testing.T, shardAddrs []string) *restHarness {
 	now := time.Now().UTC()
 	entries := make([]flowv1api.QueueShardStatus, 0, len(shardAddrs))
-	h := &restHarness{shards: map[string]*fakePeerShard{}}
+	h := &restHarness{shards: map[string]*fakeMirrorShard{}}
 	for _, addr := range shardAddrs {
-		f := newFakePeerShard(t)
+		f := newFakeMirrorShard(t, addr+"-id")
 		h.shards[addr] = f
 		entries = append(entries, shard(addr+"-id", addr, phaseActive, now))
 	}
@@ -74,18 +76,21 @@ func TestREST_GetQueues_ListsRegistered(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &names); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if len(names) != 1 || names[0] != "hitl-approval" {
+	if len(names) != 1 || names[0] != testQueueName {
 		t.Fatalf("queues = %v, want [hitl-approval]", names)
 	}
 }
 
 func TestREST_GetQueue_ListItems(t *testing.T) {
-	// Two living shards each serve a GetLocalQueue item list; the route
-	// aggregates both items with NO dedupe.
+	// Two living mirror shards each hold a copy of the SAME item
+	// (mirror-everywhere). The route dedupes by workitem_id (R-3.6): the shared
+	// copy appears once, not once per shard.
 	h := newRestHarness(t, []string{"say:a", "say:b"})
-	same := &flowv1.QueueItem{WorkitemId: "dup-id", Status: "waiting"}
-	h.shards["say:a"].setItems(&flowv1.QueueItem{WorkitemId: "wi-a", Status: "waiting"}, same)
-	h.shards["say:b"].setItems(&flowv1.QueueItem{WorkitemId: "wi-b", Status: "waiting"}, same)
+	dup := &flowv1.QueueItem{WorkitemId: "dup-id", Status: "waiting", GenerationId: "0000000000000001"}
+	h.shards["say:a"].setItem(&flowv1.QueueItem{WorkitemId: "wi-a", Status: "waiting", GenerationId: "0000000000000001"})
+	h.shards["say:a"].setItem(dup)
+	h.shards["say:b"].setItem(&flowv1.QueueItem{WorkitemId: "wi-b", Status: "waiting", GenerationId: "0000000000000001"})
+	h.shards["say:b"].setItem(dup)
 
 	w := doReq(h, http.MethodGet, "/queues/hitl-approval", "")
 	if w.Code != http.StatusOK {
@@ -95,24 +100,24 @@ func TestREST_GetQueue_ListItems(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &items); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if len(items) != 4 {
-		t.Fatalf("expected 4 raw items (2 shards × 2 items, dup-id twice), got %d: %s", len(items), w.Body.String())
+	// Deduped: 3 distinct workitems (dup-id once, wi-a, wi-b).
+	if len(items) != 3 {
+		t.Fatalf("expected 3 deduped items, got %d: %s", len(items), w.Body.String())
 	}
-	// dup-id appears twice — no dedupe at this layer (PHASE_04 applies it).
 	dupCount := 0
 	for _, it := range items {
 		if it.GetWorkitemId() == "dup-id" {
 			dupCount++
 		}
 	}
-	if dupCount != 2 {
-		t.Fatalf("dup-id appeared %d times, want 2 (no dedupe)", dupCount)
+	if dupCount != 1 {
+		t.Fatalf("dup-id appeared %d times, want 1 (deduped)", dupCount)
 	}
 }
 
 func TestREST_GetItem_ProxiesToLivingShard(t *testing.T) {
 	h := newRestHarness(t, []string{"say:a"})
-	h.shards["say:a"].setItems(&flowv1.QueueItem{WorkitemId: "wi-1", Status: "waiting"})
+	h.shards["say:a"].setItem(&flowv1.QueueItem{WorkitemId: "wi-1", Status: "waiting", GenerationId: "0000000000000001"})
 
 	w := doReq(h, http.MethodGet, "/queues/hitl-approval/wi-1", "")
 	if w.Code != http.StatusOK {
@@ -122,7 +127,7 @@ func TestREST_GetItem_ProxiesToLivingShard(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &item); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if item.GetWorkitemId() != "wi-1" {
+	if item.GetWorkitemId() != testWorkitemID {
 		t.Fatalf("item = %v", item)
 	}
 }
@@ -141,7 +146,7 @@ func TestREST_ClaimDecideRelease_ProxyPath(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newRestHarness(t, []string{"say:a"})
-			h.shards["say:a"].setItems(&flowv1.QueueItem{WorkitemId: "wi-1", Status: "waiting"})
+			h.shards["say:a"].setItem(&flowv1.QueueItem{WorkitemId: "wi-1", Status: "waiting", GenerationId: "0000000000000001"})
 			w := doReq(h, tc.method, tc.path, tc.body)
 			if w.Code != http.StatusOK {
 				t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
@@ -152,7 +157,7 @@ func TestREST_ClaimDecideRelease_ProxyPath(t *testing.T) {
 				if len(got) != 1 {
 					t.Fatalf("decide reached the shard %d times, want 1", len(got))
 				}
-				if got[0].GetChoice() != "approve" {
+				if got[0].GetChoice() != testChoiceApprove {
 					t.Fatalf("decide choice = %q, want %q", got[0].GetChoice(), "approve")
 				}
 			}
@@ -263,9 +268,11 @@ func TestREST_UnknownItem_AllShardsLiving_Returns404(t *testing.T) {
 	}
 }
 
-func TestREST_UnknownItem_WithEvictedShard_Returns503(t *testing.T) {
-	// No living owner + a non-living CR shard present ⇒ 503 (decision rule
-	// 503 arm). The evicted shard's address must not be dialed.
+func TestREST_UnknownItem_WithEvictedShard_Returns404(t *testing.T) {
+	// Mirror-everywhere: reads scatter-gather over LIVING shards only. The sole
+	// living shard responds empty, so the item is genuinely absent → 404 (not
+	// 503) — an evicted shard is simply not part of the write/read set and must
+	// not be dialed.
 	now := time.Now().UTC()
 	evictedFake := newFakePeerShard(t)
 	liveFake := newFakePeerShard(t)
@@ -294,8 +301,8 @@ func TestREST_UnknownItem_WithEvictedShard_Returns503(t *testing.T) {
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 
-	if w.Code != http.StatusServiceUnavailable {
-		t.Fatalf("status = %d, want 503: %s", w.Code, w.Body.String())
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404: %s", w.Code, w.Body.String())
 	}
 	mu.Lock()
 	defer mu.Unlock()
@@ -314,15 +321,15 @@ func TestREST_ConflictErrors_SurfaceAs409(t *testing.T) {
 		method   string
 		path     string
 		body     string
-		inject   func(f *fakePeerShard)
+		inject   func(f *fakeMirrorShard)
 		wantCode string
 	}{
 		{
 			name:   "claim already claimed",
 			method: http.MethodPost,
 			path:   "/queues/hitl-approval/wi-1/claim",
-			inject: func(f *fakePeerShard) {
-				f.setClaimsError(status.Error(codes.AlreadyExists, "already claimed"))
+			inject: func(f *fakeMirrorShard) {
+				f.setClaimError(status.Error(codes.AlreadyExists, "already claimed"))
 			},
 			wantCode: "QUEUE_ITEM_ALREADY_CLAIMED",
 		},
@@ -331,7 +338,7 @@ func TestREST_ConflictErrors_SurfaceAs409(t *testing.T) {
 			method: http.MethodPost,
 			path:   "/queues/hitl-approval/wi-1/decide",
 			body:   `{"choice":"approve"}`,
-			inject: func(f *fakePeerShard) {
+			inject: func(f *fakeMirrorShard) {
 				f.setDecideError(status.Error(codes.FailedPrecondition, "invalid state"))
 			},
 			wantCode: "QUEUE_ITEM_INVALID_STATE",
@@ -340,7 +347,7 @@ func TestREST_ConflictErrors_SurfaceAs409(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newRestHarness(t, []string{"say:a"})
-			h.shards["say:a"].setItems(&flowv1.QueueItem{WorkitemId: "wi-1", Status: "waiting"})
+			h.shards["say:a"].setItem(&flowv1.QueueItem{WorkitemId: "wi-1", Status: "waiting", GenerationId: "0000000000000001"})
 			tc.inject(h.shards["say:a"])
 			w := doReq(h, tc.method, tc.path, tc.body)
 			if w.Code != http.StatusConflict {
@@ -369,9 +376,71 @@ func TestREST_PartialShardFailure_Returns503(t *testing.T) {
 	}
 }
 
+// TestREST_ConcurrentClaims_OneWins pins R-3.2's per-item in-flight guard on
+// the REST write path: two CONCURRENT POST /claim requests for the same item
+// are serialized by Registry.lockItem (now acquired by handleClaim), so exactly
+// one returns HTTP 200 with the claimed item and the other returns HTTP 409
+// QUEUE_ITEM_ALREADY_CLAIMED. Without the guard both requests could race the
+// CAS and neither deterministically wins.
+func TestREST_ConcurrentClaims_OneWins(t *testing.T) {
+	h := newRestHarness(t, []string{"say:a", "say:b", "say:c"})
+	seed := &flowv1.QueueItem{
+		WorkitemId: testWorkitemID, QueueName: testQueueName,
+		Status: testStatusWaiting, GenerationId: "0000000000000001",
+	}
+	for _, addr := range []string{"say:a", "say:b", "say:c"} {
+		h.shards[addr].setItem(seed)
+	}
+
+	const claimPath = "/queues/hitl-approval/wi-1/claim"
+	const attempts = 2
+	statuses := make([]int, attempts)
+	errBodies := make([]string, attempts)
+	var wg sync.WaitGroup
+	for i := range attempts {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			req := httptest.NewRequest(http.MethodPost, claimPath, nil)
+			w := httptest.NewRecorder()
+			h.handler.ServeHTTP(w, req)
+			statuses[i] = w.Code
+			errBodies[i] = w.Body.String()
+		}(i)
+	}
+	wg.Wait()
+
+	var ok, conflict int
+	for i := range attempts {
+		switch statuses[i] {
+		case http.StatusOK:
+			ok++
+		case http.StatusConflict:
+			conflict++
+			if !strings.Contains(errBodies[i], "QUEUE_ITEM_ALREADY_CLAIMED") {
+				t.Fatalf("409 body lacks QUEUE_ITEM_ALREADY_CLAIMED: %s", errBodies[i])
+			}
+		default:
+			t.Fatalf("claim attempt %d status = %d, want 200 or 409: %s", i, statuses[i], errBodies[i])
+		}
+	}
+	if ok != 1 || conflict != 1 {
+		t.Fatalf("ok=%d conflict=%d, want exactly one 200 and one 409", ok, conflict)
+	}
+
+	// The guard serialized the two claims into one committed transition, so
+	// every shard ends claimed.
+	for _, addr := range []string{"say:a", "say:b", "say:c"} {
+		got := h.shards[addr].serve()[testWorkitemID]
+		if got == nil || got.GetStatus() != testStatusClaimed {
+			t.Fatalf("shard %s final state = %+v, want claimed", addr, got)
+		}
+	}
+}
+
 func TestREST_Decide_MalformedBody_Returns400(t *testing.T) {
 	h := newRestHarness(t, []string{"say:a"})
-	h.shards["say:a"].setItems(&flowv1.QueueItem{WorkitemId: "wi-1", Status: "waiting"})
+	h.shards["say:a"].setItem(&flowv1.QueueItem{WorkitemId: "wi-1", Status: "waiting", GenerationId: "0000000000000001"})
 	// ContentLength != 0 with an invalid JSON body ⇒ 400 before any shard is
 	// dialed.
 	w := doReq(h, http.MethodPost, "/queues/hitl-approval/wi-1/decide", "{not-json")

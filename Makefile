@@ -42,9 +42,15 @@ test-flowctl: ## Run flowctl unit tests.
 
 # The queue-service suite needs no CGO (the service is non-storage — no
 # SQLite anywhere in the module).
-.PHONY: test-queue
+# The queue suite includes `-short`-guarded integration tests (real-I/O mirror
+# mesh). `test-queue` is the unit gate, so `-short` skips them; run
+# `test-queue-integration` (no `-short`) to exercise them.
+.PHONY: test-queue test-queue-integration
 test-queue: ## Run queue-service unit tests.
-	go test -v ./platform/queue/...
+	go test -short -v ./platform/queue/...
+
+test-queue-integration: ## Run queue-service integration tests (real-I/O, mirror mesh).
+	go test -v -run 'Integration|Mirror' ./platform/queue/...
 
 $(foreach srv,$(CGO_TEST_SERVICES),$(eval .PHONY: test-$(srv)))
 # The CGO service suites (especially cartographer) exceed Go's default 10m
