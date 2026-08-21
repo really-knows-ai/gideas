@@ -212,6 +212,135 @@ func TestIntegration_ConcurrentClaims(t *testing.T) {
 	}
 }
 
+// TestIntegration_ReParkSupersedesMissedDrop pins SPEC integration test 3
+// ("re-park supersedes"): a re-enqueue with a NEW generation after a missed
+// drop. The straggler misses the cancel (its claim fails, so the real cancel
+// surface's decideBroadcast drops the item only from the survivors) and keeps
+// serving stale g1 while the quorum re-parks at g2. The stale copy is
+// invisible to reads — GetGlobalQueue's max-generation dedupe collapses it
+// (wi-1 returns exactly once, at g2, waiting) — and one real sweep pass
+// converges every shard to g2 (the stale g1 is overwritten by the apply push
+// or generation-guarded dropped; end state g2 either way).
+func TestIntegration_ReParkSupersedesMissedDrop(t *testing.T) {
+	if testing.Short() {
+		t.Skip("real-I/O queue mesh integration")
+	}
+	ctx := context.Background()
+	h := newFunnelHarness(t, testShardA, "shard-b", "shard-c")
+	straggler := h.shards[h.addrs[2]]
+
+	// (1) Park: one enqueue through the real gateway funnel (enqueueBroadcast
+	// fans ApplyItem to every living shard). Every shard mirrors the item at
+	// generation g1, waiting.
+	enqueueAck(t, h, testWorkitemID)
+	g1 := h.shards[h.addrs[0]].serve()[testWorkitemID].GetGenerationId()
+	for _, addr := range h.addrs {
+		it := h.shards[addr].serve()[testWorkitemID]
+		if it == nil {
+			t.Fatalf("shard %s does not hold %s after park", h.shards[addr].shardID, testWorkitemID)
+		}
+		if it.GetGenerationId() != g1 || it.GetStatus() != testStatusWaiting {
+			t.Fatalf("shard %s holds %s at gen %q status %q, want g1=%q waiting",
+				h.shards[addr].shardID, testWorkitemID, it.GetGenerationId(), it.GetStatus(), g1)
+		}
+	}
+
+	// (2) Missed drop: the straggler's claim fails (Unavailable), so the real
+	// cancel surface (its decideBroadcast ensure-claims then deletes) removes
+	// the item from the survivors; the failing straggler misses it and keeps
+	// (wi-1, g1, waiting).
+	straggler.setClaimError(status.Error(codes.Unavailable, "transient claim failure"))
+	if _, err := h.reg.CancelQueuedItem(ctx, &flowv1.CancelQueuedItemRequest{
+		QueueName: testQueueName, WorkitemId: testWorkitemID,
+	}); err != nil {
+		t.Fatalf("CancelQueuedItem: %v", err)
+	}
+	straggler.setClaimError(nil)
+	for _, addr := range h.addrs[:2] {
+		if it := h.shards[addr].serve()[testWorkitemID]; it != nil {
+			t.Fatalf("surviving shard %s still holds %s after cancel: %+v", h.shards[addr].shardID, testWorkitemID, it)
+		}
+	}
+	stragglerIt := straggler.serve()[testWorkitemID]
+	if stragglerIt == nil || stragglerIt.GetGenerationId() != g1 || stragglerIt.GetStatus() != testStatusWaiting {
+		t.Fatalf("straggler %s after missed drop = %+v, want (wi-1, g1, waiting)", straggler.shardID, stragglerIt)
+	}
+
+	// (3) Re-park supersedes: the funnel re-parks the item at a NEW generation
+	// (quorum 2/3 acks — the straggler's apply fails), so the survivors hold g2
+	// while the straggler still serves g1. The divergence must exist or the
+	// dedupe/drop assertions below are vacuous.
+	straggler.setApplyError(status.Error(codes.Unavailable, "transient apply failure"))
+	enqueueAck(t, h, testWorkitemID)
+	straggler.setApplyError(nil)
+	var g2 string
+	for _, addr := range h.addrs[:2] {
+		it := h.shards[addr].serve()[testWorkitemID]
+		if it == nil {
+			t.Fatalf("surviving shard %s does not hold %s after re-park", h.shards[addr].shardID, testWorkitemID)
+		}
+		g2 = it.GetGenerationId()
+	}
+	if g2 <= g1 {
+		t.Fatalf("re-park generation %q is not newer than park generation %q", g2, g1)
+	}
+	stragglerIt = straggler.serve()[testWorkitemID]
+	if stragglerIt == nil || stragglerIt.GetGenerationId() != g1 {
+		t.Fatalf(
+			"precondition broken: straggler %s = %+v, want it still serving stale g1 %q",
+			straggler.shardID,
+			stragglerIt,
+			g1,
+		)
+	}
+
+	// (4) Invisible to reads: the scatter-gather read dedupes by max
+	// generation, so the stale g1 the straggler serves collapses — wi-1
+	// returns EXACTLY ONCE, at g2, status waiting.
+	resp, err := h.gateway.GetGlobalQueue(ctx, &flowv1.GetGlobalQueueRequest{QueueName: testQueueName})
+	if err != nil {
+		t.Fatalf("GetGlobalQueue: %v", err)
+	}
+	found := 0
+	for _, item := range resp.GetItems() {
+		if item.GetWorkitemId() != testWorkitemID {
+			continue
+		}
+		found++
+		if item.GetGenerationId() != g2 {
+			t.Fatalf(
+				"deduped %s generation = %q, want the newest %q (stale g1 collapsed)",
+				testWorkitemID,
+				item.GetGenerationId(),
+				g2,
+			)
+		}
+		if item.GetStatus() != testStatusWaiting {
+			t.Fatalf("deduped %s status = %q, want waiting", testWorkitemID, item.GetStatus())
+		}
+	}
+	if found != 1 {
+		t.Fatalf("GetGlobalQueue returned %s %d times, want exactly once", testWorkitemID, found)
+	}
+
+	// (5) Swept: one real sweep pass (the exact work one cadence tick
+	// performs) converges every shard to g2 — the stale g1 is overwritten by
+	// the apply push or generation-guarded dropped as a corroborated orphan;
+	// end state g2 either way.
+	if err := NewSweeper(h.reg, time.Millisecond).Sweep(ctx, testQueueName); err != nil {
+		t.Fatalf("Sweep: %v", err)
+	}
+	for _, addr := range h.addrs {
+		if err := assertIdenticalShardSets(h.shards[addr], h.shards[h.addrs[0]]); err != nil {
+			t.Fatalf("post-sweep shard %s: %v", h.shards[addr].shardID, err)
+		}
+		it := h.shards[addr].serve()[testWorkitemID]
+		if it == nil || it.GetGenerationId() != g2 {
+			t.Fatalf("post-sweep shard %s %s = %+v, want generation %q", h.shards[addr].shardID, testWorkitemID, it, g2)
+		}
+	}
+}
+
 // ---------------------------------------------------------------------------
 // PHASE_05 convergence backstop — integration test 1 (PHASE_05 sub-cases) + 5
 // ---------------------------------------------------------------------------

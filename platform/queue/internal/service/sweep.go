@@ -213,23 +213,31 @@ func trimReport(items []*flowv1.QueueItem) map[string]string {
 // planConvergence diffs the freshest mirror's authoritative set against one
 // shard's trimmed report, corroborated against every OTHER non-reference
 // shard's report (R-4.2/R-4.3 corrected). It returns the ApplyItem pushes
-// (items in fresh missing from the shard) and the generation-guarded DropItem
-// refs (items the shard holds that are absent from fresh AND absent from EVERY
-// other non-reference report — a genuine orphan). An item present on ANY other
-// non-reference shard is a corroborated copy that MUST survive: presence on
-// another non-reference shard always wins; absence from the reference alone
-// never justifies a drop (the data-loss guard). Presence-based: a shard holding
-// ANY copy of an authoritative item is neither pushed-onto nor dropped, so a
-// NEWER partial-broadcast copy is never downgraded.
+// (items in fresh missing from the shard, or whose generation is STRICTLY
+// NEWER than the shard's — re-park supersede, SPEC integration test 3) and the
+// generation-guarded DropItem refs (items the shard holds that are absent from
+// fresh AND absent from EVERY other non-reference report — a genuine orphan).
+// An item present on ANY other non-reference shard is a corroborated copy that
+// MUST survive: presence on another non-reference shard always wins; absence
+// from the reference alone never justifies a drop (the data-loss guard). The
+// push is generation-aware: a shard holding an OLDER generation of an
+// authoritative item IS pushed the freshest copy (re-park supersede); a shard
+// holding a NEWER generation is never pushed (no-downgrade, R-4.3 — its copy
+// is already at or beyond the reference, and the store's generation-guarded
+// apply doubly protects it). Drops remain id-presence-based corroborated
+// orphans: an id present in the reference is never a drop candidate, and an id
+// absent from the reference is dropped only when absent from every other
+// non-reference report.
 func planConvergence(fresh []*flowv1.QueueItem, targetGen map[string]string, otherReports []map[string]string) (
 	push []*flowv1.QueueItem, drops []dropRef,
 ) {
 	freshIDs := make(map[string]struct{}, len(fresh))
 	for _, item := range fresh {
-		if _, ok := targetGen[item.GetWorkitemId()]; !ok {
+		id := item.GetWorkitemId()
+		if cur, ok := targetGen[id]; !ok || item.GetGenerationId() > cur {
 			push = append(push, item)
 		}
-		freshIDs[item.GetWorkitemId()] = struct{}{}
+		freshIDs[id] = struct{}{}
 	}
 	for id, gen := range targetGen {
 		if _, inFresh := freshIDs[id]; inFresh {

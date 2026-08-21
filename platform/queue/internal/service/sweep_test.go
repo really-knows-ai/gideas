@@ -587,6 +587,41 @@ func TestPlanConvergence_NoDowngrade(t *testing.T) {
 	}
 }
 
+// TestPlanConvergence_StaleGenerationPushed pins the generation-aware
+// convergence half of the re-park supersede rule (SPEC integration test 3): a
+// shard holding an OLDER generation of a workitem whose NEWER generation is the
+// recorded freshest reference must be pushed the newer re-parked copy. The
+// presence-based plan (a target holding ANY copy is never pushed onto) would
+// leave the stale copy in place forever.
+func TestPlanConvergence_StaleGenerationPushed(t *testing.T) {
+	// The recorded freshest reference holds the NEWER re-parked copy.
+	fresh := []*flowv1.QueueItem{
+		{WorkitemId: testWorkitemID, GenerationId: "0000000000000002"},
+	}
+	// Target shard holds an OLDER stale copy of the same workitem — the re-park
+	// supersede case: presence-based convergence sees wi-1 in the target and
+	// never pushes the authoritative newer generation onto it.
+	shard := map[string]string{testWorkitemID: "0000000000000001"}
+	// An unrelated other shard: it neither corroborates the stale copy nor holds
+	// the newer one, keeping the fixture shape realistic (the target's stale
+	// wi-1 is not corroborated elsewhere).
+	others := []map[string]string{
+		{"wi-2": "0000000000000099"},
+	}
+
+	push, drops := planConvergence(fresh, shard, others)
+
+	// The NEWER authoritative generation must be pushed onto the stale copy.
+	if len(push) != 1 || push[0].GetWorkitemId() != testWorkitemID || push[0].GetGenerationId() != "0000000000000002" {
+		t.Fatalf("push = %+v, want the newer authoritative copy 0000000000000002 "+
+			"pushed onto the stale 0000000000000001", push)
+	}
+	// The id is present in the authoritative set → never a drop candidate.
+	if len(drops) != 0 {
+		t.Fatalf("drops = %+v, want none — wi-1 is in the authoritative set, never a drop candidate", drops)
+	}
+}
+
 // TestPlanPushToReference pins the symmetric push onto the reference: an item
 // present on some non-reference shard but ABSENT from the recorded freshest
 // reference is pushed onto the reference. The reference is a repairable
