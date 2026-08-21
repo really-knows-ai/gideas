@@ -188,6 +188,12 @@ func (r *Registry) syncOnRegistration(ctx context.Context, queueName, shardAddr 
 // lifetime; the entry count is bounded by the workitem domain, not request
 // rate, so this is a benign ceiling. If that ever became a concern the upgrade
 // path is an LRU or sharded keyed-semaphore.
+//
+// ponytail: one queue-service replica is the serialization point — the
+// per-item in-flight guard only deletes races while writes funnel through a
+// single replica. Ceiling: single-replica throughput and availability. Upgrade
+// path: per-queue sharding of the queue-service or a second consensus replica
+// when that ceiling is exceeded.
 func (r *Registry) lockItem(workitemID string) func() {
 	r.itemLocksMu.Lock()
 	mu, ok := r.itemLocks[workitemID]

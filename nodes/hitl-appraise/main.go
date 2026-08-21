@@ -8,7 +8,9 @@
 //  1. Discovers its own stamp capability from the flow topology.
 //  2. Reads the input and review artefacts (so the queue item carries context).
 //  3. Enqueues the Workitem and pauses the Sidecar's inactivity timer.
-//  4. Blocks until the human signals "done" via POST /queue/{id}/decide.
+//  4. Blocks until the human signals "done"; decisions are served by the
+//     queue-service REST surface (R-5.1/R-5.3), which the node waits on via
+//     the SDK.
 //  5. Resumes the timer, stamps the governed artefact, and routes to output.
 //
 // The human performs all review actions (feedback evaluation, new feedback,

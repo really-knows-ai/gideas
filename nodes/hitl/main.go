@@ -20,7 +20,8 @@
 //  1. Discovers outputs, capabilities, and exit binding from the flow topology.
 //  2. Reads artefacts identified by READ:artefact/<kind> capabilities.
 //  3. Enqueues the Workitem and pauses the Sidecar's inactivity timer.
-//  4. Blocks until the human decides via POST /queue/{id}/decide.
+//  4. Blocks until the human decides; decisions are served by the queue-service
+//     REST surface (R-5.1/R-5.3), which the node waits on via the SDK.
 //  5. Validates the choice against the derived valid set.
 //  6. Resumes the timer, optionally stamps, and routes or cancels.
 //

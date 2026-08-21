@@ -26,10 +26,10 @@ const (
 // item metadata the queue-service serves generically (R-5.2).
 //
 //	ponytail: QueueItem/QueueStatus/QueueFilter are re-declared here rather
-//	than imported because the sidecar is a separate module that cannot import
-//	sdk/go/internal/queue (which is being deleted). The duplication is
-//	bounded — only the handful of shared types the mirror needs — and
-//	intentional: they will not be shared again once the SDK mesh is gone.
+//	than imported because the SDK mesh was deleted — the mesh now lives in
+//	this sidecar package, so the types cannot be shared with sdk/go (the
+//	sidecar is a separate module). The duplication is bounded — only the
+//	handful of shared types the mirror needs — and intentional.
 type QueueItem struct {
 	WorkitemID string      `json:"workitem_id"`
 	ShardID    string      `json:"shard_id"`
